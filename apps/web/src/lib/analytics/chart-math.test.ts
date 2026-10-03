@@ -4,7 +4,10 @@ import type { TransactionRow } from "./types";
 
 const row = (overrides: Partial<TransactionRow>): TransactionRow => ({
   id: "row",
+  paymentId: "payment-1",
   createdAt: "2026-10-02T12:00:00Z",
+  capturedAt: "2026-10-03T12:00:00Z",
+  activityAt: "2026-10-03T12:00:00Z",
   product: { title: "Product", brand: "Brand", condition: "NEW" },
   merchant: "Merchant",
   category: "Office",

@@ -5,6 +5,8 @@ import { NextResponse } from "next/server";
 const API_URL = process.env.API_URL ?? "http://127.0.0.1:4000";
 const ALLOWED_PATHS = [
   /^auth\/(?:sign-up\/email|sign-in\/email|sign-out)$/,
+  /^auth\/(?:send-verification-email|verify-email|request-password-reset|reset-password)$/,
+  /^auth\/reset-password\/[A-Za-z0-9_-]+$/,
   /^me$/,
   /^mandates(?:\/[A-Za-z0-9_-]+)?$/,
   /^mandates\/parse$/,

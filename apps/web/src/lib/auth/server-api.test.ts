@@ -57,6 +57,8 @@ describe("server auth principal boundary", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 401 }));
     await expect(getServerSession()).resolves.toBeNull();
+    fetchMock.mockResolvedValue(new Response(null, { status: 403 }));
+    await expect(getServerSession()).resolves.toBeNull();
     fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
     await expect(getServerSession()).rejects.toBeInstanceOf(SessionServiceUnavailableError);
     fetchMock.mockRejectedValue(new Error("private internal connection details"));

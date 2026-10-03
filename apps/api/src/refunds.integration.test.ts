@@ -1,6 +1,5 @@
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createPrismaClient,
@@ -14,12 +13,6 @@ import { PayPalProviderError, type PayPalCapture, type PayPalRefund } from "@man
 import { evaluateProposal } from "./services/proposals.js";
 import { registerRefundRoutes } from "./routes/refunds.js";
 import type { RefundGateway } from "./services/refunds.js";
-
-try {
-  process.loadEnvFile?.(fileURLToPath(new URL("../.env", import.meta.url)));
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl)

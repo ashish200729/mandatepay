@@ -71,7 +71,7 @@ export function fromUtcIso(value: string | undefined) {
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
-export function formatUtcDate(value: string | undefined) {
+export function formatUtcDate(value: string | null | undefined) {
   if (!value) return "Server default · UTC";
   const date = new Date(`${value.endsWith("Z") ? value : `${value}Z`}`);
   if (Number.isNaN(date.getTime())) return "Invalid UTC date";

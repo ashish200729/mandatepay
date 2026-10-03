@@ -10,8 +10,11 @@ export type DashboardTotals = {
 
 export type TransactionRow = {
   id: string;
+  paymentId: string | null;
   createdAt: string;
-  product: { title: string; brand: string; condition: string };
+  capturedAt: string | null;
+  activityAt: string;
+  product: { title: string; brand: string | null; condition: string };
   merchant: string;
   category: string | null;
   amountMinor: number;

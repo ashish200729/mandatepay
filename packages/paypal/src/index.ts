@@ -54,6 +54,7 @@ export {
   type WebhookInboxClaim,
   type WebhookInboxStore,
   type WebhookProcessingResult,
+  type VerifiedWebhookReplayInput,
   type WebhookRouteApp,
   type WebhookRouteReply,
   type WebhookServiceResponse,

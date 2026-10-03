@@ -5,6 +5,7 @@ const AUTHENTICATED_ROUTES = [
   "/mandates",
   "/approvals",
   "/orders",
+  "/proposals",
   "/dashboard",
   "/settings",
 ] as const;

@@ -9,6 +9,7 @@ import {
   type DatabaseClient,
   type Prisma as PrismaNamespace,
 } from "@mandatepay/database";
+import { WebhookProcessingStatus } from "@mandatepay/database";
 import {
   PayPalClient,
   PayPalWebhookService,
@@ -31,7 +32,13 @@ function jsonPayload(event: PayPalWebhookEvent): Prisma.InputJsonValue {
   return event as unknown as Prisma.InputJsonValue;
 }
 
-class PrismaWebhookInboxStore implements WebhookInboxStore {
+export interface VerifiedWebhookRecoveryCandidate {
+  readonly id: string;
+  readonly attempts: number;
+  readonly payload: unknown;
+}
+
+export class PrismaWebhookInboxStore implements WebhookInboxStore {
   constructor(private readonly db: DatabaseClient) {}
 
   async claim(input: {
@@ -65,6 +72,7 @@ class PrismaWebhookInboxStore implements WebhookInboxStore {
               status: "PROCESSING",
               attempts: { increment: 1 },
               lastError: "Reclaimed an expired processing lease.",
+              nextAttemptAt: null,
               signatureVerified: true,
             },
           });
@@ -76,6 +84,7 @@ class PrismaWebhookInboxStore implements WebhookInboxStore {
             status: "PROCESSING",
             attempts: { increment: 1 },
             lastError: null,
+            nextAttemptAt: null,
             signatureVerified: true,
           },
         });
@@ -100,21 +109,89 @@ class PrismaWebhookInboxStore implements WebhookInboxStore {
   async markProcessed(id: string): Promise<void> {
     await this.db.webhookInbox.update({
       where: { id },
-      data: { status: "PROCESSED", processedAt: new Date(), lastError: null },
+      data: { status: "PROCESSED", processedAt: new Date(), lastError: null, nextAttemptAt: null },
     });
   }
 
   async markPending(id: string, reason: string): Promise<void> {
     await this.db.webhookInbox.update({
       where: { id },
-      data: { status: "FAILED", lastError: reason.slice(0, 10_000) },
+      data: { status: "FAILED", lastError: reason.slice(0, 10_000), nextAttemptAt: null },
     });
   }
 
   async markIgnored(id: string, reason: string): Promise<void> {
     await this.db.webhookInbox.update({
       where: { id },
-      data: { status: "IGNORED", lastError: reason.slice(0, 10_000) },
+      data: { status: "IGNORED", lastError: reason.slice(0, 10_000), nextAttemptAt: null },
+    });
+  }
+
+  async listRecoveryCandidates(now: Date, maxAttempts: number, leaseMs: number, take: number) {
+    const leaseCutoff = new Date(now.getTime() - leaseMs);
+    return this.db.webhookInbox.findMany({
+      where: {
+        provider: "paypal",
+        signatureVerified: true,
+        attempts: { lt: maxAttempts },
+        OR: [
+          {
+            status: WebhookProcessingStatus.FAILED,
+            OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+          },
+          { status: WebhookProcessingStatus.PROCESSING, updatedAt: { lte: leaseCutoff } },
+        ],
+      },
+      orderBy: [{ nextAttemptAt: "asc" }, { receivedAt: "asc" }],
+      take,
+      select: { id: true },
+    });
+  }
+
+  async claimVerifiedForReplay(
+    id: string,
+    now: Date,
+    maxAttempts: number,
+    leaseMs: number,
+  ): Promise<VerifiedWebhookRecoveryCandidate | null> {
+    return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "WebhookInbox" WHERE id = ${id} FOR UPDATE`;
+      const row = await tx.webhookInbox.findUnique({ where: { id } });
+      if (
+        !row ||
+        row.provider !== "paypal" ||
+        !row.signatureVerified ||
+        row.attempts >= maxAttempts
+      ) {
+        return null;
+      }
+      const leaseCutoff = new Date(now.getTime() - leaseMs);
+      const due =
+        (row.status === WebhookProcessingStatus.FAILED &&
+          (row.nextAttemptAt === null || row.nextAttemptAt <= now)) ||
+        (row.status === WebhookProcessingStatus.PROCESSING && row.updatedAt <= leaseCutoff);
+      if (!due) return null;
+      const claimed = await tx.webhookInbox.update({
+        where: { id },
+        data: {
+          status: WebhookProcessingStatus.PROCESSING,
+          attempts: { increment: 1 },
+          lastError: null,
+          nextAttemptAt: null,
+        },
+      });
+      return { id: claimed.id, attempts: claimed.attempts, payload: claimed.payload };
+    });
+  }
+
+  async scheduleRetry(id: string, nextAttemptAt: Date | null, reason: string): Promise<void> {
+    await this.db.webhookInbox.update({
+      where: { id },
+      data: {
+        status: WebhookProcessingStatus.FAILED,
+        nextAttemptAt,
+        lastError: reason.slice(0, 10_000),
+      },
     });
   }
 }

@@ -1,0 +1,501 @@
+{
+  "info": {
+    "name": "MandatePay MVP",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Manual local/Sandbox request collection. Financial writes run only when explicitly sent. No live credentials or mock success responses included. Read docs/api/POSTMAN.md first."
+  },
+  "variable": [
+    {
+      "key": "apiUrl",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "appUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "mandateId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "proposalId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "shoppingRequestKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "proposalRequestKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refundRequestKey",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/health"
+      }
+    },
+    {
+      "name": "Sign up (development)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/auth/sign-up/email",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Demo user\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Use an ephemeral local account. Production requires verified email. Postman's cookie jar stores the session; do not export credentials."
+      }
+    },
+    {
+      "name": "Sign in",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/auth/sign-in/email",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Current session",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/me"
+      }
+    },
+    {
+      "name": "Parse a mandate",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/mandates/parse",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Find Sony or Bose headphones below $180. New products only. Automatically spend up to $150. Ask above that. Quantity one. Valid for 24 hours.\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Review returned canonical mandate JSON in the app. Parsing grants no purchasing permission."
+      }
+    },
+    {
+      "name": "Owned mandates",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/mandates"
+      }
+    },
+    {
+      "name": "Search controlled catalog",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/products/search",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"mandateId\": \"{{mandateId}}\",\n  \"query\": \"headphones\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Choose an active owned mandate first. Discovery is explicitly labeled Demo Catalog unless Channel3 is configured."
+      }
+    },
+    {
+      "name": "Shopping agent",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/agent/chat",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"Find Sony headphones and prepare one proposal for review.\",\n  \"mandateId\": \"{{mandateId}}\",\n  \"requestKey\": \"{{shoppingRequestKey}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Keep the same request key when retrying a request. The model can propose; it cannot approve or pay."
+      }
+    },
+    {
+      "name": "Prepare proposal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/proposals",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"mandateId\": \"{{mandateId}}\",\n  \"source\": \"demo\",\n  \"productId\": \"demo-headphones-169\",\n  \"quantity\": 1,\n  \"requestKey\": \"{{proposalRequestKey}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "No client price, total or currency is accepted."
+      }
+    },
+    {
+      "name": "Evaluate proposal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/proposals/{{proposalId}}/evaluate",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Read actual proposal decision",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/proposals/{{proposalId}}"
+      }
+    },
+    {
+      "name": "Approve exact proposal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/proposals/{{proposalId}}/approve",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Explicit human action. Hard policy blocks cannot be overridden. Approval does not execute payment."
+      }
+    },
+    {
+      "name": "Create Sandbox order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/paypal/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"proposalId\": \"{{proposalId}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Explicit Sandbox financial operation. Open the returned PayPal approval URL using a separate personal Sandbox buyer."
+      }
+    },
+    {
+      "name": "Capture approved Sandbox order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/paypal/orders/{{paymentId}}/capture",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "paymentId is MandatePay's local payment ID, not a PayPal order ID. Requires actual Sandbox payer approval. Retrying uses server-stored idempotency."
+      }
+    },
+    {
+      "name": "Owned orders",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/orders"
+      }
+    },
+    {
+      "name": "Owned order and refunds",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/orders/{{paymentId}}"
+      }
+    },
+    {
+      "name": "Partial Sandbox refund",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payments/{{paymentId}}/refund",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amountMinor\": 2000,\n  \"reason\": \"Item damaged\",\n  \"requestKey\": \"{{refundRequestKey}}\",\n  \"confirmed\": true\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Explicit $20 refund of an owned capture. Set a fresh key only for a new intentional refund; retain this key/details for retries."
+      }
+    },
+    {
+      "name": "Natural-language dashboard",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/dashboard/query",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"Show everything AgentGuard blocked this week.\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Audit timeline",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/audit?entityId={{paymentId}}"
+      }
+    }
+  ]
+}

@@ -1,14 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { DATABASE_ENV_KEYS, loadWorkspaceEnvironment } from "../../scripts/environment.mjs";
 
-try {
-  process.loadEnvFile(fileURLToPath(new URL("./.env", import.meta.url)));
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
+loadWorkspaceEnvironment({
+  workspaceDirectory: fileURLToPath(new URL("./", import.meta.url)),
+  mode: "test",
+  keys: DATABASE_ENV_KEYS,
+});
 if (
   !process.env.TEST_DATABASE_URL ||
-  !new URL(process.env.TEST_DATABASE_URL).pathname.endsWith("_test")
+  !decodeURIComponent(new URL(process.env.TEST_DATABASE_URL).pathname).endsWith("_test") ||
+  process.env.TEST_DATABASE_URL === process.env.DATABASE_URL
 ) {
   throw new Error(
     "Auth integration requires a dedicated TEST_DATABASE_URL whose database name ends in _test.",

@@ -29,17 +29,17 @@ pnpm dev
 
 The database helper creates an isolated loopback cluster under ignored `.local/postgres`, listening on port 55432. It creates separate development and test databases, generates private credentials and an authentication secret, and fills ignored environment files without replacing existing nonempty values. It does not modify an existing system PostgreSQL instance. Stop this cluster with `pnpm db:local:stop`.
 
-Alternatively, supply separate PostgreSQL URLs in `packages/database/.env` and `apps/api/.env` using their example files. `TEST_DATABASE_URL` must name a dedicated database ending in `_test`; tests reject a shared development/production database. Set `AUTH_SECRET` to a cryptographically random secret and use matching `APP_URL` / `API_URL`.
+Alternatively, copy root `.env.example` to ignored `.env` and configure shared PostgreSQL URLs, `AUTH_SECRET` and matching `APP_URL` / `API_URL`. Optional files in `apps/api`, `apps/web` and `packages/database` override shared settings; shell/CI values have highest priority. Keep only keys you want to override in workspace files: empty values explicitly clear root settings. `TEST_DATABASE_URL` must name a dedicated database ending in `_test`; tests reject a shared development/production database. See [environment configuration](docs/development/environment.md) for mode-specific/local files and secret boundaries.
 
 - Web: http://localhost:3000
 - API liveness: http://localhost:4000/health
 - Database/auth readiness: http://localhost:4000/health/ready
 
-Sign up at `/signup`, open **Mandates → New mandate**, review the AI-generated rules, save the draft, then activate it explicitly. `/chat` offers discovery/comparison under the active mandate; prepare a proposal, review required approval, then continue to Sandbox checkout. Use a separate personal Sandbox buyer for PayPal approval. `/orders` shows server-confirmed payment/refund facts; `/dashboard` shows owned analytics. Without database/auth configuration, protected services report unavailable. The limited tool-calling API exists at `/api/agent/chat`; its complete conversational frontend is follow-up work.
+Sign up at `/signup`, open **Mandates → New mandate**, review the AI-generated rules, save the draft, then activate it explicitly. `/chat` runs the limited shopping agent under a selected active mandate; structured discovery/comparison remains available as a fallback. Prepare a proposal, review required approval, then continue to Sandbox checkout. Use a separate personal Sandbox buyer for PayPal approval. `/orders` shows server-confirmed payment/refund facts; `/dashboard` shows owned analytics, natural-language filters and policy/audit detail links. Refund chat remains available without an active purchasing mandate and prepares reviewable details only. Without database/auth configuration, protected services report unavailable.
 
 ## AI configuration
 
-Configure these **only** in ignored `apps/api/.env` and restart the API:
+Configure these in ignored root `.env` or `apps/api/.env` and restart the API. Root provider keys are loaded only by the API:
 
 ```dotenv
 OPENAI_API_KEY=<your-server-key>
@@ -90,4 +90,8 @@ Project source uses the root [MIT license](LICENSE). Provider services and third
 
 ## Current limits
 
-Authentication is currently a sandbox-oriented email/password implementation without verification email or password-reset delivery. Production rollout requires account recovery, provider and security qualification, and hosted acceptance gates. PayPal execution is sandbox-only. This is a verified implementation checkpoint; real financial demo/provider/hosting gates are recorded in [the handoff](docs/implementation/PROGRESS.md).
+Production authentication requires HTTPS, `AUTH_SECRET`, PostgreSQL, `RESEND_API_KEY`, and a verified bare-email `AUTH_EMAIL_FROM`. Email verification is required in production; local development/test signup remains immediate by default. Verification/resend, forgot-password and single-use reset flows are implemented. Reset invalidates existing sessions. Tests use a fake sender; live sender delivery remains unverified. See [environment setup](docs/development/environment.md).
+
+The verified webhook recovery job can be run with `pnpm --filter @mandatepay/api worker:webhooks` after building the API. It retries previously verified inbox events with leases and bounded backoff, fetching authoritative provider state without creating new payments. Exhausted events remain held for investigation. See [optional Render setup](docs/deployment/RENDER.md), [threat model](docs/security/THREAT_MODEL.md), [system diagram](docs/architecture/SYSTEM.md), [Postman collection](docs/api/POSTMAN.md) and [demo runbook](docs/demo/RUNBOOK.md).
+
+PayPal execution remains Sandbox-only. The user deferred hosted deployment and live Sandbox buyer verification. Real payment/refund/webhook delivery, live email delivery and final submission/video qualification remain open. AG Studio, Vault, recurring purchases and voice are not implemented. The current local implementation and exact evidence are recorded in [the handoff](docs/implementation/PROGRESS.md).

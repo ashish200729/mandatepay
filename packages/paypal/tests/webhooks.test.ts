@@ -84,6 +84,20 @@ function service(
 }
 
 describe("PayPal webhook service", () => {
+  it("replays verified persisted data without releasing the caller's recovery lease", async () => {
+    const context = service(fakePayPal(), fakeInbox(), fakeReconciler("pending"));
+    expect(
+      await context.service.replayVerified({
+        inboxId: "inbox-1",
+        event: JSON.parse(captureEvent()),
+      }),
+    ).toBe("pending");
+    expect(context.paypal.verifyWebhook).not.toHaveBeenCalled();
+    expect(context.inbox.claim).not.toHaveBeenCalled();
+    expect(context.inbox.markPending).not.toHaveBeenCalled();
+    expect(context.inbox.markProcessed).not.toHaveBeenCalled();
+    expect(context.inbox.markIgnored).not.toHaveBeenCalled();
+  });
   it("rejects missing signatures before any inbox write", async () => {
     const context = service();
     const result = await context.service.handle({ rawBody: captureEvent(), headers: {} });

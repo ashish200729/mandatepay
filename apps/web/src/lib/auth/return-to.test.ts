@@ -5,6 +5,7 @@ describe("safe auth return paths", () => {
   it("keeps an allowed workspace path and its query string", () => {
     expect(getSafeReturnTo("/dashboard?range=week")).toBe("/dashboard?range=week");
     expect(getSafeReturnTo("/mandates/mandate_123")).toBe("/mandates/mandate_123");
+    expect(getSafeReturnTo("/proposals/proposal_123")).toBe("/proposals/proposal_123");
   });
 
   it("falls back for external and disallowed destinations", () => {

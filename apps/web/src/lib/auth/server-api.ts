@@ -71,7 +71,7 @@ export async function getServerSession(): Promise<Principal | null> {
       signal: AbortSignal.timeout(8_000),
     });
 
-    if (response.status === 401) return null;
+    if (response.status === 401 || response.status === 403) return null;
     if (!response.ok) throw new SessionServiceUnavailableError();
 
     const principal = sanitizePrincipal(await response.json().catch(() => null));

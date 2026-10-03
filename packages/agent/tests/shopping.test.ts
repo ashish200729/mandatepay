@@ -88,6 +88,17 @@ function mockClient(
 const baseInput = { message: "Find my usual headphones and prepare the best option.", now: NOW };
 
 describe("bounded shopping agent", () => {
+  it.each([[], null])(
+    "accepts a provider's empty tool_calls value on a final stop response",
+    async (toolCalls) => {
+      const response = finalResponse();
+      Object.assign(response.choices[0]!.message, { tool_calls: toolCalls });
+      const transport = mockClient([response]);
+      const result = await runShoppingAgent(baseInput, { ...transport, tools: {} });
+      expect(result.status).toBe("completed");
+      expect(result.trace).toEqual([]);
+    },
+  );
   it("executes only injected allow-listed tools and returns a non-authoritative explanation", async () => {
     const transport = mockClient([
       toolResponse("search_products", {

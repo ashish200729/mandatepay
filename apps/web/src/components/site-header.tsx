@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Link from "next/link";
 import { ArrowUpRight, Menu } from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
@@ -50,9 +51,9 @@ export function SiteHeader() {
             </a>
           ))}
         </nav>
-        <a href="#how-it-works" className={cn(buttonVariants(), "hidden sm:inline-flex")}>
+        <Link href="/chat" className={cn(buttonVariants(), "hidden sm:inline-flex")}>
           Explore MandatePay <ArrowUpRight aria-hidden="true" />
-        </a>
+        </Link>
         <details
           ref={mobileMenu}
           className="group lg:hidden"
@@ -81,6 +82,9 @@ export function SiteHeader() {
             aria-label="Mobile navigation"
             className="absolute inset-x-5 top-full flex flex-col gap-1 rounded-xl border border-border bg-card p-3 shadow-[0_8px_24px_rgba(27,20,14,0.08)]"
           >
+            <Link href="/chat" className={cn(buttonVariants(), "mb-2")}>
+              Open MandatePay <ArrowUpRight aria-hidden="true" />
+            </Link>
             {links.map((link) => (
               <a
                 key={link.href}

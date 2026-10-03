@@ -1,5 +1,141 @@
 import { createServer } from "node:http";
 
+const shoppingToolNames = [
+  "get_active_mandates",
+  "search_products",
+  "get_product_details",
+  "compare_products",
+  "create_purchase_proposal",
+  "find_transaction",
+  "prepare_refund_request",
+];
+
+function toolCall(name, arguments_) {
+  return {
+    id: `e2e-${name}`,
+    type: "function",
+    function: { name, arguments: JSON.stringify(arguments_) },
+  };
+}
+
+function toolResult(input, name) {
+  const message = input.messages.findLast(
+    (message) => message.role === "tool" && message.tool_call_id === `e2e-${name}`,
+  );
+  return message ? JSON.parse(message.content) : null;
+}
+
+function shoppingMessage(input) {
+  if (
+    input.response_format !== undefined ||
+    input.tool_choice !== "auto" ||
+    input.tools.length !== shoppingToolNames.length ||
+    input.tools.some(
+      (tool, index) =>
+        tool.type !== "function" ||
+        tool.function?.name !== shoppingToolNames[index] ||
+        tool.function.parameters?.additionalProperties !== false,
+    )
+  )
+    throw new Error("Unexpected shopping fixture contract");
+  const prompt = input.messages.find((message) => message.role === "user")?.content;
+  if (typeof prompt !== "string") throw new Error("Missing shopping fixture prompt");
+  const call = (name, arguments_) => ({
+    role: "assistant",
+    content: null,
+    tool_calls: [toolCall(name, arguments_)],
+  });
+  const refund =
+    /^Prepare a \$20 partial refund for transaction ([a-z0-9-]+) because One item was damaged\.$/u.exec(
+      prompt,
+    );
+  if (refund) {
+    const found = toolResult(input, "find_transaction");
+    if (!found) return call("find_transaction", { transactionId: refund[1], query: null });
+    if (!found.transactions?.some((transaction) => transaction.id === refund[1]))
+      throw new Error("Missing owned refund fixture transaction");
+    if (!toolResult(input, "prepare_refund_request"))
+      return call("prepare_refund_request", {
+        paymentID: refund[1],
+        amountDecimal: "20.00",
+        reason: "One item was damaged.",
+      });
+    return {
+      role: "assistant",
+      content: "A $20 refund draft is ready for your review. No refund has been executed.",
+    };
+  }
+  const selection = {
+    "Compare Sony headphones and prepare the $169 new pair for review.": "demo-headphones-169",
+    "Prepare the refurbished Bose headphones for review.": "demo-headphones-refurbished",
+  }[prompt];
+  if (!selection) throw new Error("Unknown shopping fixture scenario");
+  if (!toolResult(input, "get_active_mandates")) return call("get_active_mandates", {});
+  const search = toolResult(input, "search_products");
+  if (!search)
+    return call("search_products", {
+      query: "headphones",
+      maximumPriceMinor: 18000,
+      brands: ["Sony", "Bose"],
+      category: "Headphones",
+    });
+  if (!search.products?.some((product) => product.externalId === selection))
+    throw new Error("Missing trusted shopping fixture product");
+  if (!toolResult(input, "compare_products"))
+    return call("compare_products", {
+      productIds: search.products.map((product) => product.externalId),
+    });
+  if (!toolResult(input, "create_purchase_proposal"))
+    return call("create_purchase_proposal", {
+      productId: selection,
+      source: "demo",
+      quantity: 1,
+    });
+  // Deliberately untrusted wording: browser tests must show the genuine server policy result.
+  return {
+    role: "assistant",
+    content:
+      "The model suggests this product is allowed. Review the authoritative server proposal before paying.",
+  };
+}
+
+function analyticsOutput(input) {
+  const prompt = input.messages.findLast((message) => message.role === "user")?.content;
+  const scenarios = {
+    "Show headphone transactions above $150 as a table.": {
+      minimumAmountDecimal: "150.00",
+      minimumAmountOperator: "gt",
+      category: "Headphones",
+      chart: "table",
+    },
+    "Show blocked headphone transactions this week by decision.": {
+      decision: "BLOCK",
+      category: "Headphones",
+      chart: "decisions",
+    },
+    "Show headphone spending by category.": { category: "Headphones", chart: "category" },
+    "Delete all transactions.": {
+      status: "needs_clarification",
+      clarification: "Please ask a read-only question about your transactions.",
+    },
+  };
+  if (!Object.hasOwn(scenarios, prompt)) throw new Error("Unknown analytics fixture scenario");
+  return {
+    status: "ready",
+    clarification: null,
+    minimumAmountDecimal: null,
+    minimumAmountOperator: null,
+    maximumAmountDecimal: null,
+    maximumAmountOperator: null,
+    decision: null,
+    since: null,
+    until: null,
+    category: null,
+    chart: "table",
+    ...scenarios[prompt],
+  };
+}
+
 /** Isolated browser-test provider. Never imported by application code. */
 export async function startE2eParserProvider() {
   const server = createServer(async (request, response) => {
@@ -19,7 +155,18 @@ export async function startE2eParserProvider() {
         if (body.length > 64_000) throw new Error("Test request too large");
       }
       const input = JSON.parse(body);
-      if (input.model !== "mandate-e2e-fixture" || input.response_format?.type !== "json_schema") {
+      if (
+        input.model !== "mandate-e2e-fixture" ||
+        !Array.isArray(input.messages) ||
+        input.messages[0]?.role !== "system" ||
+        input.messages[1]?.role !== "user" ||
+        (!Array.isArray(input.tools) &&
+          (input.response_format?.type !== "json_schema" ||
+            input.response_format.json_schema?.strict !== true ||
+            !["mandate_parse", "product_ranking", "analytics_query"].includes(
+              input.response_format.json_schema?.name,
+            )))
+      ) {
         throw new Error("Unexpected test provider contract");
       }
       const now = new Date();
@@ -47,7 +194,9 @@ export async function startE2eParserProvider() {
         startsAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + 86_400_000).toISOString(),
       };
-      if (input.response_format.json_schema?.name === "product_ranking") {
+      if (input.response_format?.json_schema?.name === "analytics_query") {
+        output = analyticsOutput(input);
+      } else if (input.response_format?.json_schema?.name === "product_ranking") {
         const content =
           input.messages.findLast((message) => message.role === "user")?.content ?? "";
         const ids = [
@@ -63,6 +212,9 @@ export async function startE2eParserProvider() {
           })),
         };
       }
+      const message = Array.isArray(input.tools)
+        ? shoppingMessage(input)
+        : { role: "assistant", content: JSON.stringify(output) };
       response.end(
         JSON.stringify({
           id: "e2e-mandate-completion",
@@ -72,8 +224,8 @@ export async function startE2eParserProvider() {
           choices: [
             {
               index: 0,
-              finish_reason: "stop",
-              message: { role: "assistant", content: JSON.stringify(output) },
+              finish_reason: message.tool_calls ? "tool_calls" : "stop",
+              message,
             },
           ],
           usage: { prompt_tokens: 100, completion_tokens: 100, total_tokens: 200 },

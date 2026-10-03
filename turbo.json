@@ -1,15 +1,27 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": [
+    ".env",
+    ".env.*",
+    "scripts/environment.*",
+    "scripts/register-*-environment.mjs"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["DATABASE_URL"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "env": ["DATABASE_URL", "API_URL", "APP_URL", "NODE_ENV"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "lint": { "dependsOn": ["^lint"] },
-    "typecheck": { "dependsOn": ["^build", "^typecheck"] },
+    "typecheck": {
+      "dependsOn": ["^build", "^typecheck"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "env": ["API_URL", "APP_URL", "NODE_ENV"]
+    },
     "test": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "env": ["HOST", "PORT", "WEB_ORIGIN", "LOG_LEVEL", "DATABASE_URL", "TEST_DATABASE_URL"],
       "outputs": ["coverage/**"]
     },
@@ -21,15 +33,29 @@
         "HOST",
         "PORT",
         "LOG_LEVEL",
+        "NODE_ENV",
         "WEB_ORIGIN",
         "DATABASE_URL",
         "AUTH_SECRET",
+        "AUTH_REQUIRE_EMAIL_VERIFICATION",
+        "RESEND_API_KEY",
+        "AUTH_EMAIL_FROM",
         "APP_URL",
         "API_URL",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "OPENAI_BASE_URL",
+        "OPENAI_RESPONSE_MODE",
+        "OPENAI_TIMEOUT_MS",
+        "OPENAI_MAX_RETRIES",
+        "OPENAI_MAX_OUTPUT_TOKENS",
+        "OPENAI_REASONING_EFFORT",
         "CHANNEL3_API_KEY",
+        "CHANNEL3_BASE_URL",
+        "CHANNEL3_TIMEOUT_MS",
+        "CHANNEL3_MAX_RETRIES",
+        "CHANNEL3_FALLBACK_MODE",
+        "PRODUCT_DISCOVERY_MODE",
         "PAYPAL_ENV",
         "PAYPAL_CLIENT_ID",
         "PAYPAL_CLIENT_SECRET",

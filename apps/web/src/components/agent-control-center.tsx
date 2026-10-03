@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { AgGridProvider, AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
   themeQuartz,
   type ColDef,
   type GetRowIdParams,
+  type ICellRendererParams,
   type ValueFormatterParams,
   type ValueGetterParams,
 } from "ag-grid-community";
@@ -55,9 +57,55 @@ function formatDate(value: string) {
   return Number.isNaN(date.getTime()) ? "—" : date.toISOString().slice(0, 16).replace("T", " ");
 }
 
+const CAPTURED_PAYMENT_STATUSES = new Set(["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED"]);
+
+type SpendBarRow = { label: string; amountMinor: number };
+
+function capturedSpendByKey(
+  rows: readonly TransactionRow[],
+  getKey: (row: TransactionRow) => string,
+): SpendBarRow[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.capturedAt || !row.paypalStatus || !CAPTURED_PAYMENT_STATUSES.has(row.paypalStatus))
+      continue;
+    const key = getKey(row);
+    totals.set(key, (totals.get(key) ?? 0) + row.amountMinor);
+  }
+  return [...totals.entries()]
+    .map(([label, amountMinor]) => ({ label, amountMinor }))
+    .sort((a, b) => b.amountMinor - a.amountMinor);
+}
+
+function dayKey(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Unknown date" : date.toISOString().slice(0, 10);
+}
+
+function weekKey(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown week";
+  const day = date.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  date.setUTCDate(date.getUTCDate() + mondayOffset);
+  return `Week of ${date.toISOString().slice(0, 10)}`;
+}
+
+function refundStatus(value: string | null) {
+  if (value === "REFUNDED") return "Refunded";
+  if (value === "PARTIALLY_REFUNDED") return "Partial refund";
+  return "—";
+}
+
+function transactionDetailHref(row: TransactionRow) {
+  return row.paymentId
+    ? `/orders/${encodeURIComponent(row.paymentId)}`
+    : `/proposals/${encodeURIComponent(row.id)}`;
+}
+
 const transactionColumns: ColDef<TransactionRow>[] = [
   {
-    field: "createdAt",
+    field: "activityAt",
     headerName: "Date",
     valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
       formatDate(String(value ?? "")),
@@ -66,7 +114,18 @@ const transactionColumns: ColDef<TransactionRow>[] = [
   {
     field: "product.title",
     headerName: "Product",
-    valueGetter: ({ data }: ValueGetterParams<TransactionRow>) => data?.product.title,
+    cellRenderer: ({ data }: ICellRendererParams<TransactionRow>) =>
+      data ? (
+        <Link
+          href={transactionDetailHref(data)}
+          className="font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          aria-label={`Open details for ${data.product.title}`}
+        >
+          {data.product.title}
+        </Link>
+      ) : (
+        "—"
+      ),
     minWidth: 190,
     flex: 1,
   },
@@ -88,6 +147,13 @@ const transactionColumns: ColDef<TransactionRow>[] = [
   { field: "decision", headerName: "Decision", minWidth: 140 },
   { field: "approvalType", headerName: "Approval", minWidth: 140 },
   { field: "paypalStatus", headerName: "Payment", minWidth: 150 },
+  {
+    field: "paypalStatus",
+    headerName: "Refund",
+    valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
+      refundStatus(typeof value === "string" ? value : null),
+    minWidth: 130,
+  },
 ];
 
 const policyColumns: ColDef<PolicyEventRow>[] = [
@@ -101,7 +167,17 @@ const policyColumns: ColDef<PolicyEventRow>[] = [
   {
     field: "product.title",
     headerName: "Product",
-    valueGetter: ({ data }: ValueGetterParams<PolicyEventRow>) => data?.product.title,
+    cellRenderer: ({ data }: ICellRendererParams<PolicyEventRow>) =>
+      data ? (
+        <Link
+          href={`/proposals/${encodeURIComponent(data.proposalId)}`}
+          className="font-medium underline-offset-4 hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          {data.product.title}
+        </Link>
+      ) : (
+        "—"
+      ),
     flex: 1,
     minWidth: 190,
   },
@@ -161,15 +237,22 @@ function MiniBars({
   title,
   rows,
   valueLabel,
+  description,
 }: {
   title: string;
   rows: { label: string; amountMinor?: number; count?: number }[];
   valueLabel: (row: { amountMinor?: number; count?: number }) => string;
+  description?: string;
 }) {
   const max = Math.max(1, ...rows.map((row) => row.amountMinor ?? row.count ?? 0));
   return (
     <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
-      <h2 className="font-editorial text-2xl tracking-[-0.02em]">{title}</h2>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h2 className="font-editorial text-2xl tracking-[-0.02em]">{title}</h2>
+        {description ? (
+          <p className="text-right text-xs text-muted-foreground">{description}</p>
+        ) : null}
+      </div>
       {rows.length ? (
         <div className="mt-6 space-y-4">
           {rows.map((row) => {
@@ -332,9 +415,16 @@ export function AgentControlCenter() {
 
   const spendByCategory = capturedSpendByCategory(transactions);
   const decisions = decisionCounts(transactions);
+  const spendByMandate = capturedSpendByKey(
+    transactions,
+    (row) => `${row.mandate.title} · v${row.mandate.version}`,
+  );
+  const spendByDay = capturedSpendByKey(transactions, (row) => dayKey(row.capturedAt!));
+  const spendByWeek = capturedSpendByKey(transactions, (row) => weekKey(row.capturedAt!));
   const scopeLabel = nextCursor
     ? `Loaded rows only · ${transactions.length} shown · more data available`
     : `Loaded rows only · ${transactions.length} shown`;
+  const chartScope = nextCursor ? "Loaded rows · load more for more" : "Loaded rows";
   const filterLabels = [
     filters.minAmountMinor !== undefined
       ? `${filters.minAmountExclusive ? ">" : ">="} ${formatUsdLabel(filters.minAmountMinor)}`
@@ -549,18 +639,42 @@ export function AgentControlCenter() {
           </section>
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
-            {chartIntent !== "decisions" ? (
+            {chartIntent === null ? (
+              <>
+                <MiniBars
+                  title="Spend by mandate"
+                  rows={spendByMandate}
+                  valueLabel={(row) => formatUsdLabel(row.amountMinor)}
+                  description={chartScope}
+                />
+                <MiniBars
+                  title="Spend by day"
+                  rows={spendByDay}
+                  valueLabel={(row) => formatUsdLabel(row.amountMinor)}
+                  description={chartScope}
+                />
+                <MiniBars
+                  title="Spend by week"
+                  rows={spendByWeek}
+                  valueLabel={(row) => formatUsdLabel(row.amountMinor)}
+                  description={chartScope}
+                />
+              </>
+            ) : null}
+            {chartIntent !== "decisions" && chartIntent !== null ? (
               <MiniBars
                 title="Captured spend by category"
                 rows={spendByCategory}
                 valueLabel={(row) => formatUsdLabel(row.amountMinor)}
+                description={chartScope}
               />
             ) : null}
-            {chartIntent !== "category" ? (
+            {chartIntent !== "category" && chartIntent !== null ? (
               <MiniBars
                 title="Decision breakdown"
                 rows={decisions}
                 valueLabel={(row) => String(row.count ?? 0)}
+                description={chartScope}
               />
             ) : null}
           </div>

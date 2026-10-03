@@ -39,4 +39,4 @@ Tailwind v4 and shared shadcn/ui primitives. Header destinations are plain text 
 
 ## Product truth
 
-This remains a foundation template. No AI, payments, policy enforcement, database, or provider integration is connected. Purchase examples are labeled illustrative. No fake signup or checkout action is introduced. Preserve the backend and workspace architecture.
+The application now includes authenticated mandates, product discovery, conversational proposals, deterministic policy enforcement, human approvals, Sandbox payment/refund APIs, audit history and analytics. Landing-page examples remain illustrative. Preserve the approved warm visual world across application surfaces. AI explanations must remain separate from actual AgentGuard and payment facts. Label Demo Catalog and Sandbox explicitly; hosted and live financial qualification are separate from local automated evidence.

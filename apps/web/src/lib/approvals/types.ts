@@ -1,6 +1,6 @@
 export type ApprovalProduct = {
   title: string;
-  brand: string;
+  brand: string | null;
   condition: "NEW" | "USED" | "REFURBISHED";
   merchant: string;
   source: "demo" | "channel3";
@@ -14,7 +14,7 @@ export type ApprovalProposal = {
   quantity: number;
   shipping: number;
   tax: number;
-  expiresAt: string;
+  expiresAt: string | null;
   approvalExpiresAt: string | null;
   product: ApprovalProduct;
   mandate: { title: string; version: number };

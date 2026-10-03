@@ -521,6 +521,7 @@ model WebhookInbox {
   status            WebhookProcessingStatus @default(RECEIVED)
   attempts          Int                     @default(0)
   receivedAt        DateTime                @default(now())
+  nextAttemptAt     DateTime?
   processedAt       DateTime?
   lastError         String?                 @db.Text
   createdAt         DateTime                @default(now())

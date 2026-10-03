@@ -1,10 +1,12 @@
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { DATABASE_ENV_KEYS, loadWorkspaceEnvironment } from "../../scripts/environment.mjs";
 
-try {
-  process.loadEnvFile?.(".env");
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
+loadWorkspaceEnvironment({
+  workspaceDirectory: fileURLToPath(new URL("./", import.meta.url)),
+  mode: "test",
+  keys: DATABASE_ENV_KEYS,
+});
 
 const testUrl = process.env.TEST_DATABASE_URL;
 const databaseUrl = process.env.DATABASE_URL;

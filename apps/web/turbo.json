@@ -1,0 +1,8 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": { "env": ["API_URL", "APP_URL", "NODE_ENV"] },
+    "dev": { "env": ["API_URL", "APP_URL", "NODE_ENV"] },
+    "test": { "env": [] }
+  }
+}

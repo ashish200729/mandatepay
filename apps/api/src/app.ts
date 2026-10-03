@@ -24,6 +24,11 @@ import { createPayPalWebhookService } from "./services/webhooks.js";
 import { registerPayPalWebhookRoutes } from "./routes/webhooks.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerShoppingAgentRoutes } from "./routes/agent.js";
+import {
+  createMutationRateLimiter,
+  isFinancialMutation,
+  safeRequestPath,
+} from "./services/rate-limits.js";
 
 const settingsSchema = z
   .object({
@@ -71,6 +76,12 @@ function isTrustedOrigin(origin: string | undefined, config: RuntimeConfig): boo
 function safeLoggerConfig(config: RuntimeConfig) {
   return {
     level: config.LOG_LEVEL,
+    serializers: {
+      req: (request: { method: string; url: string }) => ({
+        method: request.method,
+        url: safeRequestPath(request.url),
+      }),
+    },
     redact: {
       paths: [
         "req.headers.authorization",
@@ -98,6 +109,9 @@ function resolveAuthRuntime(options: CreateAppOptions, config: RuntimeConfig): A
       authSecret: config.AUTH_SECRET,
       appUrl: config.APP_URL,
       nodeEnv: config.NODE_ENV,
+      requireEmailVerification: config.AUTH_REQUIRE_EMAIL_VERIFICATION,
+      resendApiKey: config.RESEND_API_KEY,
+      authEmailFrom: config.AUTH_EMAIL_FROM,
     });
   } catch {
     return null;
@@ -132,11 +146,21 @@ async function readAuthenticatedUser(
         id: true,
         name: true,
         email: true,
+        emailVerified: true,
         globalAutonomousPurchasingEnabled: true,
       },
     });
     if (!user) {
       await reply.status(401).send({ error: "Unauthorized", code: "UNAUTHORIZED" });
+      return null;
+    }
+    if (runtime.requireEmailVerification && !user.emailVerified) {
+      await reply
+        .status(403)
+        .send({
+          error: "Verify your email before opening the workspace.",
+          code: "EMAIL_NOT_VERIFIED",
+        });
       return null;
     }
     return user;
@@ -200,7 +224,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   app.get("/health", async () => ({
     status: "ok",
     service: "mandatepay-api",
-    stage: "foundation",
+    stage: "mvp",
   }));
 
   app.get("/health/ready", async (_request, reply) => {
@@ -266,7 +290,11 @@ export async function createApp(options: CreateAppOptions = {}) {
         return forwardAuthResponse(response, reply);
       } catch {
         request.log.error(
-          { event: "auth_request_failed", method: request.method, path: request.url },
+          {
+            event: "auth_request_failed",
+            method: request.method,
+            path: safeRequestPath(request.url),
+          },
           "Authentication handler failed",
         );
         return sendUnavailable(reply);
@@ -368,6 +396,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   if (runtime) {
+    const consumeMutation = createMutationRateLimiter();
     const paypal =
       options.paypalClient !== undefined
         ? options.paypalClient
@@ -384,8 +413,17 @@ export async function createApp(options: CreateAppOptions = {}) {
       });
     const protectedContext = {
       database: runtime.database,
-      requireUser: (request: FastifyRequest, reply: FastifyReply) =>
-        readAuthenticatedUser(request, runtime, reply),
+      requireUser: async (request: FastifyRequest, reply: FastifyReply) => {
+        const user = await readAuthenticatedUser(request, runtime, reply);
+        if (!user || !isFinancialMutation(request.method, request.url)) return user;
+        const rate = consumeMutation(user.id);
+        if (rate.allowed) return user;
+        await reply
+          .header("retry-after", rate.retryAfter)
+          .status(429)
+          .send({ error: "Too many purchase actions. Try again shortly." });
+        return null;
+      },
       isTrustedOrigin: (origin: string | undefined) => isTrustedOrigin(origin, config),
     };
     registerProposalRoutes(app, protectedContext);

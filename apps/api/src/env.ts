@@ -21,6 +21,18 @@ export const environmentSchema = z
       (value) => (value === "" ? undefined : value),
       z.string().min(32).optional(),
     ),
+    AUTH_REQUIRE_EMAIL_VERIFICATION: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .enum(["true", "false"])
+        .transform((value) => value === "true")
+        .optional(),
+    ),
+    RESEND_API_KEY: optionalText,
+    AUTH_EMAIL_FROM: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.email().optional(),
+    ),
     OPENAI_API_KEY: optionalText,
     OPENAI_MODEL: optionalText,
     OPENAI_BASE_URL: z
@@ -46,6 +58,24 @@ export const environmentSchema = z
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === "production") {
+      if (value.AUTH_REQUIRE_EMAIL_VERIFICATION === false)
+        context.addIssue({
+          code: "custom",
+          path: ["AUTH_REQUIRE_EMAIL_VERIFICATION"],
+          message: "Production requires email verification.",
+        });
+      if (!value.RESEND_API_KEY)
+        context.addIssue({
+          code: "custom",
+          path: ["RESEND_API_KEY"],
+          message: "Production requires authentication email delivery.",
+        });
+      if (!value.AUTH_EMAIL_FROM)
+        context.addIssue({
+          code: "custom",
+          path: ["AUTH_EMAIL_FROM"],
+          message: "Production requires a verified sender address.",
+        });
       if (!value.AUTH_SECRET)
         context.addIssue({
           code: "custom",

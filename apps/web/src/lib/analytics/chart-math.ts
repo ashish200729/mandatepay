@@ -5,7 +5,7 @@ const CAPTURED_STATUSES = new Set(["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED"
 export function capturedSpendByCategory(rows: readonly TransactionRow[]) {
   const totals = new Map<string, number>();
   for (const row of rows) {
-    if (!row.paypalStatus || !CAPTURED_STATUSES.has(row.paypalStatus)) continue;
+    if (!row.capturedAt || !row.paypalStatus || !CAPTURED_STATUSES.has(row.paypalStatus)) continue;
     const category = row.category ?? "Uncategorized";
     totals.set(category, (totals.get(category) ?? 0) + row.amountMinor);
   }

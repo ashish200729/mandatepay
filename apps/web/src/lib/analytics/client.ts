@@ -38,10 +38,14 @@ function readTransaction(value: unknown): TransactionRow {
     throw new Error("Transaction response was not valid.");
   return {
     id: string(value.id, "transaction.id"),
+    paymentId: value.paymentId === null ? null : string(value.paymentId, "transaction.paymentId"),
     createdAt: string(value.createdAt, "transaction.createdAt"),
+    capturedAt:
+      value.capturedAt === null ? null : string(value.capturedAt, "transaction.capturedAt"),
+    activityAt: string(value.activityAt, "transaction.activityAt"),
     product: {
       title: string(value.product.title, "product.title"),
-      brand: string(value.product.brand, "product.brand"),
+      brand: value.product.brand === null ? null : string(value.product.brand, "product.brand"),
       condition: string(value.product.condition, "product.condition"),
     },
     merchant: string(value.merchant, "merchant"),

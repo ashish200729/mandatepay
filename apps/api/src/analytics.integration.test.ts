@@ -1,6 +1,5 @@
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   AuditEntityType,
@@ -13,12 +12,6 @@ import {
   RefundStatus,
 } from "@mandatepay/database";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
-
-try {
-  process.loadEnvFile?.(fileURLToPath(new URL("../.env", import.meta.url)));
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl)

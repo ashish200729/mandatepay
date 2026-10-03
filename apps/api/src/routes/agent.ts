@@ -8,7 +8,7 @@ import {
   Prisma,
   type DatabaseClient,
 } from "@mandatepay/database";
-import { parseDecimalToMinorUnits } from "@mandatepay/shared";
+import { CanonicalMandateSchema, parseDecimalToMinorUnits } from "@mandatepay/shared";
 import {
   FindTransactionToolInputSchema,
   PrepareRefundRequestToolInputSchema,
@@ -201,16 +201,6 @@ async function activeMandate(
   return mandates[0];
 }
 
-function clarification(message: string) {
-  return {
-    message,
-    explanation: null,
-    proposals: [],
-    refundDraft: null,
-    steps: [],
-  };
-}
-
 export function registerShoppingAgentRoutes(
   app: FastifyInstance,
   context: ShoppingAgentRouteContext,
@@ -242,27 +232,41 @@ export function registerShoppingAgentRoutes(
     if (!body.success) return reply.status(400).send({ error: "Shopping request is invalid." });
     try {
       const mandate = await activeMandate(context.database, user.id, body.data.mandateId);
-      if (!mandate) {
-        return reply.send(clarification("Select exactly one active purchase mandate to continue."));
-      }
-      const mandateId = mandate.id;
+      // Refund discovery remains available after a purchase mandate expires or is revoked.
+      // Purchase tools still require exactly one currently active, owned mandate.
+      const mandateId = mandate?.id;
       const knownProducts = new Map<string, SafeProduct>();
       const proposals: unknown[] = [];
       let refundDraft: unknown = null;
       const steps: Array<{ name: string; status: "completed" }> = [];
 
       const tools: ShoppingAgentToolHandlers = {
-        get_active_mandates: async () => ({
-          mandates: [
-            {
-              id: mandate.id,
-              title: mandate.activeVersion?.title ?? mandate.title,
-              version: mandate.activeVersion?.version ?? mandate.version,
-              expiresAt: mandate.expiresAt.toISOString(),
-            },
-          ],
-        }),
+        get_active_mandates: async () => {
+          const rules = CanonicalMandateSchema.safeParse(mandate?.activeVersion?.canonicalRules);
+          steps.push({ name: "get_active_mandates", status: "completed" });
+          return {
+            mandates:
+              mandate && rules.success
+                ? [
+                    {
+                      id: mandate.id,
+                      title: mandate.activeVersion?.title ?? mandate.title,
+                      version: mandate.activeVersion?.version ?? mandate.version,
+                      expiresAt: mandate.expiresAt.toISOString(),
+                      rules: rules.data,
+                    },
+                  ]
+                : [],
+            ...(!mandate
+              ? {
+                  clarification:
+                    "Select exactly one active purchase mandate before searching or proposing a purchase. Refund lookup is still available.",
+                }
+              : {}),
+          };
+        },
         search_products: async (input) => {
+          if (!mandateId) return { error: "Select exactly one active purchase mandate first." };
           const parsed = ShoppingAgentToolSchemas.search_products.parse(input);
           const response = await internalJSON(context, request, "POST", "/api/products/search", {
             mandateId,
@@ -316,6 +320,7 @@ export function registerShoppingAgentRoutes(
           };
         },
         create_purchase_proposal: async (input) => {
+          if (!mandateId) return { error: "Select exactly one active purchase mandate first." };
           const parsed = ShoppingAgentToolSchemas.create_purchase_proposal.parse(input);
           const product = knownProducts.get(parsed.productId);
           if (!product || product.source !== parsed.source)
@@ -332,13 +337,21 @@ export function registerShoppingAgentRoutes(
           let actual = response;
           const proposalId = typeof response.proposal.id === "string" ? response.proposal.id : null;
           if (!proposalId) return { error: "Proposal could not be prepared." };
-          const evaluated = await internalJSON(
-            context,
-            request,
-            "POST",
-            `/api/proposals/${encodeURIComponent(proposalId)}/evaluate`,
-            {},
-          );
+          const evaluated =
+            response.proposal.status === "PROPOSED"
+              ? await internalJSON(
+                  context,
+                  request,
+                  "POST",
+                  `/api/proposals/${encodeURIComponent(proposalId)}/evaluate`,
+                  {},
+                )
+              : await internalJSON(
+                  context,
+                  request,
+                  "GET",
+                  `/api/proposals/${encodeURIComponent(proposalId)}`,
+                );
           if (isRecord(evaluated) && isRecord(evaluated.proposal)) actual = evaluated;
           else
             actual = (await internalJSON(
@@ -377,25 +390,21 @@ export function registerShoppingAgentRoutes(
             proposal: { isSample: false },
             ...(parsed.transactionId ? { id: parsed.transactionId } : {}),
           };
-          let payments = await context.database.payment.findMany({
+          if (parsed.query) {
+            const contains = { contains: parsed.query, mode: "insensitive" as const };
+            where.proposal = {
+              isSample: false,
+              productSnapshot: {
+                OR: [{ title: contains }, { merchant: contains }, { category: contains }],
+              },
+            };
+          }
+          const payments = await context.database.payment.findMany({
             where,
             include: paymentReceiptInclude,
             orderBy: { createdAt: "desc" },
             take: 25,
           });
-          if (parsed.query) {
-            const query = parsed.query.toLowerCase();
-            payments = payments.filter((payment) =>
-              [
-                payment.proposal.productSnapshot.title,
-                payment.proposal.productSnapshot.merchant,
-                payment.proposal.productSnapshot.category ?? "",
-              ]
-                .join(" ")
-                .toLowerCase()
-                .includes(query),
-            );
-          }
           steps.push({ name: "find_transaction", status: "completed" });
           return { transactions: payments.map(safePayment) };
         },

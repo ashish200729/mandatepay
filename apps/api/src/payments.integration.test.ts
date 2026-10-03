@@ -1,7 +1,6 @@
 import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import {
   createPrismaClient,
   MandateRepository,
@@ -16,12 +15,6 @@ import { approveProposal, evaluateProposal } from "./services/proposals.js";
 import type { DemoProductFacts, PayPalGateway } from "./services/payments.js";
 import { PayPalProviderError, type PayPalCapture, type PayPalOrder } from "@mandatepay/paypal";
 import { lookupDemoProduct as lookupCatalogProduct } from "@mandatepay/channel3";
-
-try {
-  process.loadEnvFile?.(fileURLToPath(new URL("../.env", import.meta.url)));
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl)

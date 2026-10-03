@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LoaderCircle } from "lucide-react";
 import { Button } from "@mandatepay/ui/components/button";
-import { AuthClientError, signIn, signUp } from "@/lib/auth/client";
+import { AuthClientError, sendVerificationEmail, signIn, signUp } from "@/lib/auth/client";
 import { getAuthLink, getSafeReturnTo } from "@/lib/auth/return-to";
 
 const inputClassName =
@@ -14,9 +14,17 @@ const inputClassName =
 export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; returnTo: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
+  const [resent, setResent] = useState(false);
   const router = useRouter();
   const safeReturnTo = getSafeReturnTo(returnTo);
   const isSignUp = mode === "sign-up";
+  function verificationCallback() {
+    return new URL(
+      `/verify-email?returnTo=${encodeURIComponent(safeReturnTo)}`,
+      window.location.origin,
+    ).href;
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -32,13 +40,28 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
 
     try {
       if (isSignUp) {
-        await signUp({ name, email, password });
+        const response = await signUp({
+          name,
+          email,
+          password,
+          callbackURL: verificationCallback(),
+        });
+        if (!response?.token) {
+          setVerificationEmail(email);
+          setPending(false);
+          return;
+        }
       } else {
-        await signIn({ email, password });
+        await signIn({ email, password, callbackURL: verificationCallback() });
       }
 
       router.replace(safeReturnTo);
     } catch (cause) {
+      if (cause instanceof AuthClientError && cause.code === "EMAIL_NOT_VERIFIED") {
+        setVerificationEmail(email);
+        setPending(false);
+        return;
+      }
       setError(
         cause instanceof AuthClientError
           ? cause.message
@@ -50,6 +73,60 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
 
   const alternatePath = isSignUp ? "/signin" : "/signup";
   const alternateLabel = isSignUp ? "Sign in" : "Create an account";
+
+  if (verificationEmail) {
+    return (
+      <div className="space-y-5">
+        <p
+          role="status"
+          className="rounded-xl border border-border bg-secondary/50 px-4 py-4 text-sm leading-relaxed"
+        >
+          Check your email at <strong>{verificationEmail}</strong> for a verification link, then
+          sign in. If you already have an account, you can sign in or reset your password.
+        </p>
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+        {resent ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            If your account needs verification, a new link is on its way.
+          </p>
+        ) : null}
+        <Button
+          className="w-full rounded-xl"
+          disabled={pending || resent}
+          onClick={async () => {
+            setPending(true);
+            setError(null);
+            try {
+              await sendVerificationEmail(verificationEmail, verificationCallback());
+              setResent(true);
+            } catch {
+              setError("We couldn’t request a new link. Try again in a moment.");
+            } finally {
+              setPending(false);
+            }
+          }}
+        >
+          {pending ? "Requesting link…" : "Resend verification email"}
+        </Button>
+        <Link
+          href={getAuthLink("/signin", safeReturnTo)}
+          className="block text-center text-sm underline underline-offset-4"
+        >
+          Back to sign in
+        </Link>
+        <Link
+          href="/forgot-password"
+          className="block text-center text-sm text-muted-foreground underline underline-offset-4"
+        >
+          Reset your password
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <form className="space-y-5" onSubmit={handleSubmit} noValidate={false}>
@@ -100,10 +177,20 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
           autoComplete={isSignUp ? "new-password" : "current-password"}
           placeholder="At least 8 characters"
           minLength={8}
+          maxLength={128}
           required
           disabled={pending}
         />
       </label>
+
+      {!isSignUp ? (
+        <Link
+          href="/forgot-password"
+          className="block text-right text-sm text-muted-foreground underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+        >
+          Forgot password?
+        </Link>
+      ) : null}
 
       <Button
         type="submit"

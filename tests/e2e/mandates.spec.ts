@@ -65,6 +65,7 @@ test.describe("mandate workflow", () => {
 
     await page.getByRole("link", { name: "Chat", exact: true }).click();
     await expect(page).toHaveURL(/\/chat$/);
+    await page.getByText("Use structured product discovery instead", { exact: true }).click();
     await page.getByLabel("Search products").fill("headphones");
     await page.getByRole("button", { name: "Search", exact: true }).click();
     await expect(page.getByText(/Demo Catalog — illustrative products/)).toBeVisible();
@@ -132,12 +133,44 @@ test.describe("mandate workflow", () => {
     expect((await page.request.post(`${isolatedApiUrl}/api/webhooks/paypal`, hook)).status()).toBe(
       200,
     );
-    await page.getByRole("radio", { name: "Partial refund", exact: true }).check();
-    await page.getByLabel("Refund amount", { exact: true }).fill("20.00");
-    await page.getByLabel("Reason", { exact: true }).fill("One item was damaged.");
+    const beforeRefundDraft = await (
+      await page.request.get(`${isolatedApiUrl}/__e2e/paypal/counters`)
+    ).json();
+    const mandateId = new URL(mandateDetailUrl).pathname.split("/").at(-1);
+    const pauseForRefund = await page.request.post(`/api/mandates/${mandateId}/pause`, {
+      headers: { origin: "http://127.0.0.1:3100" },
+      data: { version: 2 },
+    });
+    expect(pauseForRefund.ok()).toBeTruthy();
+    await page.getByRole("link", { name: "Chat", exact: true }).click();
+    await expect(page.getByText("You can still ask about refunds.", { exact: true })).toBeVisible();
+    await page
+      .getByLabel("Message the shopping agent")
+      .fill(
+        `Prepare a $20 partial refund for transaction ${paymentId} because One item was damaged.`,
+      );
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByText("Refund request prepared.", { exact: true })).toBeVisible();
+    expect(
+      await (await page.request.get(`${isolatedApiUrl}/__e2e/paypal/counters`)).json(),
+    ).toEqual(beforeRefundDraft);
+    await page.getByRole("link", { name: "Review refund", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/orders/${paymentId}$`));
+    await expect(page.getByRole("radio", { name: "Partial refund", exact: true })).toBeChecked();
+    await expect(page.getByLabel("Refund amount", { exact: true })).toHaveValue("20.00");
+    await expect(page.getByRole("textbox", { name: "Reason", exact: true })).toHaveValue(
+      "One item was damaged.",
+    );
+    const beforeConfirmedRefund = await (await page.request.get(`/api/orders/${paymentId}`)).json();
+    expect(beforeConfirmedRefund.payment.refunds).toHaveLength(0);
     await page.getByRole("button", { name: "Request refund", exact: true }).click();
     await page.getByRole("button", { name: "Confirm refund", exact: true }).click();
     await expect(page.getByText("PARTIALLY_REFUNDED", { exact: true })).toBeVisible();
+    const resumeAfterRefund = await page.request.post(`/api/mandates/${mandateId}/resume`, {
+      headers: { origin: "http://127.0.0.1:3100" },
+      data: { version: 2 },
+    });
+    expect(resumeAfterRefund.ok()).toBeTruthy();
     await page.getByRole("radio", { name: "Full refund", exact: true }).check();
     await page.getByLabel("Reason", { exact: true }).fill("Return the remaining purchase.");
     await page.getByRole("button", { name: "Request refund", exact: true }).click();
@@ -146,6 +179,15 @@ test.describe("mandate workflow", () => {
     expect(
       await (await page.request.get(`${isolatedApiUrl}/__e2e/paypal/counters`)).json(),
     ).toEqual({ orders: 1, captures: 1, refunds: 2 });
+    await page.getByRole("link", { name: "Control center", exact: true }).click();
+    await page
+      .getByRole("link", {
+        name: "Open details for Sony WH-1000XM5 Noise Cancelling Headphones",
+        exact: true,
+      })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/orders/${paymentId}$`));
+    await expect(page.getByText("REFUNDED", { exact: true })).toBeVisible();
     await page.goto(mandateDetailUrl);
 
     await page.getByRole("button", { name: "Revoke" }).click();

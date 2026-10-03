@@ -18,7 +18,7 @@ describe("foundation API", () => {
     expect(response.json()).toEqual({
       status: "ok",
       service: "mandatepay-api",
-      stage: "foundation",
+      stage: "mvp",
     });
   });
 

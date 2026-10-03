@@ -1,0 +1,102 @@
+# Optional deployment template. Nothing is deployed by adding this file.
+services:
+  - type: web
+    name: mandatepay-web
+    runtime: node
+    region: singapore
+    plan: 1c-2g
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/web...
+    startCommand: pnpm --filter @mandatepay/web exec next start --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 24.12.0
+      - key: NODE_ENV
+        value: production
+      - key: APP_URL
+        fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: API_URL
+        fromService: { name: mandatepay-api, type: web, envVarKey: RENDER_EXTERNAL_URL }
+
+  - type: web
+    name: mandatepay-api
+    runtime: node
+    region: singapore
+    plan: 1c-2g
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/api...
+    preDeployCommand: pnpm --filter @mandatepay/database migrate:deploy
+    startCommand: pnpm --filter @mandatepay/api start
+    healthCheckPath: /health/ready
+    envVars:
+      - key: NODE_VERSION
+        value: 24.12.0
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: APP_URL
+        fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: WEB_ORIGIN
+        fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: API_URL
+        fromService: { name: mandatepay-api, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: DATABASE_URL
+        fromDatabase: { name: mandatepay-database, property: connectionString }
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: AUTH_REQUIRE_EMAIL_VERIFICATION
+        value: "true"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: AUTH_EMAIL_FROM
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: sarvam-105b
+      - key: OPENAI_BASE_URL
+        value: https://api.sarvam.ai/v1
+      - key: PRODUCT_DISCOVERY_MODE
+        value: demo
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+
+  - type: cron
+    name: mandatepay-webhook-recovery
+    runtime: node
+    region: singapore
+    plan: 0.5c-512mb
+    autoDeployTrigger: off
+    schedule: "*/2 * * * *"
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/api...
+    startCommand: pnpm --filter @mandatepay/api worker:webhooks
+    envVars:
+      - key: NODE_VERSION
+        value: 24.12.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase: { name: mandatepay-database, property: connectionString }
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_CLIENT_ID }
+      - key: PAYPAL_CLIENT_SECRET
+        fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_CLIENT_SECRET }
+      - key: PAYPAL_WEBHOOK_ID
+        fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_WEBHOOK_ID }
+
+databases:
+  - name: mandatepay-database
+    region: singapore
+    plan: 256mb
+    postgresMajorVersion: "17"
+    databaseName: mandatepay

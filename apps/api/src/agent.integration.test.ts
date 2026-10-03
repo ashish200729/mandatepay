@@ -1,14 +1,7 @@
 import Fastify from "fastify";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPrismaClient, MandateRepository } from "@mandatepay/database";
 import { registerShoppingAgentRoutes } from "./routes/agent.js";
-
-try {
-  process.loadEnvFile?.(fileURLToPath(new URL("../.env", import.meta.url)));
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl) throw new Error("TEST_DATABASE_URL is required for agent integration tests.");
@@ -22,6 +15,8 @@ const app = Fastify({ logger: false });
 const origin = process.env.APP_URL ?? "http://localhost:3000";
 let userId = "";
 let mandateId = "";
+let proposalStatus = "PROPOSED";
+let evaluationCount = 0;
 const cookie = () => `x-test-user=${userId}`;
 
 function headers() {
@@ -111,10 +106,18 @@ describe("shopping agent route adapter", () => {
       ],
     }));
     app.post("/api/proposals", async () => ({
-      proposal: { id: "proposal-agent-route", status: "PROPOSED" },
+      proposal: { id: "proposal-agent-route", status: proposalStatus },
     }));
-    app.post("/api/proposals/:id/evaluate", async () => ({
-      proposal: { id: "proposal-agent-route", status: "AUTHORIZED" },
+    app.post("/api/proposals/:id/evaluate", async () => {
+      evaluationCount += 1;
+      proposalStatus = "AUTHORIZED";
+      return {
+        proposal: { id: "proposal-agent-route", status: "AUTHORIZED" },
+        decision: { decision: "ALLOW", reasonCodes: [] },
+      };
+    });
+    app.get("/api/proposals/:id", async () => ({
+      proposal: { id: "proposal-agent-route", status: proposalStatus },
       decision: { decision: "ALLOW", reasonCodes: [] },
     }));
 
@@ -125,7 +128,36 @@ describe("shopping agent route adapter", () => {
       requireUser: requireUser as never,
       isTrustedOrigin: (requestOrigin) => requestOrigin === origin,
       modelId: "test-model",
-      runner: async (_input, tools) => {
+      runner: async (input, tools) => {
+        if (input.message === "Find my previous headphones purchase") {
+          const transactions = await tools.find_transaction?.(
+            { transactionId: null, query: "headphones" },
+            { signal: new AbortController().signal },
+          );
+          expect(transactions).toEqual({ transactions: [] });
+          const search = await tools.search_products?.(
+            { query: "headphones", maximumPriceMinor: null, brands: [], category: null },
+            { signal: new AbortController().signal },
+          );
+          expect(search).toEqual({ error: "Select exactly one active purchase mandate first." });
+          return {
+            status: "completed",
+            rounds: 1,
+            trace: [],
+            finalAIExplanation: {
+              kind: "explanation",
+              text: "No matching previous purchase was found.",
+              paymentAuthoritative: false,
+            },
+          };
+        }
+        const mandates = await tools.get_active_mandates?.(
+          {},
+          { signal: new AbortController().signal },
+        );
+        expect(mandates).toMatchObject({
+          mandates: [{ id: mandateId, rules: { transactionLimit: 20_000 } }],
+        });
         const toolNames = Object.keys(tools);
         if (toolNames.includes("spend_money") || toolNames.includes("approve_payment")) {
           throw new Error("forbidden financial tool exposed");
@@ -186,9 +218,35 @@ describe("shopping agent route adapter", () => {
     expect(response.json().proposals[0].proposal.id).toBe("proposal-agent-route");
     expect(response.json().explanation.paymentAuthoritative).toBe(false);
     expect(response.json().steps.map((step: { name: string }) => step.name)).toEqual([
+      "get_active_mandates",
       "search_products",
       "create_purchase_proposal",
     ]);
+  });
+
+  it("replays an already evaluated proposal without evaluating or reserving again", async () => {
+    const before = evaluationCount;
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/chat",
+      headers: headers(),
+      payload: { message: "Find and prepare headphones", mandateId, requestKey: "agent-request-1" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().proposals[0].proposal.status).toBe("AUTHORIZED");
+    expect(evaluationCount).toBe(before);
+  });
+
+  it("allows transaction lookup without an active purchase mandate but denies purchase tools", async () => {
+    await database.mandate.update({ where: { id: mandateId }, data: { status: "PAUSED" } });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/chat",
+      headers: headers(),
+      payload: { message: "Find my previous headphones purchase", requestKey: "refund-lookup-1" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().steps).toEqual([{ name: "find_transaction", status: "completed" }]);
   });
 
   it("rejects extra client authority and untrusted origins", async () => {

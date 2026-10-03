@@ -99,7 +99,7 @@ export const PrepareRefundRequestToolInputSchema = z
   .object({
     paymentID: z.string().trim().min(1).max(255),
     amountDecimal: decimalMoneySchema.nullable(),
-    reason: z.string().trim().min(1).max(500),
+    reason: z.string().trim().min(1).max(255),
   })
   .strict()
   .superRefine((value, context) => {
@@ -352,7 +352,7 @@ const toolDefinitions: ChatCompletionTool[] = [
             type: ["string", "null"],
             pattern: "^(?:0|[1-9]\\d*)(?:\\.\\d{1,2})?$",
           },
-          reason: { type: "string", minLength: 1, maxLength: 500 },
+          reason: { type: "string", minLength: 1, maxLength: 255 },
         },
         ["paymentID", "amountDecimal", "reason"],
       ),
@@ -419,7 +419,11 @@ function toolCallsFromCompletion(completion: unknown): {
   }
 
   const rawCalls = choice.message.tool_calls;
-  if (rawCalls === undefined) {
+  if (
+    rawCalls === undefined ||
+    ((rawCalls === null || (Array.isArray(rawCalls) && rawCalls.length === 0)) &&
+      choice.finish_reason === "stop")
+  ) {
     return {
       message: choice.message,
       calls: [],

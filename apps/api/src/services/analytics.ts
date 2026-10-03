@@ -75,6 +75,7 @@ function approvalType(proposal: TransactionRecord): string | null {
 function serializeTransaction(proposal: TransactionRecord, activityAt: Date) {
   return {
     id: proposal.id,
+    paymentId: proposal.payment?.id ?? null,
     createdAt: proposal.createdAt.toISOString(),
     capturedAt: proposal.payment?.capturedAt?.toISOString() ?? null,
     activityAt: activityAt.toISOString(),
@@ -203,6 +204,8 @@ const publicPayloadKeys = new Set([
   "category",
   "capturedAt",
   "settledAt",
+  "from",
+  "to",
 ]);
 
 function sanitizePublicPayload(value: unknown, depth = 0): unknown {

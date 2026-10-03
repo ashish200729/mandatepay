@@ -77,14 +77,14 @@ export function readApprovalProposal(value: unknown): ApprovalProposal {
           })(),
     shipping: readMinor(candidate.shipping, "shipping"),
     tax: readMinor(candidate.tax, "tax"),
-    expiresAt: readString(candidate.expiresAt, "expiresAt"),
+    expiresAt: candidate.expiresAt === null ? null : readString(candidate.expiresAt, "expiresAt"),
     approvalExpiresAt:
       candidate.approvalExpiresAt === null && candidate.status !== "AWAITING_APPROVAL"
         ? null
         : readString(candidate.approvalExpiresAt, "approvalExpiresAt"),
     product: {
       title: readString(product.title, "product.title"),
-      brand: readString(product.brand, "product.brand"),
+      brand: product.brand === null ? null : readString(product.brand, "product.brand"),
       condition: product.condition,
       merchant: readString(product.merchant, "product.merchant"),
       source: product.source,

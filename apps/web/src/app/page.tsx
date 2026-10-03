@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import {
   ArrowDown,
   ArrowRight,
@@ -126,12 +127,12 @@ export default function HomePage() {
               <br className="hidden sm:block" /> You decide what it has permission to spend.
             </p>
             <div className="mt-7 flex w-full max-w-[440px] flex-col justify-center gap-3 sm:max-w-none sm:flex-row">
-              <a
-                href="#how-it-works"
+              <Link
+                href="/chat"
                 className={buttonVariants({ size: "lg", className: "rounded-xl" })}
               >
                 Explore MandatePay <ArrowUpRight aria-hidden="true" />
-              </a>
+              </Link>
               <a
                 href="#agentguard"
                 className={cn(
@@ -387,9 +388,9 @@ export default function HomePage() {
             <br className="sm:hidden" /> Keep the control.
           </SectionHeading>
           <p className="mt-5 text-base text-foreground/75">AI commerce, with your permission.</p>
-          <a href="#main" className={cn(buttonVariants({ size: "lg" }), "mt-8")}>
-            Back to the concept <ArrowUpRight aria-hidden="true" />
-          </a>
+          <Link href="/mandates/new" className={cn(buttonVariants({ size: "lg" }), "mt-8")}>
+            Create your first mandate <ArrowUpRight aria-hidden="true" />
+          </Link>
         </section>
         <div className="relative mx-auto max-w-[1328px] border-t border-foreground/10 px-5 pb-8 pt-10 sm:px-8 lg:px-12">
           <div className="flex flex-col justify-between gap-8 sm:flex-row sm:items-start">

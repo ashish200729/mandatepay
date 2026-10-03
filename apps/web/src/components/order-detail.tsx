@@ -20,6 +20,7 @@ import {
   PaymentApiError,
 } from "@/lib/payments/client";
 import { calculateRemainingRefundableMinor } from "@/lib/payments/refunds";
+import { consumeRefundDraft } from "@/lib/agent/refund-draft";
 import type { PaymentRecord } from "@/lib/payments/types";
 
 function isCaptured(payment: PaymentRecord) {
@@ -55,7 +56,31 @@ export function OrderDetail({
     setLoading(true);
     setError(null);
     try {
-      setPayment(await getOrder(paymentId));
+      const nextPayment = await getOrder(paymentId);
+      setPayment(nextPayment);
+      const draft = consumeRefundDraft(nextPayment.id);
+      if (draft) {
+        const remaining = calculateRemainingRefundableMinor(
+          nextPayment.amount,
+          nextPayment.refunds,
+        );
+        if (
+          isCaptured(nextPayment) &&
+          remaining > 0 &&
+          (draft.amountMinor === null || draft.amountMinor <= remaining)
+        ) {
+          setRefundMode(draft.amountMinor === null ? "full" : "partial");
+          setRefundAmount(draft.amountMinor === null ? "" : formatUsdMinor(draft.amountMinor));
+          setRefundReason(draft.reason);
+          setRefundNotice(
+            "The agent's draft is ready for review. Confirm the details below before requesting a refund.",
+          );
+        } else {
+          setRefundError(
+            "This draft no longer matches the refundable payment. Review the current payment and enter new refund details.",
+          );
+        }
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The payment record could not be loaded.");
     } finally {

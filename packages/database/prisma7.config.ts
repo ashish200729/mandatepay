@@ -1,12 +1,11 @@
 import { defineConfig, env } from "prisma/config";
+import { fileURLToPath } from "node:url";
+import { DATABASE_ENV_KEYS, loadWorkspaceEnvironment } from "../../scripts/environment.mjs";
 
-try {
-  process.loadEnvFile?.(".env");
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-    throw error;
-  }
-}
+loadWorkspaceEnvironment({
+  workspaceDirectory: fileURLToPath(new URL("./", import.meta.url)),
+  keys: DATABASE_ENV_KEYS,
+});
 
 export default defineConfig({
   schema: "prisma/schema.prisma",

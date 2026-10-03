@@ -38,6 +38,11 @@ export interface WebhookInboxStore {
   markIgnored(id: string, reason: string): Promise<void>;
 }
 
+export interface VerifiedWebhookReplayInput {
+  readonly inboxId: string;
+  readonly event: unknown;
+}
+
 export type AuthoritativeWebhookData =
   | { readonly kind: "order"; readonly order: PayPalOrder }
   | {
@@ -198,21 +203,14 @@ export class PayPalWebhookService {
       };
     }
 
-    const resource = event.resource;
     try {
-      const authoritative = await this.authoritative(event.event_type, resource);
-      if (!authoritative) {
-        await this.inbox.markIgnored(claim.id, "Unsupported or incomplete PayPal event.");
-        return { statusCode: 200, body: { status: "ignored" } };
-      }
-
-      const outcome = await this.reconciler.reconcile({ event, authoritative });
+      const outcome = await this.replayVerified({ inboxId: claim.id, event });
       if (outcome === "processed") {
         await this.inbox.markProcessed(claim.id);
         return { statusCode: 200, body: { status: "processed" } };
       }
       if (outcome === "ignored") {
-        await this.inbox.markIgnored(claim.id, "No owned payment matched the verified event.");
+        await this.inbox.markIgnored(claim.id, "Unsupported or unmatched verified PayPal event.");
         return { statusCode: 200, body: { status: "ignored" } };
       }
       await this.inbox.markPending(claim.id, "Payment binding or provider state is not ready.");
@@ -221,6 +219,19 @@ export class PayPalWebhookService {
       await this.inbox.markPending(claim.id, "Provider state could not be reconciled.");
       return { statusCode: 503, body: { error: "Webhook processing is temporarily unavailable." } };
     }
+  }
+
+  /**
+   * Replays a payload that was already signature-verified and persisted by the
+   * inbox. The caller owns its lease and must atomically persist the outcome.
+   * This method never releases the lease while a worker is scheduling backoff.
+   */
+  async replayVerified(input: VerifiedWebhookReplayInput): Promise<WebhookProcessingResult> {
+    const parsed = PayPalWebhookEventSchema.safeParse(input.event);
+    if (!parsed.success) return "ignored";
+    const authoritative = await this.authoritative(parsed.data.event_type, parsed.data.resource);
+    if (!authoritative) return "ignored";
+    return this.reconciler.reconcile({ event: parsed.data, authoritative });
   }
 
   private async authoritative(

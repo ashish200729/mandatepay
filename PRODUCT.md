@@ -24,7 +24,7 @@ A deterministic permission layer between an AI purchase proposal and payment exe
 
 ## Capabilities and Constraints
 
-The user authorized phase-wise implementation in TypeScript/Node only. Authentication, PostgreSQL, reviewable/versioned mandates, discovery/comparison, deterministic purchase/refund policy, approvals, Sandbox payment services, verified webhook processing, audit and AG Grid Community analytics are implemented. The bounded shopping-agent API is wired; a full conversational frontend remains follow-up work. Automated financial tests use simulated providers, while live Sandbox buyer/capture/refund/webhook and hosting qualification remain open. Landing examples are illustrative; amounts use integer minor units. AgentGuard cannot be overridden by the LLM.
+The user authorized phase-wise implementation in TypeScript/Node only. Authentication and recovery, PostgreSQL, reviewable/versioned mandates, conversational shopping/refund drafts, discovery/comparison, deterministic purchase/refund policy, approvals, Sandbox payment services, verified webhook processing/recovery, audit and AG Grid Community analytics are implemented. Automated financial tests use simulated providers. Live Sandbox buyer/capture/refund/webhook and hosting qualification were deferred by the user; live email delivery is unverified. Landing examples are illustrative; amounts use integer minor units. AgentGuard cannot be overridden by the LLM.
 
 ## Brand Commitments
 

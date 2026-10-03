@@ -3,7 +3,10 @@ import { getDashboardSummary, getDashboardTransactions, queryDashboard } from ".
 
 const transaction = {
   id: "tx-1",
+  paymentId: "payment-1",
   createdAt: "2026-10-02T12:00:00Z",
+  capturedAt: "2026-10-03T12:00:00Z",
+  activityAt: "2026-10-03T12:00:00Z",
   product: { title: "Paper", brand: "Demo", condition: "NEW" },
   merchant: "Demo Store",
   category: "Office",

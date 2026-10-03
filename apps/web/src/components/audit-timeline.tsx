@@ -56,7 +56,7 @@ export function AuditTimeline({ entityId }: { entityId: string }) {
         <div>
           <h2 className="font-editorial text-2xl tracking-[-0.02em]">Audit timeline</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Persisted events for this payment record.
+            Persisted events for this record and its related decisions.
           </p>
         </div>
         <Clock3 size={20} className="text-muted-foreground" aria-hidden="true" />
@@ -107,7 +107,7 @@ export function AuditTimeline({ entityId }: { entityId: string }) {
         </ol>
       ) : (
         <p className="mt-7 text-sm text-muted-foreground">
-          No audit events were returned for this payment yet.
+          No audit events were returned for this record yet.
         </p>
       )}
     </section>

@@ -1,11 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { fileURLToPath } from "node:url";
 
-try {
-  process.loadEnvFile?.(fileURLToPath(new URL("../.env", import.meta.url)));
-} catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
 process.env.NODE_ENV = "test";
 
 const { createApp } = await import("./app.js");
@@ -263,5 +257,30 @@ integrationSuite("Better Auth API", () => {
     });
     expect(afterLogin.statusCode).toBe(200);
     expect(afterLogin.json().user.id).toBe(userAId);
+  });
+
+  it("gates existing unverified sessions when verification is enabled", async () => {
+    if (!runtime || !database) throw new Error("Missing isolated auth runtime");
+    const gated = await createApp({ authRuntime: { ...runtime, requireEmailVerification: true } });
+    try {
+      const blocked = await gated.inject({
+        method: "GET",
+        url: "/api/me",
+        headers: { cookie: cookieB },
+      });
+      expect(blocked.statusCode).toBe(403);
+      expect(blocked.json().code).toBe("EMAIL_NOT_VERIFIED");
+      expect(
+        (await gated.inject({ method: "GET", url: "/api/orders", headers: { cookie: cookieB } }))
+          .statusCode,
+      ).toBe(403);
+      await database.user.update({ where: { id: userBId }, data: { emailVerified: true } });
+      expect(
+        (await gated.inject({ method: "GET", url: "/api/me", headers: { cookie: cookieB } }))
+          .statusCode,
+      ).toBe(200);
+    } finally {
+      await gated.close();
+    }
   });
 });

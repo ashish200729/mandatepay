@@ -107,4 +107,27 @@ describe("auth API proxy", () => {
     expect(String(target)).toContain("/api/auth/sign-in/email?source=e2e");
     expect((init?.headers as Headers).get("content-type")).toContain("application/json");
   });
+
+  it.each([
+    ["POST", "request-password-reset", ""],
+    ["POST", "send-verification-email", ""],
+    ["POST", "reset-password", ""],
+    ["GET", "verify-email", "?token=fake-token&callbackURL=%2Fverify-email"],
+    ["GET", "reset-password/fake-token", "?callbackURL=%2Freset-password"],
+  ])("forwards %s recovery path %s and preserves callback query", async (method, path, query) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { location: "/reset-password?token=fake-token" },
+      }),
+    );
+    const response = await proxyToApi(
+      new Request(`http://127.0.0.1:3000/api/auth/${path}${query}`, { method }),
+      { path: ["auth", ...path.split("/")] },
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/reset-password?token=fake-token");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`/api/auth/${path}${query}`);
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+  });
 });
