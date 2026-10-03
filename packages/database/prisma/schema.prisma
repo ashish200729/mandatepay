@@ -1,0 +1,548 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PaymentProfileStatus {
+  DISCONNECTED
+  CONNECTED
+  REVOKED
+}
+
+enum MandateStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  EXPIRED
+  REVOKED
+}
+
+enum MandateRuleType {
+  ALLOWED_BRAND
+  BLOCKED_BRAND
+  ALLOWED_CATEGORY
+  BLOCKED_CATEGORY
+  ALLOWED_MERCHANT
+  BLOCKED_MERCHANT
+  REQUIRED_CONDITION
+  REQUIRED_SPECIFICATION
+  BLOCKED_SPECIFICATION
+  ALLOWED_CURRENCY
+}
+
+enum RuleOperator {
+  EQUALS
+  NOT_EQUALS
+  IN
+  NOT_IN
+  CONTAINS
+  NOT_CONTAINS
+  GREATER_THAN
+  GREATER_THAN_OR_EQUAL
+  LESS_THAN
+  LESS_THAN_OR_EQUAL
+}
+
+enum ProductCondition {
+  NEW
+  REFURBISHED
+  USED
+  UNKNOWN
+}
+
+enum PolicyDecisionType {
+  ALLOW
+  REQUIRE_APPROVAL
+  BLOCK
+}
+
+enum ProposalStatus {
+  DRAFT
+  PROPOSED
+  POLICY_CHECKED
+  BLOCKED
+  AWAITING_APPROVAL
+  APPROVED
+  AUTHORIZED
+  PAYPAL_ORDER_CREATED
+  PAYMENT_PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  CREATED
+  APPROVED
+  CAPTURE_PENDING
+  COMPLETED
+  DENIED
+  FAILED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  SUBMITTED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  CONSUMED
+  RELEASED
+  EXPIRED
+  FAILED
+}
+
+enum ReservationWindow {
+  TRANSACTION
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum AuditEventType {
+  USER_CREATED
+  GLOBAL_AUTONOMY_UPDATED
+  MANDATE_PARSE_REQUESTED
+  MANDATE_PARSED
+  MANDATE_CREATED
+  MANDATE_ACTIVATED
+  MANDATE_UPDATED
+  MANDATE_PAUSED
+  MANDATE_RESUMED
+  MANDATE_REVOKED
+  MANDATE_EXPIRED
+  PRODUCT_SEARCH_REQUESTED
+  PRODUCT_SEARCH_COMPLETED
+  PRODUCT_SELECTED
+  PURCHASE_PROPOSAL_CREATED
+  POLICY_EVALUATION_STARTED
+  POLICY_ALLOWED
+  POLICY_APPROVAL_REQUIRED
+  POLICY_BLOCKED
+  APPROVAL_REQUESTED
+  APPROVAL_GRANTED
+  APPROVAL_REJECTED
+  APPROVAL_EXPIRED
+  SPEND_RESERVED
+  SPEND_RESERVATION_RELEASED
+  SPEND_RESERVATION_CONSUMED
+  PAYPAL_ORDER_CREATED
+  PAYPAL_ORDER_APPROVED
+  PAYMENT_CAPTURE_REQUESTED
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  PAYPAL_WEBHOOK_RECEIVED
+  REFUND_REQUESTED
+  REFUND_APPROVED
+  PAYPAL_REFUND_CREATED
+  REFUND_COMPLETED
+  REFUND_FAILED
+}
+
+enum AuditEntityType {
+  USER
+  PAYMENT_PROFILE
+  MANDATE
+  MANDATE_VERSION
+  MANDATE_RULE
+  PRODUCT_SNAPSHOT
+  PURCHASE_PROPOSAL
+  POLICY_DECISION
+  APPROVAL
+  SPEND_RESERVATION
+  PAYMENT
+  REFUND
+  WEBHOOK_EVENT
+}
+
+model User {
+  id                                String             @id @default(uuid())
+  email                             String             @unique @db.VarChar(320)
+  name                              String?            @db.VarChar(200)
+  emailVerified                     Boolean            @default(false)
+  image                             String?            @db.Text
+  globalAutonomousPurchasingEnabled Boolean            @default(false)
+  createdAt                         DateTime           @default(now())
+  updatedAt                         DateTime           @updatedAt
+  paymentProfile                    PaymentProfile?
+  sessions                          Session[]
+  accounts                          Account[]
+  mandates                          Mandate[]
+  proposals                         PurchaseProposal[]
+  approvals                         Approval[]
+  payments                          Payment[]
+  refunds                           Refund[]
+  auditEvents                       AuditEvent[]
+
+  @@index([createdAt])
+}
+
+// These tables intentionally follow Better Auth's Prisma adapter contract so
+// Phase 2 can add server-owned sessions without changing financial ownership
+// relations or introducing a second user table.
+model Session {
+  id        String   @id @default(uuid())
+  expiresAt DateTime
+  token     String   @unique @db.VarChar(255)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?  @db.VarChar(64)
+  userAgent String?  @db.Text
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Account {
+  id                    String    @id @default(uuid())
+  accountId             String    @db.VarChar(255)
+  providerId            String    @db.VarChar(128)
+  userId                String
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?   @db.Text
+  password              String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String   @db.VarChar(320)
+  value      String   @db.Text
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt])
+}
+
+model PaymentProfile {
+  id                     String               @id @default(uuid())
+  userId                 String               @unique
+  paypalCustomerId       String?              @unique @db.VarChar(255)
+  paypalVaultIdEncrypted String?              @db.Text
+  status                 PaymentProfileStatus @default(DISCONNECTED)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  user                   User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+}
+
+model Mandate {
+  id                  String             @id @default(uuid())
+  userId              String
+  title               String             @db.VarChar(200)
+  originalPrompt      String             @db.Text
+  status              MandateStatus      @default(DRAFT)
+  currency            String             @db.Char(3)
+  autoSpendLimit      BigInt             @db.BigInt
+  transactionLimit    BigInt             @db.BigInt
+  dailyLimit          BigInt?            @db.BigInt
+  weeklyLimit         BigInt?            @db.BigInt
+  monthlyLimit        BigInt?            @db.BigInt
+  spendTimeZone       String             @default("UTC") @db.VarChar(64)
+  startsAt            DateTime
+  expiresAt           DateTime
+  version             Int                @default(1)
+  activeVersionId     String?            @unique
+  creationRequestKey  String?            @db.VarChar(255)
+  creationFingerprint String?            @db.VarChar(128)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  user                User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  versions            MandateVersion[]   @relation("MandateVersions")
+  activeVersion       MandateVersion?    @relation("ActiveMandateVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+  rules               MandateRule[]
+  proposals           PurchaseProposal[]
+  payments            Payment[]
+  reservations        SpendReservation[]
+
+  @@unique([userId, creationRequestKey])
+  @@index([userId, status])
+  @@index([userId, expiresAt])
+}
+
+model MandateVersion {
+  id               String             @id @default(uuid())
+  mandateId        String
+  version          Int
+  title            String             @db.VarChar(200)
+  originalPrompt   String             @db.Text
+  currency         String             @db.Char(3)
+  autoSpendLimit   BigInt             @db.BigInt
+  transactionLimit BigInt             @db.BigInt
+  dailyLimit       BigInt?            @db.BigInt
+  weeklyLimit      BigInt?            @db.BigInt
+  monthlyLimit     BigInt?            @db.BigInt
+  spendTimeZone    String             @default("UTC") @db.VarChar(64)
+  startsAt         DateTime
+  expiresAt        DateTime
+  canonicalRules   Json?
+  createdAt        DateTime           @default(now())
+  mandate          Mandate            @relation("MandateVersions", fields: [mandateId], references: [id], onDelete: Restrict)
+  activeForMandate Mandate?           @relation("ActiveMandateVersion")
+  rules            MandateRule[]
+  proposals        PurchaseProposal[]
+  decisions        PolicyDecision[]
+  reservations     SpendReservation[]
+
+  @@unique([mandateId, version])
+  @@index([mandateId, createdAt])
+}
+
+model MandateRule {
+  id               String          @id @default(uuid())
+  mandateId        String
+  mandateVersionId String
+  ruleType         MandateRuleType
+  operator         RuleOperator
+  value            Json
+  createdAt        DateTime        @default(now())
+  mandate          Mandate         @relation(fields: [mandateId], references: [id], onDelete: Restrict)
+  mandateVersion   MandateVersion  @relation(fields: [mandateVersionId], references: [id], onDelete: Restrict)
+
+  @@index([mandateId, createdAt])
+  @@index([mandateVersionId, ruleType])
+}
+
+model ProductSnapshot {
+  id         String             @id @default(uuid())
+  source     String             @db.VarChar(64)
+  externalId String             @db.VarChar(255)
+  title      String             @db.VarChar(500)
+  brand      String?            @db.VarChar(200)
+  category   String?            @db.VarChar(200)
+  condition  ProductCondition   @default(UNKNOWN)
+  price      BigInt             @db.BigInt
+  currency   String             @db.Char(3)
+  merchant   String             @db.VarChar(255)
+  metadata   Json
+  capturedAt DateTime           @default(now())
+  createdAt  DateTime           @default(now())
+  proposals  PurchaseProposal[]
+
+  @@unique([source, externalId])
+  @@index([brand, category])
+  @@index([merchant])
+  @@index([capturedAt])
+}
+
+model PurchaseProposal {
+  id                  String            @id @default(uuid())
+  userId              String
+  mandateId           String
+  mandateVersionId    String
+  productSnapshotId   String
+  quantity            Int
+  subtotal            BigInt            @db.BigInt
+  shipping            BigInt            @db.BigInt
+  tax                 BigInt            @db.BigInt
+  total               BigInt            @db.BigInt
+  currency            String            @db.Char(3)
+  status              ProposalStatus    @default(DRAFT)
+  proposalFingerprint String            @db.VarChar(128)
+  idempotencyKey      String            @unique @db.VarChar(255)
+  isSample            Boolean           @default(false)
+  expiresAt           DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  user                User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  mandate             Mandate           @relation(fields: [mandateId], references: [id], onDelete: Restrict)
+  mandateVersion      MandateVersion    @relation(fields: [mandateVersionId], references: [id], onDelete: Restrict)
+  productSnapshot     ProductSnapshot   @relation(fields: [productSnapshotId], references: [id], onDelete: Restrict)
+  policyDecisions     PolicyDecision[]
+  approval            Approval?
+  payment             Payment?
+  reservation         SpendReservation?
+
+  @@index([userId, createdAt])
+  @@index([mandateId, status])
+  @@index([mandateVersionId])
+}
+
+model PolicyDecision {
+  id               String             @id @default(uuid())
+  proposalId       String
+  mandateVersionId String
+  decision         PolicyDecisionType
+  reasonCodes      Json
+  rulesSnapshot    Json
+  spendSnapshot    Json
+  createdAt        DateTime           @default(now())
+  proposal         PurchaseProposal   @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+  mandateVersion   MandateVersion     @relation(fields: [mandateVersionId], references: [id], onDelete: Restrict)
+
+  @@index([proposalId, createdAt])
+}
+
+model Approval {
+  id                  String           @id @default(uuid())
+  proposalId          String           @unique
+  userId              String
+  decision            ApprovalDecision @default(PENDING)
+  proposalFingerprint String           @db.VarChar(128)
+  isSample            Boolean          @default(false)
+  expiresAt           DateTime
+  decidedAt           DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  proposal            PurchaseProposal @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+  user                User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, decision, expiresAt])
+  @@index([expiresAt])
+}
+
+model Payment {
+  id                    String           @id @default(uuid())
+  userId                String
+  mandateId             String
+  proposalId            String           @unique
+  paypalOrderId         String?          @unique @db.VarChar(255)
+  paypalCaptureId       String?          @unique @db.VarChar(255)
+  paypalOrderRequestId  String?          @unique @db.VarChar(36)
+  paypalCaptureRequestId String?         @unique @db.VarChar(36)
+  amount                BigInt           @db.BigInt
+  currency              String           @db.Char(3)
+  status                PaymentStatus    @default(CREATED)
+  idempotencyKey        String           @unique @db.VarChar(255)
+  isSample              Boolean          @default(false)
+  failureCode           String?          @db.VarChar(128)
+  capturedAt            DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  mandate               Mandate          @relation(fields: [mandateId], references: [id], onDelete: Restrict)
+  proposal              PurchaseProposal @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+  refunds               Refund[]
+
+  @@index([userId, createdAt])
+  @@index([mandateId, status, createdAt])
+}
+
+model Refund {
+  id                String       @id @default(uuid())
+  paymentId         String
+  userId            String
+  paypalRefundId    String?      @unique @db.VarChar(255)
+  paypalRequestId   String?      @unique @db.VarChar(36)
+  amount            BigInt       @db.BigInt
+  currency          String       @db.Char(3)
+  status            RefundStatus @default(REQUESTED)
+  isSample          Boolean      @default(false)
+  reason            String?      @db.Text
+  idempotencyKey    String       @db.VarChar(255)
+  requestFingerprint String?     @db.VarChar(128)
+  failureCode       String?      @db.VarChar(128)
+  settledAt        DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  payment          Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  user             User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId, status])
+  @@index([userId, createdAt])
+  @@unique([userId, idempotencyKey])
+}
+
+model SpendReservation {
+  id               String            @id @default(uuid())
+  mandateId        String
+  mandateVersionId String
+  proposalId       String            @unique
+  amount           BigInt            @db.BigInt
+  currency         String            @db.Char(3)
+  window           ReservationWindow @default(TRANSACTION)
+  windowStart      DateTime
+  windowEnd        DateTime
+  status           ReservationStatus @default(ACTIVE)
+  isSample         Boolean           @default(false)
+  expiresAt        DateTime
+  createdAt        DateTime          @default(now())
+  releasedAt       DateTime?
+  consumedAt       DateTime?
+  mandate          Mandate           @relation(fields: [mandateId], references: [id], onDelete: Restrict)
+  mandateVersion   MandateVersion    @relation(fields: [mandateVersionId], references: [id], onDelete: Restrict)
+  proposal         PurchaseProposal  @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+
+  @@index([mandateId, status, expiresAt])
+  @@index([mandateId, window, windowStart, windowEnd])
+}
+
+model WebhookInbox {
+  id                String                  @id @default(uuid())
+  provider          String                  @db.VarChar(64)
+  providerEventId   String                  @db.VarChar(255)
+  eventType         String                  @db.VarChar(255)
+  signatureVerified Boolean                 @default(false)
+  payload           Json
+  status            WebhookProcessingStatus @default(RECEIVED)
+  attempts          Int                     @default(0)
+  receivedAt        DateTime                @default(now())
+  processedAt       DateTime?
+  lastError         String?                 @db.Text
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  @@unique([provider, providerEventId])
+  @@index([status, receivedAt])
+}
+
+model AuditEvent {
+  id         String          @id @default(uuid())
+  userId     String
+  eventType  AuditEventType
+  entityType AuditEntityType
+  entityId   String          @db.VarChar(255)
+  dedupeKey  String?         @unique @db.VarChar(255)
+  isSample   Boolean         @default(false)
+  payload    Json
+  createdAt  DateTime        @default(now())
+  user       User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([eventType, createdAt])
+}

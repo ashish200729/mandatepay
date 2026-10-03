@@ -1,0 +1,17 @@
+{
+  "extends": "@mandatepay/typescript-config/base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "types": ["node"],
+    "rewriteRelativeImportExtensions": true,
+    "noEmit": false
+  },
+  "include": ["src/**/*.ts", "prisma/seed.ts", "prisma7.config.ts"],
+  "exclude": ["node_modules", "dist", "src/generated"]
+}

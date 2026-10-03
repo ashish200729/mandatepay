@@ -1,0 +1,38 @@
+{
+  "name": "mandatepay",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=22.14.0",
+    "pnpm": ">=10 <11"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:web": "turbo run dev --filter=@mandatepay/web",
+    "dev:api": "turbo run dev --filter=@mandatepay/api",
+    "test": "turbo run test",
+    "test:e2e": "playwright test",
+    "test:integration": "pnpm --filter @mandatepay/database test:integration && pnpm --filter @mandatepay/api test:integration",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "fonts:setup": "node scripts/setup-fonts.mjs",
+    "db:local:start": "node scripts/local-database.mjs start",
+    "db:local:stop": "node scripts/local-database.mjs stop",
+    "db:local:status": "node scripts/local-database.mjs status",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "turbo": "2.11.6",
+    "typescript": "5.9.3",
+    "eslint": "9.39.5",
+    "typescript-eslint": "^8.57.0",
+    "prettier": "^3.8.0",
+    "vite": "8.3.2",
+    "vitest": "5.0.3"
+  }
+}

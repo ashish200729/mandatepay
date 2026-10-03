@@ -1,0 +1,18 @@
+node_modules/
+.next/
+.turbo/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.impeccable/
+.local/
+playwright-report/
+test-results/
+**/src/generated/
+# Obtain this font directly from Fontshare; do not redistribute its binary.
+/apps/web/fonts/satoshi-variable.woff2

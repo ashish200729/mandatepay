@@ -1,0 +1,13 @@
+node_modules
+.next
+.turbo
+dist
+pnpm-lock.yaml
+next-env.d.ts
+.impeccable
+# Preserve the supplied implementation plan verbatim.
+MandatePay_AgentGuard_End_to_End_Implementation_Plan.md
+.local
+playwright-report
+test-results
+**/src/generated

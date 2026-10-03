@@ -1,0 +1,5 @@
+src/generated/
+prisma/generated/
+.env
+.env.*
+!.env.example

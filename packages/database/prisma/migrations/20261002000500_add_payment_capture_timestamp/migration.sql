@@ -1,0 +1,1 @@
+ALTER TABLE "Payment" ADD COLUMN "capturedAt" TIMESTAMP(3);

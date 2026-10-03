@@ -1,0 +1,31 @@
+{
+  "name": "@mandatepay/web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node ../../scripts/setup-fonts.mjs && next dev --hostname 127.0.0.1 --port 3000",
+    "build": "node ../../scripts/setup-fonts.mjs && next build",
+    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "lint": "eslint .",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts apps/web"
+  },
+  "dependencies": {
+    "ag-grid-react": "36.2.0",
+    "ag-grid-community": "36.2.0",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "lucide-react": "^0.577.0",
+    "@mandatepay/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@mandatepay/typescript-config": "workspace:*",
+    "@tailwindcss/postcss": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint-config-next": "16.3.8"
+  }
+}

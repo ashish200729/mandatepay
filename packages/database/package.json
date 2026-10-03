@@ -1,0 +1,52 @@
+{
+  "name": "@mandatepay/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    },
+    "./generated/*": "./src/generated/prisma/*"
+  },
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "build": "pnpm generate && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src prisma tests",
+    "format": "prettier --write . --ignore-path ../../.prettierignore",
+    "format:check": "prettier --check . --ignore-path ../../.prettierignore",
+    "generate": "prisma generate --config prisma7.config.ts",
+    "migrate:deploy": "prisma migrate deploy --config prisma7.config.ts",
+    "migrate:status": "prisma migrate status --config prisma7.config.ts",
+    "seed": "node --env-file-if-exists=.env --import=tsx prisma/seed.ts",
+    "test": "pnpm generate && vitest run --config vitest.config.ts",
+    "test:integration": "node --env-file-if-exists=.env -e \"const testUrl=process.env.TEST_DATABASE_URL; const dbUrl=process.env.DATABASE_URL; if (!testUrl) throw new Error('TEST_DATABASE_URL is required for integration tests'); const name=decodeURIComponent(new URL(testUrl).pathname.replace(/^\\//, '')); if (!/_test$/u.test(name) || (dbUrl && testUrl === dbUrl)) throw new Error('TEST_DATABASE_URL must be a dedicated database ending in _test');\" && pnpm generate && vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@mandatepay/shared": "workspace:*",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "@mandatepay/typescript-config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.16.0",
+    "eslint": "^9.39.5",
+    "prisma": "7.10.0",
+    "tsx": "^4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

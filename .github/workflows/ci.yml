@@ -1,0 +1,72 @@
+name: Foundation checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      TURBO_TELEMETRY_DISABLED: "1"
+      DATABASE_URL: postgresql://mandatepay:ci-only-password@127.0.0.1:5432/mandatepay?schema=public
+      TEST_DATABASE_URL: postgresql://mandatepay:ci-only-password@127.0.0.1:5432/mandatepay_test?schema=public
+      AUTH_SECRET: ci-only-session-secret-not-used-outside-tests
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: mandatepay
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: mandatepay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mandatepay -d mandatepay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Install the pinned package manager
+        run: npm install --global pnpm@10.34.6
+      - name: Install dependencies from lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Initialize development and isolated test schemas
+        env:
+          PGPASSWORD: ci-only-password
+        run: |
+          createdb -h 127.0.0.1 -U mandatepay mandatepay_test
+          pnpm --filter @mandatepay/database migrate:deploy
+          DATABASE_URL="$TEST_DATABASE_URL" pnpm --filter @mandatepay/database migrate:deploy
+      - name: Lint, check types, run unit tests, and build
+        run: pnpm check
+      - name: Verify database and session integration
+        run: pnpm test:integration
+      - name: Install Chromium for browser tests
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify landing and authenticated workspace interactions
+        run: pnpm test:e2e
+
+      # Provider/Sandbox qualification remains separate from mocked/unit tests.
