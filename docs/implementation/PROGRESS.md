@@ -47,13 +47,15 @@ The browser scenario uses the real local API, actual isolated PostgreSQL, an HTT
 
 A full build check uncovered concurrent Prisma generation. Database package task dependencies now build the generated client before typechecking/testing, preventing two generators from rewriting the same source concurrently.
 
-## Publication record
+## Publication history
 
 The current implementation is public at [ashish200729/mandatepay](https://github.com/ashish200729/mandatepay), branch `main`. Source commit `92ab1354250234e99a38be73e5a79194008056e9` passed [hosted GitHub CI](https://github.com/ashish200729/mandatepay/actions/runs/37093692619), including a fresh dependency/font setup, migrations, checks, isolated integration and browser workflows.
 
 Before publication, all 285 staged source/asset/documentation files were compared against actual ignored local credential values; no matches or private runtime paths were found. Environment files, local databases/credentials, generated clients, browser artifacts and the Satoshi binary were excluded. Original supplied plan and vendor licenses were preserved verbatim, including their intentional whitespace.
 
 Publication qualifies the checked source checkpoint, not a hosted commerce service or live financial completion. The final documentation-only follow-up commit records this evidence; its CI result is available on the repository's Actions page.
+
+The resumed MVP implementation was pushed on `main` as `2290af5d38214d5401de1c46430462b8264bc5c7`. Its first hosted run found formatting left after the final auth change; the formatting-only follow-up corrects that issue. Use [current hosted CI](https://github.com/ashish200729/mandatepay/actions/workflows/ci.yml) to inspect the exact final commit and result. Hosted code verification remains separate from the deployment/live-provider checks deferred by the user.
 
 ## Deferred qualification and next session
 

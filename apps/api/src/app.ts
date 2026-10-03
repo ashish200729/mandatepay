@@ -155,12 +155,10 @@ async function readAuthenticatedUser(
       return null;
     }
     if (runtime.requireEmailVerification && !user.emailVerified) {
-      await reply
-        .status(403)
-        .send({
-          error: "Verify your email before opening the workspace.",
-          code: "EMAIL_NOT_VERIFIED",
-        });
+      await reply.status(403).send({
+        error: "Verify your email before opening the workspace.",
+        code: "EMAIL_NOT_VERIFIED",
+      });
       return null;
     }
     return user;
