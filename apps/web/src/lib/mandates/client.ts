@@ -195,10 +195,26 @@ export function createMandateRequestKey() {
 }
 
 export async function parseMandate(prompt: string): Promise<MandateParseResult> {
-  const payload = await request("/api/mandates/parse", {
-    method: "POST",
-    body: JSON.stringify({ prompt }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 65_000);
+  let payload: unknown;
+  try {
+    payload = await request("/api/mandates/parse", {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+      signal: controller.signal,
+    });
+  } catch (cause) {
+    if (controller.signal.aborted) {
+      throw new MandateApiError(
+        "Reading your request took too long. Please try again in a moment.",
+        408,
+      );
+    }
+    throw cause;
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!isRecord(payload) || typeof payload.sourceOriginalPrompt !== "string") {
     throw new Error("The mandate parser returned an invalid response.");
   }

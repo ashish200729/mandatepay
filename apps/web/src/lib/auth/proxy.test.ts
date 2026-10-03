@@ -63,6 +63,37 @@ describe("auth API proxy", () => {
     expect(await response.text()).not.toContain("internal URL and token");
   });
 
+  it("lets a slow mandate parse finish beyond the ordinary proxy deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), delay);
+        return controller.signal;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_target, init) =>
+          new Promise((resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+            setTimeout(() => resolve(Response.json({ status: "ready" })), 12_000);
+          }),
+      );
+      const response = proxyToApi(
+        new Request("http://127.0.0.1:3000/api/mandates/parse", { method: "POST" }),
+        {
+          path: ["mandates", "parse"],
+        },
+      );
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect((await response).status).toBe(200);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("hides upstream 5xx bodies behind a generic 503", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("database password and internal stack", { status: 500 }),
@@ -75,6 +106,94 @@ describe("auth API proxy", () => {
     expect(response.status).toBe(503);
     expect(await response.text()).not.toContain("database password");
   });
+
+  it("allows a multi-round chat to finish after the ordinary ten-second deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), delay);
+        return controller.signal;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_target, init) =>
+          new Promise((resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+            setTimeout(() => resolve(Response.json({ message: "Options ready" })), 45_000);
+          }),
+      );
+      const response = proxyToApi(
+        new Request("http://127.0.0.1:3000/api/agent/chat", { method: "POST" }),
+        { path: ["agent", "chat"] },
+      );
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect((await response).status).toBe(200);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a distinct chat timeout when the API does not finish", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), delay);
+        return controller.signal;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_target, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+      const response = proxyToApi(
+        new Request("http://127.0.0.1:3000/api/agent/chat", { method: "POST" }),
+        { path: ["agent", "chat"] },
+      );
+      await vi.advanceTimersByTimeAsync(130_000);
+      const result = await response;
+      expect(result.status).toBe(504);
+      expect(await result.json()).toMatchObject({
+        code: "SHOPPING_TIMEOUT",
+        error: expect.stringContaining("Retry the same request"),
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    [504, "SHOPPING_TIMEOUT", "took too long"],
+    [503, "SHOPPING_AI_UNAVAILABLE", "AI service is unavailable"],
+    [502, "SHOPPING_AI_RESPONSE_INVALID", "couldn’t read"],
+    [503, "SHOPPING_TOOLS_UNAVAILABLE", "Product search or comparison"],
+    [500, "private unknown code", "temporarily unavailable"],
+  ])(
+    "retains safe chat failure guidance for %s %s and hides upstream details",
+    async (status, code, message) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        Response.json(
+          { code, error: "private provider payload and secret token" },
+          { status: status as number },
+        ),
+      );
+      const response = await proxyToApi(
+        new Request("http://127.0.0.1:3000/api/agent/chat", { method: "POST" }),
+        { path: ["agent", "chat"] },
+      );
+      const body = await response.text();
+      expect(body).toContain(message);
+      expect(body).not.toContain("private");
+      expect(response.status).toBe(status === 500 ? 503 : status);
+    },
+  );
 
   it("forwards successful auth responses and set-cookie without content-length", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(

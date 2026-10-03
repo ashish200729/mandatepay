@@ -29,4 +29,5 @@ export type ShoppingAgentResponse = {
   proposals: AgentProposal[];
   refundDraft: RefundDraft | null;
   steps: AgentStep[];
+  productContext?: string | null;
 };

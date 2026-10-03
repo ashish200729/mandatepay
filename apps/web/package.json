@@ -11,21 +11,23 @@
     "test": "vitest run --config ../../vitest.config.ts apps/web"
   },
   "dependencies": {
-    "ag-grid-react": "36.2.0",
+    "@mandatepay/ui": "workspace:*",
     "ag-grid-community": "36.2.0",
+    "ag-grid-react": "36.2.0",
+    "lucide-react": "^0.577.0",
     "next": "16.3.8",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "lucide-react": "^0.577.0",
-    "@mandatepay/ui": "workspace:*"
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@mandatepay/typescript-config": "workspace:*",
     "@tailwindcss/postcss": "4.3.3",
-    "tailwindcss": "4.3.3",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "eslint-config-next": "16.3.8"
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "4.3.3"
   }
 }

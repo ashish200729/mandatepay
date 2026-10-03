@@ -223,6 +223,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     status: "ok",
     service: "mandatepay-api",
     stage: "mvp",
+    productDiscoveryMode: config.PRODUCT_DISCOVERY_MODE,
   }));
 
   app.get("/health/ready", async (_request, reply) => {
@@ -430,6 +431,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       app,
       appUrl: config.APP_URL,
       modelId: config.OPENAI_MODEL,
+      productContextSecret: config.AUTH_SECRET,
       runner: (input, tools) => runShoppingAgent(input, { config: modelConfig(), tools }),
     });
     registerAnalyticsRoutes(app, {

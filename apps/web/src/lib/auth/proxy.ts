@@ -115,15 +115,35 @@ export async function proxyToApi(request: Request, params: { path?: string[] }) 
     request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
 
   let upstream: Response;
+  const shoppingChat = pathname === "agent/chat";
+  // Chat has a 120-second server deadline covering multiple AI/tool rounds.
+  const timeoutMs = shoppingChat ? 130_000 : pathname === "mandates/parse" ? 60_000 : 10_000;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
   try {
     upstream = await fetch(target, {
       method: request.method,
       headers,
       body,
       redirect: "manual",
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.any([request.signal, timeoutSignal]),
     });
   } catch {
+    if (shoppingChat) {
+      return NextResponse.json(
+        timeoutSignal.aborted
+          ? {
+              code: "SHOPPING_TIMEOUT",
+              error:
+                "The shopping assistant took too long to respond. Retry the same request in a moment.",
+            }
+          : {
+              code: "SHOPPING_SERVICE_UNAVAILABLE",
+              error:
+                "We couldn’t connect to the shopping assistant. Retry the same request shortly.",
+            },
+        { status: timeoutSignal.aborted ? 504 : 503 },
+      );
+    }
     return NextResponse.json(
       { error: "The service is temporarily unavailable. Try again shortly." },
       { status: 503 },
@@ -131,6 +151,34 @@ export async function proxyToApi(request: Request, params: { path?: string[] }) 
   }
 
   if (upstream.status >= 500) {
+    if (shoppingChat) {
+      const payload = (await upstream.json().catch(() => null)) as { code?: unknown } | null;
+      const messages: Record<string, string> = {
+        SHOPPING_TIMEOUT:
+          "The shopping assistant took too long to respond. Retry the same request in a moment.",
+        SHOPPING_AI_UNAVAILABLE:
+          "The shopping assistant’s AI service is unavailable. Retry the same request shortly.",
+        SHOPPING_AI_RESPONSE_INVALID:
+          "The shopping assistant couldn’t read the AI service’s response. Retry the same request in a moment.",
+        SHOPPING_TOOLS_UNAVAILABLE:
+          "Product search or comparison is temporarily unavailable. Retry the same request shortly.",
+      };
+      const code =
+        typeof payload?.code === "string" && Object.hasOwn(messages, payload.code)
+          ? payload.code
+          : "SHOPPING_SERVICE_UNAVAILABLE";
+      return NextResponse.json(
+        {
+          code,
+          error:
+            messages[code] ??
+            "The shopping assistant is temporarily unavailable. Retry the same request shortly.",
+        },
+        {
+          status: code === "SHOPPING_TIMEOUT" ? 504 : upstream.status === 502 ? 502 : 503,
+        },
+      );
+    }
     return NextResponse.json(
       { error: "The service is temporarily unavailable. Try again shortly." },
       { status: 503 },

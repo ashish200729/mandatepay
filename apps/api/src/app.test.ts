@@ -19,6 +19,7 @@ describe("foundation API", () => {
       status: "ok",
       service: "mandatepay-api",
       stage: "mvp",
+      productDiscoveryMode: "demo",
     });
   });
 

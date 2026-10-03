@@ -2,7 +2,107 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { sendShoppingMessage } from "./client";
 
 describe("shopping agent client", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("forwards only the server-issued product reference and preserves it on retry", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        message: "External checkout is unsupported.",
+        explanation: null,
+        proposals: [],
+        refundDraft: null,
+        steps: [],
+        productContext: "verified-products",
+      }),
+    );
+    const response = await sendShoppingMessage(
+      "Get this",
+      "mandate_1",
+      "same-key",
+      "verified-products",
+    );
+    await sendShoppingMessage("Get this", "mandate_1", "same-key", "verified-products");
+    expect(response.productContext).toBe("verified-products");
+    expect(fetch.mock.calls.map((call) => JSON.parse(call[1]?.body as string))).toEqual([
+      {
+        message: "Get this",
+        mandateId: "mandate_1",
+        requestKey: "same-key",
+        productContext: "verified-products",
+      },
+      {
+        message: "Get this",
+        mandateId: "mandate_1",
+        requestKey: "same-key",
+        productContext: "verified-products",
+      },
+    ]);
+  });
+
+  it("keeps the expired-selection code so the browser can ask for a new search", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        {
+          code: "SHOPPING_SELECTION_EXPIRED",
+          error: "Search again to choose a current product.",
+        },
+        { status: 409 },
+      ),
+    );
+    await expect(
+      sendShoppingMessage("Get this", "mandate_1", "key", "expired"),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SHOPPING_SELECTION_EXPIRED",
+    });
+  });
+
+  it("ends a stalled chat with useful guidance and preserves the same key on retry", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_path, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+    );
+    const response = expect(
+      sendShoppingMessage("Show shoes", "mandate_1", "stable-request-key"),
+    ).rejects.toMatchObject({
+      status: 504,
+      message: expect.stringContaining("Retry the same request"),
+    });
+    await vi.advanceTimersByTimeAsync(135_000);
+    await response;
+    fetch.mockResolvedValue(
+      Response.json({
+        message: "Available options",
+        explanation: null,
+        steps: [],
+        proposals: [],
+        refundDraft: null,
+      }),
+    );
+    await sendShoppingMessage("Show shoes", "mandate_1", "stable-request-key");
+    expect(fetch.mock.calls.map((call) => JSON.parse(call[1]?.body as string).requestKey)).toEqual([
+      "stable-request-key",
+      "stable-request-key",
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("explains a connection failure without exposing transport details", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("private transport detail"));
+    await expect(sendShoppingMessage("Show shoes", undefined, "request_1")).rejects.toMatchObject({
+      status: 503,
+      message:
+        "We couldn’t connect to the shopping assistant. Check your connection, then retry the same request.",
+    });
+  });
 
   it("reads server steps, policy proposals, and refund drafts without making payment claims", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, Check, CircleAlert, LoaderCircle, ShieldCheck } from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
@@ -54,8 +54,24 @@ export function MandateBuilder() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<{ id: string; version: number } | null>(null);
   const [creationKey, setCreationKey] = useState(() => createMandateRequestKey());
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const isBusy = state === "parsing" || state === "saving";
+  const describing = state === "prompt" || state === "parsing" || state === "clarification";
+
+  useEffect(() => {
+    if (!describing || (!clarification && !error)) return;
+    feedbackRef.current?.focus({ preventScroll: true });
+    feedbackRef.current?.scrollIntoView({ behavior: "instant", block: "nearest" });
+  }, [clarification, error, describing]);
+
+  useEffect(() => {
+    if (state !== "review") return;
+    reviewHeadingRef.current?.focus({ preventScroll: true });
+    reviewHeadingRef.current?.scrollIntoView({ behavior: "instant", block: "nearest" });
+  }, [state]);
 
   async function handleParse() {
     if (isBusy || !prompt.trim()) {
@@ -83,7 +99,21 @@ export function MandateBuilder() {
       setState("review");
     } catch (cause) {
       setState("prompt");
-      setError(cause instanceof Error ? cause.message : "The mandate parser is unavailable.");
+      setError(
+        cause instanceof MandateApiError
+          ? cause.status === 401
+            ? "Your session has expired. Sign in again, then retry your request."
+            : cause.status === 429
+              ? "You’ve tried several times in a short period. Wait a minute, then try again."
+              : cause.status >= 500
+                ? "We couldn’t read your request because the service is temporarily unavailable. Try again shortly."
+                : cause.status === 400
+                  ? "We couldn’t understand part of your request. Check the product and maximum total budget in USD, then try again."
+                  : cause.message
+          : cause instanceof TypeError
+            ? "We couldn’t connect. Check your internet connection and try again."
+            : "We couldn’t prepare your mandate. Please try again in a moment.",
+      );
     }
   }
 
@@ -192,7 +222,7 @@ export function MandateBuilder() {
       </div>
     );
 
-  if (state === "prompt" || state === "parsing" || state === "clarification") {
+  if (describing) {
     return (
       <div className="space-y-7">
         <WorkspaceSteps steps={["Describe", "Review", "Activate"]} current={0} />
@@ -204,12 +234,18 @@ export function MandateBuilder() {
             >
               What should your agent be allowed to buy?
             </label>
-            <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
+            <p
+              id="mandate-prompt-help"
+              className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground"
+            >
               Describe the product, budget, brands, conditions, and when the agent should come back
-              to you.
+              to you. Include your maximum total budget in USD, including shipping and tax.
             </p>
             <textarea
               id="mandate-prompt"
+              ref={promptRef}
+              aria-describedby={`mandate-prompt-help${clarification || error ? " mandate-prompt-feedback" : ""}`}
+              aria-invalid={clarification ? true : undefined}
               maxLength={12_000}
               value={prompt}
               onChange={(event) => setPrompt(event.currentTarget.value)}
@@ -217,6 +253,47 @@ export function MandateBuilder() {
               placeholder="Find Sony or Bose noise-cancelling headphones under $180. Buy new only. Automatically spend up to $150 and ask me above that."
               className="mt-5 min-h-44 w-full resize-y rounded-lg border border-border bg-background px-4 py-4 text-sm leading-7 transition-colors placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
             />
+            {clarification || error ? (
+              <div
+                id="mandate-prompt-feedback"
+                ref={feedbackRef}
+                role="alert"
+                tabIndex={-1}
+                aria-labelledby="mandate-prompt-feedback-title"
+                className="mt-4 scroll-mt-28 rounded-xl border border-destructive/20 bg-secondary p-4 text-sm leading-6 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                <div className="flex items-start gap-3">
+                  <CircleAlert size={18} className="mt-1 shrink-0" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <h2 id="mandate-prompt-feedback-title" className="font-medium">
+                      {clarification
+                        ? "Add a little more detail to continue"
+                        : "We couldn’t review your request"}
+                    </h2>
+                    <p className="mt-1">{clarification ?? error}</p>
+                    <p className="mt-2 text-muted-foreground">
+                      {clarification
+                        ? "Update your request above with this detail, then select Review mandate again."
+                        : "Your request is still here. You can try again without retyping it."}
+                    </p>
+                  </div>
+                </div>
+                {clarification ? (
+                  <button
+                    type="button"
+                    className={cn(buttonVariants({ variant: "outline", size: "sm" }), "mt-3")}
+                    onClick={() => promptRef.current?.focus()}
+                  >
+                    Edit my request
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {state === "parsing" ? (
+              <p role="status" className="mt-4 text-sm leading-6 text-muted-foreground">
+                Reading your request… This may take a few moments.
+              </p>
+            ) : null}
             <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
               <span className="text-xs text-muted-foreground">
                 You’ll review the exact rules before activation.
@@ -232,7 +309,7 @@ export function MandateBuilder() {
                 ) : (
                   <ArrowRight size={16} aria-hidden="true" />
                 )}
-                {state === "parsing" ? "Reading request…" : "Review mandate"}
+                {state === "parsing" ? "Reading request…" : error ? "Try again" : "Review mandate"}
               </button>
             </div>
           </div>
@@ -260,13 +337,6 @@ export function MandateBuilder() {
             </dl>
           </aside>
         </div>
-        {clarification ? (
-          <StatusMessage>
-            <strong className="font-medium text-foreground">One detail is missing.</strong>{" "}
-            {clarification}
-          </StatusMessage>
-        ) : null}
-        {error ? <StatusMessage error>{error}</StatusMessage> : null}
       </div>
     );
   }
@@ -276,7 +346,11 @@ export function MandateBuilder() {
       <WorkspaceSteps steps={["Describe", "Review", "Activate"]} current={1} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-medium leading-7 tracking-[-0.02em]">
+          <h2
+            ref={reviewHeadingRef}
+            tabIndex={-1}
+            className="scroll-mt-28 text-xl font-medium leading-7 tracking-[-0.02em] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             These are the permissions your agent will receive.
           </h2>
         </div>

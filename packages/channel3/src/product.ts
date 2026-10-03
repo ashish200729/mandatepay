@@ -202,15 +202,32 @@ export function normalizeProduct(
     firstValue(sources, ["id", "product_id", "productId", "canonical_product_id", "externalId"]),
   );
   const title = stringValue(firstValue(sources, ["title", "name", "product_title"]));
-  const brand = nestedName(firstValue(sources, ["brand", "manufacturer"]));
+  // Canonical search results carry brands[] and retailer facts on offers[].
+  const brand =
+    nestedName(firstValue(sources, ["brand", "manufacturer"])) ??
+    (Array.isArray(raw.brands) ? nestedName(raw.brands[0]) : undefined);
   const categoryValue = firstValue(sources, ["category", "category_name", "categoryName"]);
-  const category = nestedName(categoryValue);
+  const category = nestedName(categoryValue) ?? stringValue(record(categoryValue)?.title);
+  const providerPath = record(categoryValue)?.path;
+  const categoryPath = Array.isArray(providerPath)
+    ? providerPath.slice(0, 20).flatMap((entry) => {
+        const node = record(entry);
+        return [nestedName(entry), stringValue(node?.title), stringValue(node?.slug)]
+          .filter((label): label is string => label !== undefined)
+          .map((label) => label.slice(0, 255));
+      })
+    : [];
   const condition = normalizeCondition(
     firstValue(sources, ["condition", "item_condition", "itemCondition"]),
   );
-  const merchant = nestedName(firstValue(sources, ["merchant", "merchant_name", "seller"]));
+  const merchant =
+    nestedName(firstValue(sources, ["merchant", "merchant_name", "seller"])) ??
+    stringValue(offer?.domain);
   const imageValue = firstValue(sources, ["image_url", "imageUrl", "image"]);
-  const imageUrl = stringValue(imageValue) ?? stringValue(record(imageValue)?.url);
+  const images = Array.isArray(raw.images) ? raw.images.map(record) : [];
+  const mainImage = images.find((image) => image?.is_main_image === true) ?? images[0];
+  const imageUrl =
+    stringValue(imageValue) ?? stringValue(record(imageValue)?.url) ?? stringValue(mainImage?.url);
   const productUrl = stringValue(firstValue(sources, ["product_url", "productUrl", "url"]));
 
   if (!externalId) throw new Channel3NormalizationError("INVALID_PRODUCT_ID");
@@ -225,6 +242,8 @@ export function normalizeProduct(
     throw new Channel3NormalizationError("INCOMPLETE_PRODUCT");
   }
 
+  const metadata = rawMetadata(raw.metadata);
+  if (source === "channel3") metadata.categoryPath = [...new Set(categoryPath)];
   const product = NormalizedProductSchema.parse({
     source,
     externalId,
@@ -237,7 +256,7 @@ export function normalizeProduct(
     merchant,
     imageUrl: imageUrl ?? null,
     productUrl: productUrl ?? null,
-    metadata: rawMetadata(raw.metadata),
+    metadata,
     checkoutEligible,
     demoSku,
   });

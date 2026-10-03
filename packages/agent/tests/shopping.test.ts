@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OpenAIProviderError,
   createOpenAIClient,
@@ -88,6 +88,144 @@ function mockClient(
 const baseInput = { message: "Find my usual headphones and prepare the best option.", now: NOW };
 
 describe("bounded shopping agent", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("reads the selected mandate before searching an ambiguous user message", async () => {
+    const transport = mockClient([
+      toolResponse("get_active_mandates", {}, "mandate-context"),
+      toolResponse(
+        "search_products",
+        { query: "Nike shoes", maximumPriceMinor: 10_000, brands: ["Nike"], category: null },
+        "nike-search",
+      ),
+      finalResponse("Nike shoes are available within your budget."),
+    ]);
+    const getMandates = vi.fn(async () => ({
+      mandates: [
+        {
+          rules: { productIntent: "Nike shoes", transactionLimit: 10_000, autoSpendLimit: 0 },
+          budget: { maximumTotal: "$100.00 USD", approval: "Ask before every purchase" },
+        },
+      ],
+    }));
+    const search = vi.fn(async () => ({ products: [] }));
+    const result = await runShoppingAgent(
+      { message: "check the products related to this", now: NOW },
+      { ...transport, tools: { get_active_mandates: getMandates, search_products: search } },
+    );
+    expect(transport.requestBodies[0]?.tool_choice).toEqual({
+      type: "function",
+      function: { name: "get_active_mandates" },
+    });
+    expect(transport.requestBodies[1]?.tool_choice).toBe("auto");
+    expect(transport.requestBodies[1]?.messages).toContainEqual(
+      expect.objectContaining({ role: "tool", content: expect.stringContaining("Nike shoes") }),
+    );
+    const context = (
+      transport.requestBodies[1]?.messages as { role: string; content: string }[]
+    ).find((message) => message.role === "tool");
+    expect(JSON.parse(context!.content)).toMatchObject({
+      mandates: [
+        {
+          rules: { transactionLimit: 10_000, autoSpendLimit: 0 },
+          budget: { maximumTotal: "$100.00 USD" },
+        },
+      ],
+    });
+    expect(result.trace.map((entry) => entry.name)).toEqual([
+      "get_active_mandates",
+      "search_products",
+    ]);
+    expect(getMandates.mock.invocationCallOrder[0]).toBeLessThan(
+      search.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("works with a provider that rejects unsupported strict-schema keywords", async () => {
+    const transport = mockClient([]);
+    const client = createOpenAIClient(transport.config, {
+      fetch: async (_url, init) => {
+        const unsupported = String(init?.body).includes('"uniqueItems"');
+        return Response.json(
+          unsupported ? { error: { message: "uniqueItems is not permitted" } } : finalResponse(),
+          { status: unsupported ? 400 : 200 },
+        );
+      },
+    });
+    await expect(
+      runShoppingAgent(baseInput, { config: transport.config, client, tools: {} }),
+    ).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("still rejects duplicate comparison IDs before running the comparison tool", async () => {
+    const transport = mockClient([
+      toolResponse("compare_products", { productIds: ["product_1", "product_1"] }),
+    ]);
+    const compare = vi.fn();
+    await expect(
+      runShoppingAgent(baseInput, { ...transport, tools: { compare_products: compare } }),
+    ).rejects.toMatchObject({ code: "INVALID_TOOL_ARGUMENTS" });
+    expect(compare).not.toHaveBeenCalled();
+  });
+
+  it.each(["gpt-6-luna", "gpt-6-luna-test-snapshot"])(
+    "uses the required Chat Completions tool mode for %s",
+    async (model) => {
+      const config = parseOpenAIConfig({
+        apiKey: "unit-test-key",
+        model,
+        baseURL: "https://api.openai.com/v1",
+        reasoningEffort: null,
+      });
+      const client = createOpenAIClient(config, {
+        fetch: async (_url, init) => {
+          const request = JSON.parse(String(init?.body));
+          return Response.json(
+            request.reasoning_effort === "none"
+              ? finalResponse()
+              : { error: { message: "Function tools require reasoning_effort none" } },
+            { status: request.reasoning_effort === "none" ? 200 : 400 },
+          );
+        },
+      });
+      await expect(
+        runShoppingAgent(baseInput, { config, client, tools: {} }),
+      ).resolves.toMatchObject({ status: "completed" });
+    },
+  );
+
+  it("bounds the whole workflow across multiple model rounds and stops subsequent tools", async () => {
+    vi.useFakeTimers();
+    const transport = mockClient([]);
+    let round = 0;
+    vi.spyOn(transport.client.chat.completions, "create").mockImplementation((_body, options) => {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(toolResponse("get_active_mandates", {}, `call_${++round}`)),
+          35_000,
+        );
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          },
+          { once: true },
+        );
+      }) as ReturnType<typeof transport.client.chat.completions.create>;
+    });
+    const handler = vi.fn(async () => ({ mandates: [] }));
+    const result = expect(
+      runShoppingAgent(baseInput, { ...transport, tools: { get_active_mandates: handler } }),
+    ).rejects.toMatchObject({ code: "UPSTREAM_TIMEOUT" });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await result;
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it.each([[], null])(
     "accepts a provider's empty tool_calls value on a final stop response",
     async (toolCalls) => {

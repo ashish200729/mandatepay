@@ -31,6 +31,20 @@ The original prompt is returned unchanged as `sourceOriginalPrompt`. Refusals, t
 
 Tool arguments use strict schemas. A purchase proposal accepts only `productId`, `source`, and `quantity`; the server callback computes totals and authorization. A refund tool only prepares `{ paymentID, amountDecimal, reason }` for later human/server handling. Unknown tools, extra fields, malformed amounts, duplicate call IDs, and invalid arguments are rejected before callbacks run. The runner caps the model at five rounds and 768 output tokens per round, bounds handler execution, redacts and size-limits handler results, and returns a `finalAIExplanation` marked `paymentAuthoritative: false`.
 
+When the active-mandate handler is supplied, the first model round must call it. Later rounds can select other tools. This provides the selected mandate's product intent before an ambiguous request such as “check the products related to this” is searched. Refund lookup remains available without an active purchase mandate.
+
+The API supplies both canonical rules in integer USD cents and an explicit formatted maximum/automatic-limit summary. A zero automatic limit means approval before every purchase, not an absent budget. Shopping search results are bounded by the saved mandate's maximum, brands, categories, merchants, currency and condition; a model can request a narrower search but cannot widen those permissions. Model category labels refine the search query rather than require an exact provider taxonomy match.
+
+Discovery-only answers are composed from verified product and mandate facts, including honest no-match states and listed-price caveats. Comparisons show only the selected trusted products in a table. Unverified model claims cannot overwrite these replies; proposal and refund flows retain their separate explanatory response and authoritative recorded facts. The web chat shows the answer directly and renders Markdown without raw HTML or executable links.
+
+Chat preserves the eight displayed discovery listings between messages with a short-lived server-signed product reference. It is bound to the authenticated owner, selected mandate and version, and expires after 15 minutes. The browser returns that opaque reference with follow-ups and exact retries; it clears it when starting a new brief, changing mandates, receiving an empty search or an expired-reference response. This is discovery context, not approval or payment authority. Demo proposals still refresh authoritative product data and pass the existing policy and checkout flow. Full conversation history is not persisted or forwarded.
+
+External Channel3 selections produce a direct explanation that checkout is unsupported and, when supplied, a verified HTTP(S) retailer product link. No external proposal or payment is attempted, and a model cannot replace that explanation with a purchase claim. Ambiguous selections ask for the product title, price and retailer. Internal checkout rejections retain their HTTP 4xx status instead of being wrapped into a tool-service 503.
+
+The complete shopping loop has a 120-second deadline, in addition to per-call and per-handler bounds. The web proxy waits 130 seconds and the browser waits 135 seconds so a server failure can be returned before a transport deadline. Retries retain the original shopping request key. Timeout, provider, malformed-response, and tool-service failures have distinct safe error codes; raw provider bodies stay out of responses and logs.
+
+For GPT-6 Luna requests to the official OpenAI host, shopping function calls explicitly use `reasoning_effort: "none"`, as required by the [official model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna). This applies only to shopping tool requests; the mandate parser and other models/endpoints retain their configured budget. The wire tool schema omits unsupported `uniqueItems`, while server validation still rejects duplicate comparison product IDs.
+
 ## Build and verify
 
 ```sh

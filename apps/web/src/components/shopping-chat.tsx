@@ -20,12 +20,17 @@ import { cn } from "@mandatepay/ui/lib/utils";
 import { approvalReasonText } from "@/lib/approvals/reasons";
 import { listMandates } from "@/lib/mandates/client";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
-import { createShoppingRequestKey, sendShoppingMessage } from "@/lib/agent/client";
+import {
+  createShoppingRequestKey,
+  sendShoppingMessage,
+  ShoppingAgentApiError,
+} from "@/lib/agent/client";
 import { activeShoppingMandates, selectShoppingMandate } from "@/lib/agent/mandates";
 import { saveRefundDraft } from "@/lib/agent/refund-draft";
 import type { RefundDraft, ShoppingAgentResponse } from "@/lib/agent/types";
 import type { MandateDetail } from "@/lib/mandates/types";
 import { workspaceField, WorkspaceLoading, WorkspaceStatus } from "@/components/workspace-ui";
+import { ChatAnswer } from "@/components/chat-answer";
 
 type ChatMessage = {
   id: string;
@@ -164,21 +169,9 @@ function AgentMessage({ message }: { message: ChatMessage }) {
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Bot size={14} aria-hidden="true" /> MandatePay
         </div>
-        <p className="mt-3 whitespace-pre-wrap break-words">{message.text}</p>
+        <ChatAnswer text={message.response?.explanation?.text ?? message.text} />
         {message.response ? (
           <>
-            {message.response.explanation ? (
-              <details className="mt-4 text-sm">
-                <summary className="min-h-8 cursor-pointer text-xs font-medium text-muted-foreground">
-                  Agent explanation
-                </summary>
-                <p className="mt-2 leading-relaxed">{message.response.explanation.text}</p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  This recommendation is separate from the recorded policy decision and payment
-                  result.
-                </p>
-              </details>
-            ) : null}
             <ProposalCard response={message.response} />
             {message.response.refundDraft ? (
               <RefundDraftCard draft={message.response.refundDraft} />
@@ -217,6 +210,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
     message: string;
     mandateId?: string;
     requestKey: string;
+    productContext?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mandatesFailed, setMandatesFailed] = useState(false);
@@ -225,6 +219,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
   const threadContent = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const followLatest = useRef(true);
+  const productContext = useRef<{ mandateId: string | undefined; value: string } | null>(null);
 
   useEffect(() => {
     if (followLatest.current && thread.current)
@@ -278,6 +273,9 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
       message: text,
       ...(selectedMandate ? { mandateId: selectedMandate } : {}),
       requestKey: createShoppingRequestKey(),
+      ...(productContext.current?.mandateId === selectedMandate && productContext.current
+        ? { productContext: productContext.current.value }
+        : {}),
     };
     setSending(true);
     followLatest.current = true;
@@ -294,7 +292,12 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
         request.message,
         request.mandateId,
         request.requestKey,
+        request.productContext,
       );
+      if (response.productContext !== undefined)
+        productContext.current = response.productContext
+          ? { mandateId: selectedMandate, value: response.productContext }
+          : null;
       setMessages((current) => [
         ...current,
         {
@@ -306,7 +309,11 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
       ]);
       setRetry(null);
     } catch (cause) {
-      setRetry(request);
+      if (cause instanceof ShoppingAgentApiError && cause.code === "SHOPPING_SELECTION_EXPIRED") {
+        productContext.current = null;
+        setRetry(null);
+        setMessage(request.message);
+      } else setRetry(request);
       setError(
         cause instanceof Error
           ? cause.message
@@ -329,6 +336,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
               disabled={sending}
               onClick={() => {
                 setMessages([]);
+                productContext.current = null;
                 setMessage("");
                 setRetry(null);
                 setError(null);
@@ -360,7 +368,12 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
             Mandate
             <select
               value={mandateId}
-              onChange={(event) => setMandateId(event.currentTarget.value)}
+              onChange={(event) => {
+                productContext.current = null;
+                setRetry(null);
+                setError(null);
+                setMandateId(event.currentTarget.value);
+              }}
               disabled={sending}
               className={cn(workspaceField, "h-10 sm:w-72")}
             >
@@ -375,8 +388,10 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
           <p className="text-xs leading-5 text-muted-foreground">
             {selected ? (
               <>
-                Automatic {formatUsdLabel(selected.rules.autoSpendLimit)} · Maximum{" "}
-                {formatUsdLabel(selected.rules.transactionLimit)}
+                Maximum {formatUsdLabel(selected.rules.transactionLimit)} ·{" "}
+                {selected.rules.autoSpendLimit === 0
+                  ? "Approval required before every purchase"
+                  : `Automatic limit ${formatUsdLabel(selected.rules.autoSpendLimit)}`}
               </>
             ) : (
               "Choose permissions before shopping. Refunds don’t need a mandate."

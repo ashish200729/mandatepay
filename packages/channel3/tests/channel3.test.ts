@@ -26,6 +26,41 @@ const productPayload = {
   metadata: { sourceRank: 1, nested: { verified: true } },
 };
 
+// Provider's canonical search shape, including nested offer price and category title.
+const canonicalProduct = {
+  id: "fixture-nike-shoes",
+  title: "Nike running shoes",
+  brands: [{ id: "fixture-nike", name: "Nike" }],
+  category: {
+    slug: "sneakers",
+    title: "Sneakers",
+    path: [
+      { slug: "shoes", title: "Shoes" },
+      { slug: "sneakers", title: "Sneakers" },
+    ],
+  },
+  images: [
+    { url: "https://images.example.test/side.jpg", is_main_image: false },
+    { url: "https://images.example.test/main.jpg", is_main_image: true },
+  ],
+  offers: [
+    {
+      domain: "retailer.example.test",
+      url: "https://retailer.example.test/shoes",
+      price: { price: 66.99, compare_at_price: 80, currency: "USD" },
+      condition: "new",
+      availability: "InStock",
+    },
+    {
+      domain: "another.example.test",
+      url: "https://another.example.test/shoes",
+      price: { price: 40, currency: "USD" },
+      condition: "used",
+      availability: "InStock",
+    },
+  ],
+};
+
 function config(overrides: Record<string, unknown> = {}) {
   return parseChannel3Config({
     apiKey: "channel3-test-secret",
@@ -69,6 +104,67 @@ function mockFetch(payload: unknown, status = 200) {
 }
 
 describe("Channel3 discovery client", () => {
+  it("reads canonical brands, images and retailer offers without mixing their facts", async () => {
+    const transport = mockFetch({ products: [canonicalProduct], next_page_token: null });
+    const client = new Channel3Client(config(), { fetch: transport.fetcher });
+    const products = await client.searchProducts({ query: "Nike shoes" });
+    expect(products).toHaveLength(1);
+    expect(products[0]).toMatchObject({
+      externalId: "fixture-nike-shoes",
+      brand: "Nike",
+      category: "Sneakers",
+      metadata: { categoryPath: ["Shoes", "shoes", "Sneakers", "sneakers"] },
+      condition: "NEW",
+      priceMinor: 6_699,
+      currency: "USD",
+      merchant: "retailer.example.test",
+      productUrl: "https://retailer.example.test/shoes",
+      imageUrl: "https://images.example.test/main.jpg",
+      source: "channel3",
+      checkoutEligible: false,
+      demoSku: null,
+    });
+  });
+
+  it.each([
+    [{ ...canonicalProduct, brands: [] }, "INCOMPLETE_PRODUCT"],
+    [{ ...canonicalProduct, offers: [] }, "INCOMPLETE_PRODUCT"],
+    [
+      { ...canonicalProduct, offers: [{ ...canonicalProduct.offers[0], domain: null }] },
+      "INCOMPLETE_PRODUCT",
+    ],
+    [
+      { ...canonicalProduct, offers: [{ ...canonicalProduct.offers[0], condition: null }] },
+      "INCOMPLETE_PRODUCT",
+    ],
+    [
+      {
+        ...canonicalProduct,
+        offers: [{ ...canonicalProduct.offers[0], price: { price: -1, currency: "USD" } }],
+      },
+      "INVALID_PRICE",
+    ],
+    [
+      {
+        ...canonicalProduct,
+        offers: [{ ...canonicalProduct.offers[0], price: { price: 10, currency: "EUR" } }],
+      },
+      "UNSUPPORTED_CURRENCY",
+    ],
+  ] as const)("still rejects incomplete or unsupported canonical data", (raw, code) => {
+    expect(() => normalizeProduct(raw)).toThrowError(expect.objectContaining({ code }));
+  });
+
+  it("takes category ancestry only from the provider taxonomy, not arbitrary metadata", () => {
+    const product = normalizeProduct({
+      ...canonicalProduct,
+      category: { title: "Apparel" },
+      metadata: { categoryPath: ["Shoes"] },
+    });
+    expect(product.category).toBe("Apparel");
+    expect(product.metadata.categoryPath).toEqual([]);
+  });
+
   it("searches the documented endpoint and normalizes USD prices to integer cents", async () => {
     const transport = mockFetch({ products: [productPayload] });
     const client = new Channel3Client(config(), { fetch: transport.fetcher });

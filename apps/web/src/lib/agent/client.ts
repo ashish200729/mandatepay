@@ -5,6 +5,7 @@ export class ShoppingAgentApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ShoppingAgentApiError";
@@ -94,23 +95,47 @@ function readProposal(value: unknown): AgentProposal {
 }
 
 async function request(path: string, body: unknown) {
-  const response = await fetch(path, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!response.ok) {
-    const message =
-      typeof payload?.error === "string"
-        ? payload.error
-        : typeof payload?.message === "string"
-          ? payload.message
-          : "The shopping agent could not complete that request.";
-    throw new ShoppingAgentApiError(message.slice(0, 240), response.status);
+  const controller = new AbortController();
+  // Leave time for the server's overall budget and the proxy's error response.
+  const timer = setTimeout(() => controller.abort(), 135_000);
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!response.ok) {
+      const message =
+        typeof payload?.error === "string"
+          ? payload.error
+          : typeof payload?.message === "string"
+            ? payload.message
+            : "The shopping agent could not complete that request.";
+      throw new ShoppingAgentApiError(
+        message.slice(0, 240),
+        response.status,
+        typeof payload?.code === "string" ? payload.code : undefined,
+      );
+    }
+    return payload;
+  } catch (cause) {
+    if (controller.signal.aborted)
+      throw new ShoppingAgentApiError(
+        "The shopping assistant took too long to respond. Retry the same request in a moment.",
+        504,
+      );
+    if (cause instanceof TypeError)
+      throw new ShoppingAgentApiError(
+        "We couldn’t connect to the shopping assistant. Check your connection, then retry the same request.",
+        503,
+      );
+    throw cause;
+  } finally {
+    clearTimeout(timer);
   }
-  return payload;
 }
 
 export function createShoppingRequestKey() {
@@ -124,11 +149,13 @@ export async function sendShoppingMessage(
   message: string,
   mandateId: string | undefined,
   requestKey: string,
+  productContext?: string,
 ): Promise<ShoppingAgentResponse> {
   const payload = await request("/api/agent/chat", {
     message,
     ...(mandateId?.trim() ? { mandateId } : {}),
     requestKey,
+    ...(productContext ? { productContext } : {}),
   });
   if (
     !isRecord(payload) ||
@@ -144,6 +171,12 @@ export async function sendShoppingMessage(
       throw new Error("The shopping agent steps were not valid.");
     return step as unknown as AgentStep;
   });
+  if (
+    payload.productContext !== undefined &&
+    payload.productContext !== null &&
+    (typeof payload.productContext !== "string" || payload.productContext.length > 50_000)
+  )
+    throw new Error("The shopping product reference was not valid.");
   let explanation: ShoppingAgentResponse["explanation"] = null;
   if (payload.explanation !== null) {
     if (
@@ -163,5 +196,8 @@ export async function sendShoppingMessage(
     proposals: payload.proposals.map(readProposal),
     refundDraft,
     steps,
+    ...(payload.productContext !== undefined
+      ? { productContext: payload.productContext as string | null }
+      : {}),
   };
 }

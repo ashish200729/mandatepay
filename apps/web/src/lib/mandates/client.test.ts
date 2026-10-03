@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseMandate } from "./client";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 describe("mandate parser HTTP contract", () => {
   it("reads the canonical mandate returned directly by the ready parser", async () => {
     const mandate = {
@@ -54,5 +57,34 @@ describe("mandate parser HTTP contract", () => {
       ),
     );
     expect((await parseMandate("Headphones")).status).toBe("needs_clarification");
+  });
+
+  it("stops a stalled parse and returns an actionable timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_path: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal!.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+    const result = expect(parseMandate("New PlayStation 5 under $600 USD")).rejects.toMatchObject({
+      status: 408,
+      message: expect.stringContaining("took too long"),
+    });
+    await vi.advanceTimersByTimeAsync(65_000);
+    await result;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cleans up the timeout after a network failure so retry remains possible", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(parseMandate("Headphones")).rejects.toBeInstanceOf(TypeError);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

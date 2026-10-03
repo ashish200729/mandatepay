@@ -5,6 +5,8 @@ import {
   Channel3Client,
   lookupDemoProduct,
   searchDemoCatalog,
+  isChannel3Error,
+  Channel3ProviderError,
   type NormalizedProduct,
 } from "@mandatepay/channel3";
 import {
@@ -171,6 +173,18 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
             : "Channel3 discovery — external retailer products are not eligible for demo checkout.",
       });
     } catch (cause) {
+      // Keep adapter failures diagnosable without logging product payloads or credentials.
+      request.log.warn(
+        {
+          code: isChannel3Error(cause)
+            ? cause.code
+            : cause instanceof DatabaseError
+              ? cause.code
+              : "PRODUCT_SEARCH_INTERNAL_ERROR",
+          ...(cause instanceof Channel3ProviderError ? { providerStatus: cause.status } : {}),
+        },
+        "Product search failed",
+      );
       return fail(reply, cause);
     }
   });

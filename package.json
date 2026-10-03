@@ -8,9 +8,9 @@
     "pnpm": ">=10 <11"
   },
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "turbo run build --filter=\"./packages/*\" --ui=stream && turbo run dev --filter=\"./apps/*\"",
     "dev:web": "turbo run dev --filter=@mandatepay/web",
-    "dev:api": "turbo run dev --filter=@mandatepay/api",
+    "dev:api": "turbo run build --filter=\"./packages/*\" --ui=stream && turbo run dev --filter=@mandatepay/api",
     "test": "pnpm test:env && turbo run test",
     "test:env": "node --test scripts/environment.test.mjs",
     "test:e2e": "playwright test",
