@@ -66,6 +66,6 @@ Do not paste secrets into chat or commit them. Supply configuration through loca
 - Render account/service/domain and deployment configuration for hosted and workflow gates.
 - Production email verification/recovery delivery and final security/deployment qualification before exposing real account/payment workflows.
 
-Only Sarvam text parsing has live provider evidence so far. PayPal, Channel3, AG Studio and Render qualification remain open. Credentials belong in ignored environment files and must not appear in documentation, source, logs or screenshots.
+Live Sarvam text parsing/ranking and PayPal Sandbox OAuth have evidence. Local implementation now includes commerce, refund, verified-webhook and analytics services; current automated financial tests use simulated providers. Real buyer/capture/refund/webhook, Channel3, AG Studio and Render qualification remain open. Sandbox client credentials are already configured locally; do not request them again. Credentials belong in ignored environment files and must not appear in documentation, source, logs or screenshots.
 
 The plan permits a labeled demo catalog fallback for discovery and a standard PayPal payer-approval fallback when vaulting is unavailable. It does not permit claiming mock capture/refund/webhook results as real Sandbox evidence.

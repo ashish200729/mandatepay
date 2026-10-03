@@ -41,7 +41,15 @@ The browser scenario uses the real local API, actual isolated PostgreSQL, an HTT
 
 A full build check uncovered concurrent Prisma generation. Database package task dependencies now build the generated client before typechecking/testing, preventing two generators from rewriting the same source concurrently.
 
-## Resume priorities
+## Publication record
+
+The current implementation is public at [ashish200729/mandatepay](https://github.com/ashish200729/mandatepay), branch `main`. Source commit `92ab1354250234e99a38be73e5a79194008056e9` passed [hosted GitHub CI](https://github.com/ashish200729/mandatepay/actions/runs/37093692619), including a fresh dependency/font setup, migrations, checks, isolated integration and browser workflows.
+
+Before publication, all 285 staged source/asset/documentation files were compared against actual ignored local credential values; no matches or private runtime paths were found. Environment files, local databases/credentials, generated clients, browser artifacts and the Satoshi binary were excluded. Original supplied plan and vendor licenses were preserved verbatim, including their intentional whitespace.
+
+Publication qualifies the checked source checkpoint, not a hosted commerce service or live financial completion. The final documentation-only follow-up commit records this evidence; its CI result is available on the repository's Actions page.
+
+## Next session
 
 1. Read this file, README, PLAN_REVIEW and agent.md. Preserve the supplied plan and approved design.
 2. Verify the recorded final check results and GitHub/CI state; do not infer release success from a local cache or an interrupted command.

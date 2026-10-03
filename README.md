@@ -68,15 +68,17 @@ pnpm test:e2e
 
 ## Workspace
 
-| Path                  | Purpose                                                  |
-| --------------------- | -------------------------------------------------------- |
-| `apps/web`            | Next.js App Router, React, Tailwind, application UI      |
-| `apps/api`            | Fastify, Better Auth, protected server routes            |
-| `packages/shared`     | Strict domain contracts and integer-cent arithmetic      |
-| `packages/agent`      | Server-only provider configuration and mandate parser    |
-| `packages/agentguard` | Pure deterministic policy decisions                      |
-| `packages/database`   | Prisma migrations, repositories, immutable audit/history |
-| `packages/ui`         | Shared shadcn components, theme and controls             |
+| Path                  | Purpose                                                   |
+| --------------------- | --------------------------------------------------------- |
+| `apps/web`            | Next.js App Router, React, Tailwind, application UI       |
+| `apps/api`            | Fastify, Better Auth, protected server routes             |
+| `packages/shared`     | Strict domain contracts and integer-cent arithmetic       |
+| `packages/agent`      | Server-only parsing, ranking, analytics and limited tools |
+| `packages/channel3`   | Normalized discovery and explicit demo merchant catalog   |
+| `packages/paypal`     | Sandbox OAuth, orders, captures, refunds and webhooks     |
+| `packages/agentguard` | Pure deterministic policy decisions                       |
+| `packages/database`   | Prisma migrations, repositories, immutable audit/history  |
+| `packages/ui`         | Shared shadcn components, theme and controls              |
 
 Use `pnpm dev:web` / `pnpm dev:api` to start one surface, `pnpm build` for production builds, and package `start` scripts afterward. Optional `pnpm --filter @mandatepay/database seed` creates clearly marked sample records, not provider-confirmed financial evidence.
 
@@ -88,4 +90,4 @@ Project source uses the root [MIT license](LICENSE). Provider services and third
 
 ## Current limits
 
-Authentication is currently a sandbox-oriented email/password implementation without verification email or password-reset delivery. Production hosting requires those account-recovery controls, provider configuration, security qualification and hosted acceptance gates. PayPal is sandbox-only when its execution phase is implemented. This repository is an implementation in progress, not a completed commerce demo or production-qualified release.
+Authentication is currently a sandbox-oriented email/password implementation without verification email or password-reset delivery. Production rollout requires account recovery, provider and security qualification, and hosted acceptance gates. PayPal execution is sandbox-only. This is a verified implementation checkpoint; real financial demo/provider/hosting gates are recorded in [the handoff](docs/implementation/PROGRESS.md).
