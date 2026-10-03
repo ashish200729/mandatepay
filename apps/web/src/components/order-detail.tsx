@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, CircleAlert, LoaderCircle, ReceiptText, RotateCcw } from "lucide-react";
+import { ArrowLeft, Check, LoaderCircle, ReceiptText, RotateCcw } from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { AuditTimeline } from "@/components/audit-timeline";
@@ -22,6 +22,13 @@ import {
 import { calculateRemainingRefundableMinor } from "@/lib/payments/refunds";
 import { consumeRefundDraft } from "@/lib/agent/refund-draft";
 import type { PaymentRecord } from "@/lib/payments/types";
+import {
+  workspaceField,
+  WorkspaceLoading,
+  WorkspaceNotice,
+  WorkspaceStatus,
+  WorkspaceSteps,
+} from "@/components/workspace-ui";
 
 function isCaptured(payment: PaymentRecord) {
   return (
@@ -171,16 +178,7 @@ export function OrderDetail({
     }
   }
 
-  if (loading)
-    return (
-      <div
-        className="flex min-h-56 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <LoaderCircle size={18} className="mr-2 animate-spin" aria-hidden="true" /> Checking server
-        payment status…
-      </div>
-    );
+  if (loading) return <WorkspaceLoading label="Checking server payment status…" />;
   if (!payment)
     return (
       <div
@@ -206,23 +204,23 @@ export function OrderDetail({
       >
         <ArrowLeft size={15} aria-hidden="true" /> Orders
       </Link>
+      <WorkspaceSteps
+        steps={["Proposal authorized", "PayPal approval", "Payment recorded"]}
+        current={captured ? 2 : 1}
+      />
       <div className="flex flex-wrap items-start justify-between gap-5">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Payment record
-          </p>
-          <h1 className="mt-2 font-editorial text-[clamp(2.6rem,5vw,4.8rem)] leading-[1.02] tracking-[-0.035em]">
+        <div className="min-w-0 flex-1 basis-80">
+          <h1 className="break-words font-editorial text-3xl leading-tight tracking-[-0.025em] sm:text-[40px]">
             {payment.product.title}
           </h1>
-          <p className="mt-4 text-base text-muted-foreground">
+          <p className="mt-3 break-words text-sm leading-6 text-muted-foreground">
             {payment.product.brand} · {payment.product.merchant} · {payment.product.condition}
           </p>
         </div>
-        <span className="rounded-full bg-secondary px-3 py-1 text-xs font-medium">
-          {payment.status}
-        </span>
+        <WorkspaceStatus value={payment.status} />
       </div>
-      <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+      {error ? <WorkspaceNotice error>{error}</WorkspaceNotice> : null}
+      <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
         <div className="grid gap-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <p className="text-xs text-muted-foreground">Amount</p>
@@ -236,11 +234,13 @@ export function OrderDetail({
           </div>
           <div>
             <p className="text-xs text-muted-foreground">PayPal order</p>
-            <p className="mt-1 font-medium">{payment.paypalOrderId ?? "Not created"}</p>
+            <p className="mt-1 break-all font-medium">{payment.paypalOrderId ?? "Not created"}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Capture</p>
-            <p className="mt-1 font-medium">{payment.paypalCaptureId ?? "Not confirmed"}</p>
+            <p className="mt-1 break-all font-medium">
+              {payment.paypalCaptureId ?? "Not confirmed"}
+            </p>
           </div>
         </div>
       </section>
@@ -276,7 +276,7 @@ export function OrderDetail({
           <p className="flex items-center gap-2 font-medium">
             <Check size={17} aria-hidden="true" /> Server confirmed capture
           </p>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-2 break-all text-sm text-muted-foreground">
             Capture ID: {payment.paypalCaptureId}
           </p>
         </div>
@@ -288,199 +288,199 @@ export function OrderDetail({
           </p>
         </div>
       )}
-      {captured ? (
-        <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h2 className="font-editorial text-2xl tracking-[-0.02em]">Refund this payment</h2>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                Refunds use the captured payment only. The server remains the authority for the
-                refundable amount.
-              </p>
-            </div>
-            <span className="rounded-full bg-sand px-3 py-1 text-xs font-medium">
-              Remaining {formatUsdLabel(remaining)}
-            </span>
-          </div>
-          {remaining > 0 || retryPending ? (
-            <div className="mt-7 space-y-5">
-              <div className="flex flex-wrap gap-3 text-sm">
-                <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 has-[:checked]:border-foreground has-[:checked]:bg-secondary has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring">
-                  <input
-                    type="radio"
-                    name="refund-mode"
-                    checked={refundMode === "full"}
-                    onChange={() => {
-                      setRefundMode("full");
-                      resetRefundIntent();
-                    }}
-                    className="size-4 accent-primary"
-                  />{" "}
-                  Full refund
-                </label>
-                <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 has-[:checked]:border-foreground has-[:checked]:bg-secondary has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring">
-                  <input
-                    type="radio"
-                    name="refund-mode"
-                    checked={refundMode === "partial"}
-                    onChange={() => {
-                      setRefundMode("partial");
-                      resetRefundIntent();
-                    }}
-                    className="size-4 accent-primary"
-                  />{" "}
-                  Partial refund
-                </label>
+      <div
+        className={cn("grid items-start gap-6", captured && "xl:grid-cols-[minmax(0,1fr)_340px]")}
+      >
+        {captured ? (
+          <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-medium">Refund this payment</h2>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  Refunds use the captured payment only. The server remains the authority for the
+                  refundable amount.
+                </p>
               </div>
-              {refundMode === "partial" ? (
-                <label className="block max-w-xs text-sm font-medium">
-                  Refund amount
-                  <input
-                    value={refundAmount}
+              <span className="rounded-full bg-sand px-3 py-1 text-xs font-medium">
+                Remaining {formatUsdLabel(remaining)}
+              </span>
+            </div>
+            {remaining > 0 || retryPending ? (
+              <div className="mt-7 space-y-5">
+                <div className="flex flex-wrap gap-3 text-sm">
+                  <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 has-[:checked]:border-foreground has-[:checked]:bg-secondary has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring">
+                    <input
+                      type="radio"
+                      name="refund-mode"
+                      disabled={refundPending || retryPending}
+                      checked={refundMode === "full"}
+                      onChange={() => {
+                        setRefundMode("full");
+                        resetRefundIntent();
+                      }}
+                      className="size-4 accent-primary"
+                    />{" "}
+                    Full refund
+                  </label>
+                  <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-border px-3 has-[:checked]:border-foreground has-[:checked]:bg-secondary has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring">
+                    <input
+                      type="radio"
+                      name="refund-mode"
+                      disabled={refundPending || retryPending}
+                      checked={refundMode === "partial"}
+                      onChange={() => {
+                        setRefundMode("partial");
+                        resetRefundIntent();
+                      }}
+                      className="size-4 accent-primary"
+                    />{" "}
+                    Partial refund
+                  </label>
+                </div>
+                {refundMode === "partial" ? (
+                  <label className="block max-w-xs text-sm font-medium">
+                    Refund amount
+                    <input
+                      value={refundAmount}
+                      onChange={(event) => {
+                        setRefundAmount(event.currentTarget.value);
+                        resetRefundIntent();
+                      }}
+                      disabled={refundPending || retryPending}
+                      inputMode="decimal"
+                      placeholder={formatUsdMinor(remaining)}
+                      className={cn(workspaceField, "mt-2")}
+                    />
+                  </label>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Full refund amount:{" "}
+                    <strong className="font-medium text-foreground">
+                      {formatUsdLabel(remaining)}
+                    </strong>
+                  </p>
+                )}
+                <div>
+                  <label htmlFor="refund-reason" className="block text-sm font-medium">
+                    Reason
+                  </label>
+                  <textarea
+                    id="refund-reason"
+                    value={refundReason}
                     onChange={(event) => {
-                      setRefundAmount(event.currentTarget.value);
+                      setRefundReason(event.currentTarget.value);
                       resetRefundIntent();
                     }}
                     disabled={refundPending || retryPending}
-                    inputMode="decimal"
-                    placeholder={formatUsdMinor(remaining)}
-                    className="mt-2 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8 disabled:opacity-60"
+                    placeholder="Tell us why this payment should be refunded."
+                    className="mt-2 min-h-24 w-full resize-y rounded-lg border border-border bg-background px-3 py-3 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
                   />
-                </label>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Full refund amount:{" "}
-                  <strong className="font-medium text-foreground">
-                    {formatUsdLabel(remaining)}
-                  </strong>
-                </p>
-              )}
-              <label className="block text-sm font-medium">
-                Reason
-                <textarea
-                  value={refundReason}
-                  onChange={(event) => {
-                    setRefundReason(event.currentTarget.value);
-                    resetRefundIntent();
-                  }}
-                  disabled={refundPending || retryPending}
-                  placeholder="Tell us why this payment should be refunded."
-                  className="mt-2 min-h-24 w-full resize-y rounded-xl border border-border bg-background px-3 py-3 text-sm leading-relaxed outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8 disabled:opacity-60"
-                />
-              </label>
-              {refundNotice ? (
-                <p
-                  className="rounded-xl border border-border bg-secondary px-4 py-3 text-sm"
-                  role="status"
-                >
-                  {refundNotice}
-                </p>
-              ) : null}
-              {refundError ? (
-                <p
-                  className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm"
-                  role="alert"
-                >
-                  {refundError}
-                </p>
-              ) : null}
-              {refundConfirm ? (
-                <div
-                  className="rounded-xl border border-foreground/15 bg-secondary p-4"
-                  role="alertdialog"
-                  aria-labelledby="refund-confirm-heading"
-                >
-                  <h3 id="refund-confirm-heading" className="font-medium">
-                    Confirm{" "}
-                    {refundMode === "full"
-                      ? `a full refund of ${formatUsdLabel(remaining)}`
-                      : `a refund of ${refundAmount || "the entered amount"}`}
-                    ?
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    This refunds the captured payment for {payment.product.title}. Capture{" "}
-                    {payment.paypalCaptureId} remains the original payment reference.
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void submitRefund()}
-                      disabled={refundPending}
-                      className={cn(buttonVariants({ size: "sm" }))}
-                    >
-                      {refundPending ? (
-                        <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
-                      ) : (
-                        <RotateCcw size={15} aria-hidden="true" />
-                      )}{" "}
-                      {refundPending ? "Submitting…" : "Confirm refund"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRefundConfirm(false)}
-                      disabled={refundPending}
-                      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-                    >
-                      Keep reviewing
-                    </button>
-                  </div>
                 </div>
-              ) : null}
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => void submitRefund(retryPending)}
-                  disabled={refundPending || (!retryPending && !refundReason.trim())}
-                  className={cn(buttonVariants({ variant: "outline" }))}
-                >
-                  {refundPending ? (
-                    <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
-                  ) : (
-                    <RotateCcw size={15} aria-hidden="true" />
-                  )}{" "}
-                  {retryPending ? "Retry pending refund" : "Request refund"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <p className="mt-7 rounded-xl border border-border bg-secondary px-4 py-3 text-sm">
-              No refundable amount remains according to the server refund history.
-            </p>
-          )}
-          <div className="mt-8 border-t border-border pt-6">
-            <h3 className="text-sm font-medium">Refund history</h3>
-            {payment.refunds.length ? (
-              <div className="mt-4 space-y-3">
-                {payment.refunds.map((refund) => (
-                  <div
-                    key={refund.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 text-sm"
+                {refundNotice ? (
+                  <p
+                    className="rounded-xl border border-border bg-secondary px-4 py-3 text-sm"
+                    role="status"
                   >
-                    <span>
-                      {refund.status} · {formatUsdLabel(refund.amount)}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {refund.paypalRefundId ?? "Provider reference pending"}
-                    </span>
+                    {refundNotice}
+                  </p>
+                ) : null}
+                {refundError ? (
+                  <p
+                    className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm"
+                    role="alert"
+                  >
+                    {refundError}
+                  </p>
+                ) : null}
+                {refundConfirm ? (
+                  <div
+                    className="rounded-xl border border-foreground/15 bg-secondary p-4"
+                    role="alertdialog"
+                    aria-labelledby="refund-confirm-heading"
+                  >
+                    <h3 id="refund-confirm-heading" className="font-medium">
+                      Confirm{" "}
+                      {refundMode === "full"
+                        ? `a full refund of ${formatUsdLabel(remaining)}`
+                        : `a refund of ${refundAmount || "the entered amount"}`}
+                      ?
+                    </h3>
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                      This refunds the captured payment for {payment.product.title}. Capture{" "}
+                      {payment.paypalCaptureId} remains the original payment reference.
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void submitRefund()}
+                        disabled={refundPending}
+                        className={cn(buttonVariants({ size: "sm" }))}
+                      >
+                        {refundPending ? (
+                          <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+                        ) : (
+                          <RotateCcw size={15} aria-hidden="true" />
+                        )}{" "}
+                        {refundPending ? "Submitting…" : "Confirm refund"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRefundConfirm(false)}
+                        disabled={refundPending}
+                        className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                      >
+                        Keep reviewing
+                      </button>
+                    </div>
                   </div>
-                ))}
+                ) : null}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void submitRefund(retryPending)}
+                    disabled={refundPending || (!retryPending && !refundReason.trim())}
+                    className={cn(buttonVariants({ variant: "outline" }))}
+                  >
+                    {refundPending ? (
+                      <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <RotateCcw size={15} aria-hidden="true" />
+                    )}{" "}
+                    {retryPending ? "Retry pending refund" : "Request refund"}
+                  </button>
+                </div>
               </div>
             ) : (
-              <p className="mt-3 text-sm text-muted-foreground">No refund requests recorded.</p>
+              <p className="mt-7 rounded-xl border border-border bg-secondary px-4 py-3 text-sm">
+                No refundable amount remains according to the server refund history.
+              </p>
             )}
-          </div>
-        </section>
-      ) : null}
-      <AuditTimeline entityId={payment.id} />
-      {error ? (
-        <div
-          className="flex items-start gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm"
-          role="alert"
-        >
-          <CircleAlert size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
-          {error}
-        </div>
-      ) : null}
+            <div className="mt-8 border-t border-border pt-6">
+              <h3 className="text-sm font-medium">Refund history</h3>
+              {payment.refunds.length ? (
+                <div className="mt-4 space-y-3">
+                  {payment.refunds.map((refund) => (
+                    <div
+                      key={refund.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 text-sm"
+                    >
+                      <span>
+                        {refund.status} · {formatUsdLabel(refund.amount)}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {refund.paypalRefundId ?? "Provider reference pending"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-muted-foreground">No refund requests recorded.</p>
+              )}
+            </div>
+          </section>
+        ) : null}
+        <AuditTimeline entityId={payment.id} />
+      </div>
     </div>
   );
 }

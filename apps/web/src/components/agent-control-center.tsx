@@ -12,7 +12,16 @@ import {
   type ValueFormatterParams,
   type ValueGetterParams,
 } from "ag-grid-community";
-import { LoaderCircle, RefreshCcw, Search, X } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ArrowUpRight,
+  BarChart3,
+  LoaderCircle,
+  RefreshCcw,
+  Search,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { formatUsdLabel, parseUsdDecimal } from "@/lib/mandates/money";
@@ -32,15 +41,41 @@ import type {
 
 const communityModules = [AllCommunityModule];
 const warmTheme = themeQuartz.withParams({
-  backgroundColor: "#FEFAF6",
+  backgroundColor: "#FFFFFF",
   foregroundColor: "#1B140E",
   borderColor: "#E7E0D7",
-  headerBackgroundColor: "#F3E7C9",
+  headerBackgroundColor: "#F8F1EB",
   headerTextColor: "#1B140E",
-  oddRowBackgroundColor: "#FCF8F3",
+  oddRowBackgroundColor: "#FEFAF6",
   fontFamily: "var(--font-satoshi)",
   fontSize: "13px",
+  headerFontSize: "12px",
+  headerFontWeight: 500,
+  rowHeight: 56,
+  headerHeight: 44,
+  wrapperBorderRadius: 12,
+  cellHorizontalPadding: 16,
 });
+
+const fieldClass =
+  "h-11 w-full min-w-0 rounded-lg border border-border bg-card px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+function StatusLabel({ value }: { value: string | null }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-full rounded-md px-2 py-1 text-xs font-medium leading-4",
+        value === "BLOCK"
+          ? "bg-secondary text-foreground"
+          : value === "REQUIRE_APPROVAL"
+            ? "bg-sand text-foreground"
+            : "bg-secondary/70 text-muted-foreground",
+      )}
+    >
+      {value?.replaceAll("_", " ") ?? "Not yet recorded"}
+    </span>
+  );
+}
 
 const emptyTotals: DashboardTotals = {
   purchases: 0,
@@ -106,10 +141,11 @@ function transactionDetailHref(row: TransactionRow) {
 const transactionColumns: ColDef<TransactionRow>[] = [
   {
     field: "activityAt",
-    headerName: "Date",
+    headerName: "Activity date · UTC",
     valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
       formatDate(String(value ?? "")),
-    minWidth: 150,
+    width: 170,
+    minWidth: 170,
   },
   {
     field: "product.title",
@@ -126,8 +162,34 @@ const transactionColumns: ColDef<TransactionRow>[] = [
       ) : (
         "—"
       ),
-    minWidth: 190,
-    flex: 1,
+    width: 220,
+    minWidth: 220,
+    tooltipField: "product.title",
+  },
+  {
+    field: "amountMinor",
+    headerName: "Amount",
+    valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
+      formatUsdLabel(Number(value)),
+    width: 105,
+    minWidth: 105,
+  },
+  {
+    field: "decision",
+    headerName: "Decision",
+    minWidth: 180,
+    width: 180,
+    cellRenderer: ({ value }: ICellRendererParams<TransactionRow>) => (
+      <StatusLabel value={typeof value === "string" ? value : null} />
+    ),
+  },
+  {
+    field: "paypalStatus",
+    headerName: "Payment",
+    width: 180,
+    minWidth: 180,
+    valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
+      typeof value === "string" ? value.replaceAll("_", " ") : "Not recorded",
   },
   {
     field: "mandate.title",
@@ -137,16 +199,7 @@ const transactionColumns: ColDef<TransactionRow>[] = [
     minWidth: 180,
   },
   { field: "merchant", headerName: "Merchant", minWidth: 140 },
-  {
-    field: "amountMinor",
-    headerName: "Amount",
-    valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
-      formatUsdLabel(Number(value)),
-    minWidth: 110,
-  },
-  { field: "decision", headerName: "Decision", minWidth: 140 },
   { field: "approvalType", headerName: "Approval", minWidth: 140 },
-  { field: "paypalStatus", headerName: "Payment", minWidth: 150 },
   {
     field: "paypalStatus",
     headerName: "Refund",
@@ -159,10 +212,11 @@ const transactionColumns: ColDef<TransactionRow>[] = [
 const policyColumns: ColDef<PolicyEventRow>[] = [
   {
     field: "createdAt",
-    headerName: "Date",
+    headerName: "Date · UTC",
     valueFormatter: ({ value }: ValueFormatterParams<PolicyEventRow>) =>
       formatDate(String(value ?? "")),
-    minWidth: 150,
+    minWidth: 170,
+    width: 170,
   },
   {
     field: "product.title",
@@ -178,22 +232,24 @@ const policyColumns: ColDef<PolicyEventRow>[] = [
       ) : (
         "—"
       ),
-    flex: 1,
-    minWidth: 190,
-  },
-  {
-    field: "product.merchant",
-    headerName: "Merchant",
-    valueGetter: ({ data }: ValueGetterParams<PolicyEventRow>) => data?.product.merchant,
-    minWidth: 140,
+    minWidth: 260,
+    width: 260,
+    tooltipField: "product.title",
   },
   {
     field: "reasonCodes",
     headerName: "Reason codes",
     valueFormatter: ({ value }: ValueFormatterParams<PolicyEventRow>) =>
       Array.isArray(value) ? value.join(", ") : "—",
-    flex: 1,
-    minWidth: 220,
+    minWidth: 240,
+    width: 240,
+  },
+  {
+    field: "product.merchant",
+    headerName: "Merchant",
+    valueGetter: ({ data }: ValueGetterParams<PolicyEventRow>) => data?.product.merchant,
+    minWidth: 170,
+    width: 170,
   },
   {
     field: "mandate.version",
@@ -225,10 +281,12 @@ function filtersFromQuery(value: Record<string, unknown>): DashboardFilters {
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-3 font-editorial text-3xl tracking-[-0.025em]">{value}</p>
-      {detail ? <p className="mt-2 text-xs text-muted-foreground">{detail}</p> : null}
+    <div className="min-w-0 bg-card px-5 py-6 sm:px-6">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-2 break-words text-[28px] font-medium leading-tight tracking-[-0.03em] tabular-nums sm:text-[32px]">
+        {value}
+      </p>
+      {detail ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</p> : null}
     </div>
   );
 }
@@ -246,12 +304,10 @@ function MiniBars({
 }) {
   const max = Math.max(1, ...rows.map((row) => row.amountMinor ?? row.count ?? 0));
   return (
-    <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 className="font-editorial text-2xl tracking-[-0.02em]">{title}</h2>
-        {description ? (
-          <p className="text-right text-xs text-muted-foreground">{description}</p>
-        ) : null}
+    <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-medium">{title}</h2>
+        {description ? <p className="text-[11px] text-muted-foreground">{description}</p> : null}
       </div>
       {rows.length ? (
         <div className="mt-6 space-y-4">
@@ -260,13 +316,15 @@ function MiniBars({
             return (
               <div key={row.label}>
                 <div className="flex justify-between gap-4 text-xs">
-                  <span className="truncate">{row.label}</span>
-                  <span className="tabular-nums text-muted-foreground">{valueLabel(row)}</span>
+                  <span className="min-w-0 break-words">{row.label}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {valueLabel(row)}
+                  </span>
                 </div>
-                <div className="mt-2 h-2 rounded-full bg-secondary">
+                <div className="mt-2 h-1.5 rounded-full bg-secondary">
                   <div
-                    className="h-2 rounded-full bg-primary"
-                    style={{ width: `${Math.max(4, (value / max) * 100)}%` }}
+                    className="h-1.5 rounded-full bg-foreground/70"
+                    style={{ width: `${(value / max) * 100}%` }}
                   />
                 </div>
               </div>
@@ -274,7 +332,10 @@ function MiniBars({
           })}
         </div>
       ) : (
-        <p className="mt-6 text-sm text-muted-foreground">No verified data in this view.</p>
+        <div className="mt-6 flex min-h-16 items-center gap-3 text-xs leading-5 text-muted-foreground">
+          <BarChart3 size={19} className="shrink-0" aria-hidden="true" />
+          <p>No captured spend in this view. Completed payments will appear here.</p>
+        </div>
       )}
     </section>
   );
@@ -288,6 +349,7 @@ export function AgentControlCenter() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [clarification, setClarification] = useState<string | null>(null);
   const [queryLoading, setQueryLoading] = useState(false);
@@ -300,6 +362,7 @@ export function AgentControlCenter() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadFailed(false);
     setError(null);
     try {
       const [summary, transactionPage, policy] = await Promise.all([
@@ -312,6 +375,7 @@ export function AgentControlCenter() {
       setNextCursor(transactionPage.nextCursor);
       setPolicyEvents(policy);
     } catch (cause) {
+      setLoadFailed(true);
       setError(cause instanceof Error ? cause.message : "The control center could not load.");
     } finally {
       setLoading(false);
@@ -440,15 +504,27 @@ export function AgentControlCenter() {
 
   if (loading)
     return (
-      <div
-        className="flex min-h-64 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <LoaderCircle size={18} className="mr-2 animate-spin" aria-hidden="true" /> Loading verified
-        control-center data…
+      <div role="status" aria-live="polite" className="space-y-6">
+        <span className="sr-only">Loading verified control-center data…</span>
+        <div
+          aria-hidden="true"
+          className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-4"
+        >
+          {[0, 1, 2, 3].map((key) => (
+            <div key={key} className="space-y-4 bg-card p-6">
+              <div className="h-3 w-24 rounded bg-secondary" />
+              <div className="h-8 w-20 rounded bg-secondary motion-safe:animate-pulse" />
+              <div className="h-3 w-32 max-w-full rounded bg-secondary" />
+            </div>
+          ))}
+        </div>
+        <div
+          aria-hidden="true"
+          className="h-80 rounded-xl border border-border bg-card motion-safe:animate-pulse"
+        />
       </div>
     );
-  if (error && !transactions.length && !policyEvents.length)
+  if (error && loadFailed && !transactions.length && !policyEvents.length)
     return (
       <div
         className="rounded-2xl border border-destructive/20 bg-destructive/8 p-6 text-sm"
@@ -468,75 +544,52 @@ export function AgentControlCenter() {
   return (
     <AgGridProvider modules={communityModules}>
       <div className="space-y-7">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-2">
+            <ShieldCheck size={15} aria-hidden="true" />
+            All-time overview · verified application records
+          </span>
+          <Link
+            href="/approvals"
+            className="inline-flex min-h-11 items-center gap-1.5 font-medium text-foreground hover:underline underline-offset-4"
+          >
+            Review approvals
+            <ArrowUpRight size={14} aria-hidden="true" />
+          </Link>
+        </div>
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-4">
           <Metric
             label="Captured purchases"
             value={String(totals.purchases)}
-            detail="Verified payment records"
+            detail={`Policy decisions: ${totals.policyAllowed} allowed · ${totals.humanApproved} human-approved`}
           />
           <Metric
             label="Captured spend"
             value={formatUsdLabel(totals.spendMinor)}
-            detail="Completed or settled payments"
+            detail={`${formatUsdLabel(totals.refundsMinor)} refunded`}
           />
           <Metric
             label="Blocked attempts"
             value={String(totals.blocked)}
             detail="Prevented by AgentGuard"
           />
-          <Metric label="Active mandates" value={String(totals.activeMandates)} />
+          <Metric
+            label="Active mandates"
+            value={String(totals.activeMandates)}
+            detail="Your current purchasing permissions"
+          />
         </div>
-        <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+        <section
+          aria-labelledby="transactions-heading"
+          className="min-w-0 overflow-hidden rounded-xl border border-border bg-card"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-5 sm:px-6">
             <div>
-              <h2 className="font-editorial text-2xl tracking-[-0.02em]">Ask the control center</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Queries filter the same owned transaction data shown below.
-              </p>
-            </div>
-            <span className="rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">
-              Read-only analytics
-            </span>
-          </div>
-          <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void runQuery();
-              }}
-              placeholder="Show blocked transactions this week"
-              className="h-11 flex-1 rounded-xl border border-border bg-background px-3 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8"
-            />
-            <button
-              type="button"
-              onClick={() => void runQuery()}
-              disabled={queryLoading || !query.trim()}
-              className={cn(buttonVariants({ size: "sm" }))}
-            >
-              {queryLoading ? (
-                <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
-              ) : (
-                <Search size={15} aria-hidden="true" />
-              )}{" "}
-              Ask
-            </button>
-          </div>
-          {clarification ? (
-            <p
-              className="mt-4 rounded-xl border border-border bg-secondary px-4 py-3 text-sm"
-              role="status"
-            >
-              {clarification}
-            </p>
-          ) : null}
-        </section>
-        <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h2 className="font-editorial text-2xl tracking-[-0.02em]">Transactions</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {scopeLabel} · captured spend is calculated from verified payment status.
+              <h2 id="transactions-heading" className="text-lg font-medium tracking-[-0.02em]">
+                Transactions
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {scopeLabel}. Open a product to inspect its decision and audit trail.
               </p>
             </div>
             <button
@@ -547,77 +600,204 @@ export function AgentControlCenter() {
               <X size={14} aria-hidden="true" /> Reset filters
             </button>
           </div>
-          {filterLabels.length ? (
-            <div className="mt-4 flex flex-wrap gap-2 text-xs" aria-label="Applied filters">
-              {filterLabels.map((label) => (
-                <span key={label} className="rounded-full bg-sand px-2.5 py-1">
-                  {label}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <input
-              value={minAmount}
-              onChange={(event) => setMinAmount(event.currentTarget.value)}
-              placeholder="Min amount USD"
-              inputMode="decimal"
-              className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8"
-            />
-            <input
-              value={maxAmount}
-              onChange={(event) => setMaxAmount(event.currentTarget.value)}
-              placeholder="Max amount USD"
-              inputMode="decimal"
-              className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8"
-            />
-            <select
-              value={decision}
-              onChange={(event) => setDecision(event.currentTarget.value)}
-              className="h-10 rounded-xl border border-border bg-background px-3 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8"
+          <div className="border-y border-border bg-secondary/45 px-5 py-5 sm:px-6">
+            <label htmlFor="dashboard-query" className="mb-2 block text-sm font-medium">
+              Ask the control center{" "}
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                Read-only analytics
+              </span>
+            </label>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void runQuery();
+              }}
+              className="flex flex-col gap-2 sm:flex-row"
             >
-              <option value="">All decisions</option>
-              <option value="ALLOW">ALLOW</option>
-              <option value="REQUIRE_APPROVAL">REQUIRE_APPROVAL</option>
-              <option value="BLOCK">BLOCK</option>
-            </select>
-            <div className="flex gap-2">
               <input
-                value={category}
-                onChange={(event) => setCategory(event.currentTarget.value)}
-                placeholder="Category"
-                className="h-10 min-w-0 flex-1 rounded-xl border border-border bg-background px-3 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8"
+                id="dashboard-query"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                placeholder="Show blocked transactions this week"
+                className={cn(fieldClass, "sm:flex-1")}
               />
               <button
-                type="button"
-                onClick={() => void applyFilters()}
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                type="submit"
+                disabled={queryLoading || !query.trim()}
+                className={cn(buttonVariants(), "rounded-lg")}
+              >
+                {queryLoading ? (
+                  <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <Search size={15} aria-hidden="true" />
+                )}{" "}
+                Ask
+              </button>
+            </form>
+            {clarification ? (
+              <p
+                className="mt-4 rounded-xl border border-border bg-secondary px-4 py-3 text-sm"
+                role="status"
+              >
+                {clarification}
+              </p>
+            ) : null}
+            {filterLabels.length ? (
+              <div className="mt-4 flex flex-wrap gap-2 text-xs" aria-label="Applied filters">
+                {filterLabels.map((label) => (
+                  <span key={label} className="rounded-full bg-sand px-2.5 py-1">
+                    {label}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void applyFilters();
+              }}
+              className="mt-5 grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1.2fr_1fr_auto]"
+            >
+              <label className="min-w-0 space-y-2 text-xs text-muted-foreground">
+                <span>Minimum · USD</span>
+                <input
+                  value={minAmount}
+                  onChange={(event) => setMinAmount(event.currentTarget.value)}
+                  placeholder="Min amount USD"
+                  inputMode="decimal"
+                  className={cn(fieldClass, "text-foreground")}
+                />
+              </label>
+              <label className="min-w-0 space-y-2 text-xs text-muted-foreground">
+                <span>Maximum · USD</span>
+                <input
+                  value={maxAmount}
+                  onChange={(event) => setMaxAmount(event.currentTarget.value)}
+                  placeholder="Max amount USD"
+                  inputMode="decimal"
+                  className={cn(fieldClass, "text-foreground")}
+                />
+              </label>
+              <label className="min-w-0 space-y-2 text-xs text-muted-foreground">
+                <span>Policy decision</span>
+                <select
+                  value={decision}
+                  onChange={(event) => setDecision(event.currentTarget.value)}
+                  className={cn(fieldClass, "text-foreground")}
+                >
+                  <option value="">All decisions</option>
+                  <option value="ALLOW">Allowed</option>
+                  <option value="REQUIRE_APPROVAL">Approval required</option>
+                  <option value="BLOCK">Blocked</option>
+                </select>
+              </label>
+              <label className="min-w-0 space-y-2 text-xs text-muted-foreground">
+                <span>Category</span>
+                <input
+                  value={category}
+                  onChange={(event) => setCategory(event.currentTarget.value)}
+                  placeholder="Category"
+                  className={cn(fieldClass, "text-foreground")}
+                />
+              </label>
+              <button
+                type="submit"
+                className={cn(
+                  buttonVariants({ variant: "outline" }),
+                  "rounded-lg sm:col-span-2 xl:col-span-1",
+                )}
               >
                 Apply
               </button>
+            </form>
+            {error ? (
+              <p className="mt-4 text-sm text-foreground" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </div>
+          {!transactions.length ? (
+            <div className="px-6 py-12 text-center">
+              <Search size={23} className="mx-auto text-muted-foreground" aria-hidden="true" />
+              <h3 className="mt-4 text-sm font-medium">
+                {filterLabels.length
+                  ? "No transactions match these filters."
+                  : "Your activity starts here."}
+              </h3>
+              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
+                {filterLabels.length
+                  ? "Adjust the filters or reset them to see all your transactions."
+                  : "Create a mandate and prepare a purchase. Its policy decision and payment status will appear here."}
+              </p>
+              {!filterLabels.length ? (
+                <Link
+                  href="/mandates/new"
+                  className={cn(buttonVariants({ variant: "outline" }), "mt-5")}
+                >
+                  Create your first mandate
+                  <ArrowUpRight size={15} aria-hidden="true" />
+                </Link>
+              ) : null}
             </div>
-          </div>
-          {error ? (
-            <p className="mt-4 text-sm text-foreground" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <div
-            className="ag-theme-quartz mt-6 w-full overflow-hidden rounded-xl"
-            style={{ minHeight: transactions.length ? 360 : 150 }}
-          >
-            <AgGridReact<TransactionRow>
-              theme={warmTheme}
-              rowData={transactions}
-              columnDefs={transactionColumns}
-              getRowId={({ data }: GetRowIdParams<TransactionRow>) => data.id}
-              domLayout="autoHeight"
-              pagination={false}
-              suppressCellFocus={false}
-            />
-          </div>
+          ) : (
+            <>
+              <div className="hidden min-w-0 px-5 py-5 xl:block sm:px-6">
+                <AgGridReact<TransactionRow>
+                  theme={warmTheme}
+                  rowData={transactions}
+                  columnDefs={transactionColumns}
+                  getRowId={({ data }: GetRowIdParams<TransactionRow>) => data.id}
+                  domLayout="autoHeight"
+                  pagination={false}
+                  suppressCellFocus={false}
+                  defaultColDef={{ sortable: true, resizable: true }}
+                />
+                <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                  <ArrowLeftRight size={14} aria-hidden="true" />
+                  Scroll horizontally for mandate, merchant, approval, and refund details.
+                </p>
+              </div>
+              <div className="divide-y divide-border xl:hidden">
+                {transactions.map((row) => (
+                  <article key={row.id} className="p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <Link
+                        href={transactionDetailHref(row)}
+                        aria-label={`Open details for ${row.product.title}`}
+                        className="min-w-0 text-sm font-medium leading-6 hover:underline underline-offset-4"
+                      >
+                        {row.product.title}
+                        <ArrowUpRight size={13} className="ml-1 inline" aria-hidden="true" />
+                      </Link>
+                      <span className="shrink-0 text-sm font-medium tabular-nums">
+                        {formatUsdLabel(row.amountMinor)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{row.merchant}</p>
+                    <div className="mt-3">
+                      <StatusLabel value={row.decision} />
+                    </div>
+                    <dl className="mt-4 space-y-2 text-xs">
+                      {[
+                        ["Date · UTC", formatDate(row.activityAt)],
+                        ["Mandate", `${row.mandate.title} · v${row.mandate.version}`],
+                        ["Approval", row.approvalType?.replaceAll("_", " ") ?? "—"],
+                        ["Payment", row.paypalStatus?.replaceAll("_", " ") ?? "Not yet recorded"],
+                        ["Refund", refundStatus(row.paypalStatus)],
+                      ].map(([label, value]) => (
+                        <div key={label} className="grid grid-cols-[80px_1fr] gap-3">
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd className="min-w-0 break-words text-right">{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
           {nextCursor ? (
-            <div className="mt-5 flex justify-center">
+            <div className="flex justify-center border-t border-border p-5">
               <button
                 type="button"
                 onClick={() => void loadMore()}
@@ -638,7 +818,9 @@ export function AgentControlCenter() {
             show a chart.
           </section>
         ) : (
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div
+            className={cn("grid gap-4", chartIntent === null ? "xl:grid-cols-3" : "sm:grid-cols-2")}
+          >
             {chartIntent === null ? (
               <>
                 <MiniBars
@@ -679,11 +861,11 @@ export function AgentControlCenter() {
             ) : null}
           </div>
         )}
-        <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
+        <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="font-editorial text-2xl tracking-[-0.02em]">Policy violations</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
+              <h2 className="text-lg font-medium tracking-[-0.02em]">Policy violations</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 Blocked proposal decisions returned by AgentGuard.
               </p>
             </div>
@@ -691,20 +873,53 @@ export function AgentControlCenter() {
               {policyEvents.length} events
             </span>
           </div>
-          <div
-            className="ag-theme-quartz mt-6 w-full overflow-hidden rounded-xl"
-            style={{ minHeight: policyEvents.length ? 300 : 150 }}
-          >
-            <AgGridReact<PolicyEventRow>
-              theme={warmTheme}
-              rowData={policyEvents}
-              columnDefs={policyColumns}
-              getRowId={({ data }: GetRowIdParams<PolicyEventRow>) => data.id}
-              domLayout="autoHeight"
-              pagination={false}
-              suppressCellFocus={false}
-            />
-          </div>
+          {!policyEvents.length ? (
+            <div className="mt-5 flex items-center gap-3 border-t border-border py-6 text-sm text-muted-foreground">
+              <ShieldCheck size={20} className="shrink-0" aria-hidden="true" />
+              <p>No blocked proposals. Policy violations will be recorded here.</p>
+            </div>
+          ) : (
+            <>
+              <div className="mt-5 hidden min-w-0 xl:block">
+                <AgGridReact<PolicyEventRow>
+                  theme={warmTheme}
+                  rowData={policyEvents}
+                  columnDefs={policyColumns}
+                  getRowId={({ data }: GetRowIdParams<PolicyEventRow>) => data.id}
+                  domLayout="autoHeight"
+                  pagination={false}
+                  suppressCellFocus={false}
+                  defaultColDef={{ sortable: true, resizable: true }}
+                />
+                <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                  <ArrowLeftRight size={14} aria-hidden="true" />
+                  Scroll horizontally for the complete mandate details.
+                </p>
+              </div>
+              <div className="mt-5 divide-y divide-border border-t border-border xl:hidden">
+                {policyEvents.map((event) => (
+                  <article key={event.id} className="py-4">
+                    <Link
+                      href={`/proposals/${encodeURIComponent(event.proposalId)}`}
+                      className="text-sm font-medium leading-6 hover:underline underline-offset-4"
+                    >
+                      {event.product.title}
+                      <ArrowUpRight size={13} className="ml-1 inline" aria-hidden="true" />
+                    </Link>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {event.product.merchant} · {formatDate(event.createdAt)} UTC
+                    </p>
+                    <p className="mt-3 text-xs leading-5">
+                      {event.reasonCodes.map((code) => code.replaceAll("_", " ")).join(", ")}
+                    </p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {event.mandate.title} · v{event.mandate.version}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
         </section>
       </div>
     </AgGridProvider>

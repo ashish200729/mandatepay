@@ -2,6 +2,7 @@ const DEFAULT_RETURN_TO = "/chat";
 
 const AUTHENTICATED_ROUTES = [
   "/chat",
+  "/discover",
   "/mandates",
   "/approvals",
   "/orders",

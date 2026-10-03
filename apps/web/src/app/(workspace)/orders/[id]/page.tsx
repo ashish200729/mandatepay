@@ -8,5 +8,5 @@ export default async function OrderDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const [{ id }, query] = await Promise.all([params, searchParams]);
-  return <OrderDetail paymentId={id} paypalState={query.paypal ?? null} />;
+  return <OrderDetail key={id} paymentId={id} paypalState={query.paypal ?? null} />;
 }

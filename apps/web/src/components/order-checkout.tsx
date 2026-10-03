@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import {
 } from "@/lib/payments/client";
 import type { ApprovalDetail } from "@/lib/approvals/types";
 import type { PayPalStatus } from "@/lib/payments/types";
+import { WorkspaceLoading, WorkspaceSteps } from "@/components/workspace-ui";
 
 export function OrderCheckout({ proposalId }: { proposalId: string }) {
   const [approval, setApproval] = useState<ApprovalDetail | null>(null);
@@ -28,26 +29,36 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestVersion = useRef(0);
+
+  const load = useCallback(async () => {
+    const version = ++requestVersion.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextApproval, nextPaypal] = await Promise.all([
+        getApproval(proposalId),
+        getPaypalStatus(),
+      ]);
+      if (version !== requestVersion.current) return;
+      setApproval(nextApproval);
+      setPaypalStatus(nextPaypal);
+    } catch (cause) {
+      if (version === requestVersion.current)
+        setError(cause instanceof Error ? cause.message : "Checkout is unavailable.");
+    } finally {
+      if (version === requestVersion.current) setLoading(false);
+    }
+  }, [proposalId]);
 
   useEffect(() => {
-    let active = true;
-    void Promise.all([getApproval(proposalId), getPaypalStatus()])
-      .then(([nextApproval, nextPaypal]) => {
-        if (active) {
-          setApproval(nextApproval);
-          setPaypalStatus(nextPaypal);
-        }
-      })
-      .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : "Checkout is unavailable.");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    // Synchronize the owned proposal and provider configuration, with retry support.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
     return () => {
-      active = false;
+      requestVersion.current += 1;
     };
-  }, [proposalId]);
+  }, [load]);
 
   async function startCheckout() {
     if (!approval || creating || approval.proposal.status !== "AUTHORIZED") return;
@@ -65,26 +76,30 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
     }
   }
 
-  if (loading)
-    return (
-      <div
-        className="flex min-h-56 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <LoaderCircle size={18} className="mr-2 animate-spin" aria-hidden="true" /> Checking
-        proposal and Sandbox status…
-      </div>
-    );
+  if (loading) return <WorkspaceLoading label="Checking proposal and Sandbox status…" />;
   if (error && !approval)
     return (
       <div
         className="rounded-2xl border border-destructive/20 bg-destructive/8 p-6 text-sm"
         role="alert"
       >
+        <h1 className="mb-3 font-editorial text-3xl">Checkout unavailable</h1>
         <p>{error}</p>
-        <Link href="/orders" className="mt-4 inline-flex font-medium underline underline-offset-4">
-          Back to orders
-        </Link>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => void load()}
+            className={buttonVariants({ variant: "outline" })}
+          >
+            Try again
+          </button>
+          <Link
+            href={`/proposals/${encodeURIComponent(proposalId)}`}
+            className={buttonVariants({ variant: "ghost" })}
+          >
+            Review proposal
+          </Link>
+        </div>
       </div>
     );
   if (!approval) return null;
@@ -98,30 +113,29 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
       >
         <ArrowLeft size={15} aria-hidden="true" /> Orders
       </Link>
+      <WorkspaceSteps
+        steps={["Review proposal", "PayPal approval", "Confirm payment"]}
+        current={0}
+      />
       <div className="flex flex-wrap items-start justify-between gap-5">
         <div>
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Sandbox checkout
-          </p>
-          <h1 className="mt-2 font-editorial text-[clamp(2.6rem,5vw,4.8rem)] leading-[1.02] tracking-[-0.035em]">
+          <h1 className="font-editorial text-3xl leading-tight tracking-[-0.025em] sm:text-[40px]">
             Confirm your purchase.
           </h1>
-          <p className="mt-4 max-w-[600px] text-base leading-relaxed text-muted-foreground">
+          <p className="mt-3 max-w-[600px] text-sm leading-6 text-muted-foreground">
             Review the authorized proposal before opening PayPal Sandbox. This step does not capture
             money.
           </p>
         </div>
         <span className="rounded-full bg-sand px-3 py-1 text-xs font-medium">PayPal Sandbox</span>
       </div>
-      <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+      <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-7">
         <div className="flex items-start gap-3">
           <span className="flex size-11 items-center justify-center rounded-xl bg-sand">
             <ShieldCheck size={20} aria-hidden="true" />
           </span>
-          <div>
-            <h2 className="font-editorial text-2xl tracking-[-0.02em]">
-              {approval.proposal.product.title}
-            </h2>
+          <div className="min-w-0 break-words">
+            <h2 className="text-lg font-medium leading-7">{approval.proposal.product.title}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               {approval.proposal.product.brand} · {approval.proposal.product.merchant} ·{" "}
               {approval.proposal.product.condition}
@@ -186,7 +200,7 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
           </p>
         </div>
       ) : (
-        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-sand-border bg-sand p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-sand-border bg-sand/70 p-5 sm:p-6">
           <div>
             <p className="flex items-center gap-2 text-sm font-medium">
               <Check size={16} aria-hidden="true" /> Server authorization confirmed

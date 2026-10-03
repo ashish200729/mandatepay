@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, CircleAlert, Clock3, LoaderCircle, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, Check, CircleAlert, Clock3, LoaderCircle, ShieldCheck, X } from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/approvals/client";
 import { approvalReasonText } from "@/lib/approvals/reasons";
 import type { ApprovalDetail, ApprovalProposal } from "@/lib/approvals/types";
+import { WorkspaceLoading, WorkspaceStatus } from "@/components/workspace-ui";
 
 function ProposalSummary({ proposal }: { proposal: ApprovalProposal }) {
   return (
@@ -38,28 +39,40 @@ function ProposalSummary({ proposal }: { proposal: ApprovalProposal }) {
   );
 }
 
-function ProposalCard({ proposal, onOpen }: { proposal: ApprovalProposal; onOpen: () => void }) {
+function ProposalCard({
+  proposal,
+  onOpen,
+  active,
+  disabled,
+}: {
+  proposal: ApprovalProposal;
+  onOpen: (button: HTMLButtonElement) => void;
+  active: boolean;
+  disabled: boolean;
+}) {
   const resolved = proposal.status !== "AWAITING_APPROVAL";
   return (
-    <article className="rounded-2xl border border-border bg-card p-5 sm:p-7">
+    <article
+      className={cn(
+        "min-w-0 rounded-xl border bg-card p-4",
+        active ? "border-foreground" : "border-border",
+      )}
+    >
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sand">
-            <ShieldCheck size={18} aria-hidden="true" />
-          </span>
-          <div>
-            <h2 className="font-editorial text-2xl tracking-[-0.02em]">{proposal.product.title}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {proposal.product.brand} · {proposal.product.merchant} · {proposal.product.condition}
-            </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="min-w-0 break-words">
+            <h2 className="text-sm font-medium leading-6">{proposal.product.title}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{proposal.product.merchant}</p>
           </div>
         </div>
-        <span className="rounded-full bg-secondary px-3 py-1 text-xs font-medium">
-          {proposal.status.replaceAll("_", " ")}
+        <span className="shrink-0 text-sm font-medium tabular-nums">
+          {formatUsdLabel(proposal.total)}
         </span>
       </div>
-      <ProposalSummary proposal={proposal} />
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5 text-xs text-muted-foreground">
+      <div className="mt-3">
+        <WorkspaceStatus value={proposal.status} />
+      </div>
+      <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
         <span>
           Mandate: {proposal.mandate.title} · v{proposal.mandate.version}
         </span>
@@ -70,19 +83,13 @@ function ProposalCard({ proposal, onOpen }: { proposal: ApprovalProposal; onOpen
             : "No additional approval required"}
         </span>
       </div>
-      <div className="mt-5 flex justify-end">
-        {proposal.status === "AUTHORIZED" ? (
-          <Link
-            href={`/orders/new?proposalId=${encodeURIComponent(proposal.id)}`}
-            className={cn(buttonVariants({ size: "sm" }), "mr-2")}
-          >
-            Continue to Sandbox checkout
-          </Link>
-        ) : null}
+      <div className="mt-3">
         <button
           type="button"
-          onClick={onOpen}
-          className={cn(buttonVariants({ variant: resolved ? "outline" : "default" }))}
+          onClick={(event) => onOpen(event.currentTarget)}
+          disabled={disabled}
+          aria-pressed={active}
+          className={cn(buttonVariants({ variant: "outline" }), "w-full rounded-lg")}
         >
           {resolved ? "View decision" : "Review proposal"}
         </button>
@@ -91,19 +98,46 @@ function ProposalCard({ proposal, onOpen }: { proposal: ApprovalProposal; onOpen
   );
 }
 
-export function ApprovalInbox() {
+export function ApprovalInbox({ initialProposalId = "" }: { initialProposalId?: string }) {
   const [proposals, setProposals] = useState<ApprovalProposal[]>([]);
   const [selected, setSelected] = useState<ApprovalDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<"approve" | "reject" | null>(null);
   const [confirm, setConfirm] = useState<"approve" | "reject" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const openVersion = useRef(0);
+  const initialSelection = useRef(initialProposalId);
+  const confirmHeading = useRef<HTMLHeadingElement>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const returnFocus = useRef<HTMLButtonElement | null>(null);
+  const inboxList = useRef<HTMLDivElement>(null);
+  const selectedId = selected?.proposal.id;
+
+  useEffect(() => {
+    if (!selectedId) return;
+    detailHeading.current?.focus({ preventScroll: true });
+    if (window.matchMedia("(max-width: 1279px)").matches)
+      detailHeading.current?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (confirm) {
+      confirmHeading.current?.focus();
+      confirmHeading.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [confirm]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       setProposals(await listApprovals());
+      if (initialSelection.current) {
+        const id = initialSelection.current;
+        initialSelection.current = "";
+        setSelected(await getApproval(id));
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Approvals could not be loaded.");
     } finally {
@@ -115,15 +149,26 @@ export function ApprovalInbox() {
     // Initial synchronization with the protected approvals collection.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
+    return () => {
+      openVersion.current += 1;
+    };
   }, [load]);
 
   async function openProposal(proposal: ApprovalProposal) {
+    if (pending) return;
+    const version = ++openVersion.current;
     setError(null);
     setConfirm(null);
+    setSelected(null);
+    setOpeningId(proposal.id);
     try {
-      setSelected(await getApproval(proposal.id));
+      const detail = await getApproval(proposal.id);
+      if (version === openVersion.current) setSelected(detail);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "This proposal could not be loaded.");
+      if (version === openVersion.current)
+        setError(cause instanceof Error ? cause.message : "This proposal could not be loaded.");
+    } finally {
+      if (version === openVersion.current) setOpeningId(null);
     }
   }
 
@@ -150,9 +195,9 @@ export function ApprovalInbox() {
           await load();
           setError(
             refreshed.proposal.status === "AUTHORIZED"
-              ? "This proposal was already approved elsewhere. No second decision was recorded."
+              ? "This proposal was already authorized elsewhere. No second decision was recorded."
               : refreshed.proposal.status === "BLOCKED"
-                ? "This proposal was already rejected elsewhere. No second decision was recorded."
+                ? "This proposal was already blocked elsewhere. No second decision was recorded."
                 : "This proposal changed elsewhere. The inbox has been refreshed.",
           );
         } catch {
@@ -167,16 +212,7 @@ export function ApprovalInbox() {
     }
   }
 
-  if (loading)
-    return (
-      <div
-        className="flex min-h-56 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <LoaderCircle size={18} className="mr-2 animate-spin" aria-hidden="true" /> Loading
-        approvals…
-      </div>
-    );
+  if (loading) return <WorkspaceLoading label="Loading approvals…" />;
   if (error && !proposals.length)
     return (
       <div
@@ -195,10 +231,10 @@ export function ApprovalInbox() {
     );
 
   return (
-    <div className="space-y-5">
+    <div className="grid items-start gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
       {error ? (
         <div
-          className="flex items-start gap-3 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm"
+          className="flex items-start gap-3 rounded-xl border border-border bg-secondary px-4 py-3 text-sm xl:col-span-2"
           role="alert"
         >
           <CircleAlert size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -206,7 +242,7 @@ export function ApprovalInbox() {
         </div>
       ) : null}
       {!proposals.length ? (
-        <section className="rounded-2xl border border-border bg-card p-8 text-center sm:p-14">
+        <section className="rounded-xl border border-border bg-card p-8 text-center sm:p-12 xl:col-span-2">
           <Check size={28} className="mx-auto" aria-hidden="true" />
           <h2 className="mt-5 font-editorial text-3xl tracking-[-0.025em]">
             Nothing needs your attention.
@@ -217,49 +253,84 @@ export function ApprovalInbox() {
           </p>
         </section>
       ) : (
-        <div className="space-y-5">
-          {proposals.map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              onOpen={() => void openProposal(proposal)}
-            />
-          ))}
+        <div
+          ref={inboxList}
+          className={cn(
+            "order-2 min-w-0 space-y-3 xl:order-1",
+            (selected || openingId) && "hidden xl:block",
+          )}
+        >
+          <h2 className="mb-4 text-sm font-medium">Proposals · {proposals.length}</h2>
+          {[...proposals]
+            .sort(
+              (a, b) =>
+                Number(b.status === "AWAITING_APPROVAL") - Number(a.status === "AWAITING_APPROVAL"),
+            )
+            .map((proposal) => (
+              <ProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                onOpen={(button) => {
+                  returnFocus.current = button;
+                  void openProposal(proposal);
+                }}
+                active={selected?.proposal.id === proposal.id}
+                disabled={Boolean(pending)}
+              />
+            ))}
         </div>
       )}
 
       {selected ? (
         <section
-          className="rounded-2xl border border-sand-border bg-sand p-5 sm:p-7"
+          className="order-1 min-w-0 rounded-xl border border-border bg-card p-5 sm:p-6 xl:order-2"
           aria-labelledby="approval-detail-heading"
         >
+          <button
+            type="button"
+            disabled={Boolean(pending)}
+            onClick={() => {
+              setSelected(null);
+              setConfirm(null);
+              setError(null);
+              requestAnimationFrame(() =>
+                (
+                  returnFocus.current ??
+                  inboxList.current?.querySelector<HTMLButtonElement>("button")
+                )?.focus(),
+              );
+            }}
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "mb-4 xl:hidden")}
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+            Back to approval inbox
+          </button>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                Policy decision
-              </p>
               <h2
+                ref={detailHeading}
+                tabIndex={-1}
                 id="approval-detail-heading"
-                className="mt-2 font-editorial text-3xl tracking-[-0.025em]"
+                className="break-words text-xl font-medium leading-7 tracking-[-0.02em]"
               >
                 {selected.proposal.product.title}
               </h2>
             </div>
             <span className="rounded-full bg-background px-3 py-1 text-xs font-medium">
               {selected.proposal.status === "AUTHORIZED"
-                ? "Human approved"
-                : (selected.decision?.decision ?? selected.proposal.status)}
+                ? "Authorized"
+                : (selected.decision?.decision ?? selected.proposal.status).replaceAll("_", " ")}
             </span>
           </div>
-          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-4 rounded-lg bg-sand/60 p-4 text-sm leading-6">
             {selected.proposal.status === "AUTHORIZED"
-              ? "You approved this exact proposal. No payment has been made; continue to PayPal Sandbox to complete checkout."
+              ? "This proposal is authorized. Continue to PayPal Sandbox to review and complete checkout."
               : approvalReasonText(selected.decision)}
           </p>
           <div className="mt-5">
             <ProposalSummary proposal={selected.proposal} />
           </div>
-          <div className="mt-5 grid gap-4 border-t border-sand-border pt-5 text-sm sm:grid-cols-2">
+          <div className="mt-5 grid gap-4 border-t border-border pt-5 text-sm sm:grid-cols-2">
             <div>
               <p className="text-xs text-muted-foreground">Merchant</p>
               <p className="mt-1 font-medium">{selected.proposal.product.merchant}</p>
@@ -306,7 +377,7 @@ export function ApprovalInbox() {
           ) : selected.proposal.status === "AUTHORIZED" ? (
             <Link
               href={`/orders/new?proposalId=${encodeURIComponent(selected.proposal.id)}`}
-              className={cn(buttonVariants({ size: "lg" }))}
+              className={cn(buttonVariants({ size: "lg" }), "mt-6")}
             >
               Continue to Sandbox checkout
             </Link>
@@ -322,7 +393,12 @@ export function ApprovalInbox() {
               role="alertdialog"
               aria-labelledby="approval-confirm-heading"
             >
-              <h3 id="approval-confirm-heading" className="font-medium">
+              <h3
+                ref={confirmHeading}
+                tabIndex={-1}
+                id="approval-confirm-heading"
+                className="font-medium"
+              >
                 {confirm === "approve" ? "Approve this proposal?" : "Reject this proposal?"}
               </h3>
               <p className="mt-2 text-sm text-muted-foreground">
@@ -349,6 +425,19 @@ export function ApprovalInbox() {
               </div>
             </div>
           ) : null}
+        </section>
+      ) : openingId ? (
+        <div className="order-1 xl:order-2">
+          <WorkspaceLoading label="Loading proposal details…" />
+        </div>
+      ) : proposals.length ? (
+        <section className="hidden min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 text-center xl:flex">
+          <ShieldCheck size={25} className="text-muted-foreground" aria-hidden="true" />
+          <h2 className="mt-4 font-editorial text-2xl">Choose a proposal to review.</h2>
+          <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
+            See the exact amount, the reason approval is needed, and the permissions behind the
+            proposal before you decide.
+          </p>
         </section>
       ) : null}
     </div>

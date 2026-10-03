@@ -16,9 +16,7 @@ import {
 } from "@/lib/mandates/types";
 
 const fieldClassName =
-  "mt-2 h-11 w-full rounded-xl border border-border bg-background px-3 text-sm transition-colors placeholder:text-muted-foreground/70 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-4 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60";
-const textAreaClassName =
-  "mt-2 min-h-24 w-full resize-y rounded-xl border border-border bg-background px-3 py-3 text-sm leading-relaxed transition-colors placeholder:text-muted-foreground/70 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-4 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60";
+  "mt-2 h-11 w-full min-w-0 rounded-lg border border-border bg-background px-3 text-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 export const EMPTY_MANDATE_FORM: MandateFormState = {
   title: "",
@@ -158,14 +156,16 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-t border-border pt-7 first:border-t-0 first:pt-0">
-      <h3 className="font-editorial text-2xl tracking-[-0.02em]">{title}</h3>
-      {description ? (
-        <p className="mt-2 max-w-[600px] text-sm leading-relaxed text-muted-foreground">
-          {description}
-        </p>
-      ) : null}
-      <div className="mt-5">{children}</div>
+    <section className="grid gap-5 border-t border-border pt-7 first:border-t-0 first:pt-0 xl:grid-cols-[200px_minmax(0,1fr)]">
+      <div>
+        <h3 className="text-base font-medium">{title}</h3>
+        {description ? (
+          <p className="mt-2 max-w-[600px] text-sm leading-relaxed text-muted-foreground">
+            {description}
+          </p>
+        ) : null}
+      </div>
+      <div className="min-w-0">{children}</div>
     </section>
   );
 }
@@ -225,9 +225,9 @@ function ListField({
   return (
     <label htmlFor={id} className="block text-sm font-medium">
       {label}
-      <textarea
+      <input
         id={id}
-        className={textAreaClassName}
+        className={fieldClassName}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder={placeholder}
@@ -260,7 +260,7 @@ export function MandateForm({
   };
 
   return (
-    <div className="space-y-8 rounded-2xl border border-border bg-card p-6 sm:p-8">
+    <div className="min-w-0 space-y-7 rounded-xl border border-border bg-card p-5 sm:p-7">
       <Section
         title="What this covers"
         description="Keep the intent concrete. The agent will use these words to find suitable products later."
@@ -287,7 +287,7 @@ export function MandateForm({
         title="Spending permission"
         description="The maximum is a hard ceiling. The automatic limit is the most the agent may spend without asking you."
       >
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-5 sm:grid-cols-2">
           <TextField
             label="Maximum transaction"
             value={value.transactionLimit}
@@ -413,7 +413,7 @@ export function MandateForm({
         title="Spending windows"
         description="All dates and period limits use UTC. Empty optional periods remain unset."
       >
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-5 sm:grid-cols-2">
           <TextField
             label="Daily limit"
             value={value.dailyLimit}

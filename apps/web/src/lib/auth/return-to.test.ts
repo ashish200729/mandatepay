@@ -4,6 +4,9 @@ import { getAuthLink, getSafeReturnTo } from "./return-to";
 describe("safe auth return paths", () => {
   it("keeps an allowed workspace path and its query string", () => {
     expect(getSafeReturnTo("/dashboard?range=week")).toBe("/dashboard?range=week");
+    expect(getSafeReturnTo("/discover?mandate=owned_mandate")).toBe(
+      "/discover?mandate=owned_mandate",
+    );
     expect(getSafeReturnTo("/mandates/mandate_123")).toBe("/mandates/mandate_123");
     expect(getSafeReturnTo("/proposals/proposal_123")).toBe("/proposals/proposal_123");
   });

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { captureWorkspace } from "./workspace-capture";
 
 const isolatedApiUrl = process.env.MANDATEPAY_E2E_API_URL ?? process.env.API_URL ?? "";
 const configured =
@@ -104,7 +105,7 @@ test.describe("conversational shopping and read-only dashboard", () => {
     ]);
     const proposalCard = page.getByRole("article").filter({ hasText: "$169.00" });
     await expect(
-      proposalCard.getByText("AgentGuard: REQUIRE_APPROVAL", { exact: true }),
+      proposalCard.getByText("AgentGuard: REQUIRE APPROVAL", { exact: true }),
     ).toBeVisible();
     await expect(
       proposalCard.getByText("Selected headphones mandate · v1", { exact: true }),
@@ -115,7 +116,7 @@ test.describe("conversational shopping and read-only dashboard", () => {
     ).toHaveCount(0);
     await page.getByText("Show server steps", { exact: true }).click();
     await expect(page.getByText("compare_products", { exact: true })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("chat-desktop.png"), fullPage: true });
+    await captureWorkspace(page, testInfo, "chat");
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

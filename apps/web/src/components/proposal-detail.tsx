@@ -121,7 +121,7 @@ export function ProposalDetail({ proposalId }: { proposalId: string }) {
     <div className="space-y-6">
       {backLink}
       <section
-        className="rounded-2xl border border-border bg-card p-6 sm:p-8"
+        className="rounded-xl border border-border bg-card p-5 sm:p-6"
         aria-labelledby="proposal-heading"
       >
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -202,14 +202,11 @@ export function ProposalDetail({ proposalId }: { proposalId: string }) {
       </section>
 
       <section
-        className="rounded-2xl border border-sand-border bg-sand p-6 sm:p-8"
+        className="rounded-xl border border-sand-border bg-sand/60 p-5 sm:p-6"
         aria-labelledby="proposal-policy-heading"
       >
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <h2
-            id="proposal-policy-heading"
-            className="flex items-center gap-2 font-editorial text-2xl tracking-[-0.02em]"
-          >
+          <h2 id="proposal-policy-heading" className="flex items-center gap-2 text-lg font-medium">
             <ShieldCheck size={20} aria-hidden="true" /> Policy decision
           </h2>
           <span className="rounded-full bg-background px-3 py-1.5 text-xs font-medium">
@@ -238,7 +235,10 @@ export function ProposalDetail({ proposalId }: { proposalId: string }) {
             <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
               Review this exact proposal in the approval inbox before recording a decision.
             </p>
-            <Link href="/approvals" className={cn(buttonVariants())}>
+            <Link
+              href={`/approvals?proposal=${encodeURIComponent(proposal.id)}`}
+              className={cn(buttonVariants())}
+            >
               Open approval inbox <ArrowRight size={15} aria-hidden="true" />
             </Link>
           </div>

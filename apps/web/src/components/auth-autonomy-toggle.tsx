@@ -61,7 +61,6 @@ export function AuthAutonomyToggle({ initialEnabled }: { initialEnabled: boolean
     if (pending || nextEnabled === enabled) return;
 
     const previous = enabled;
-    setEnabled(nextEnabled);
     setPending(true);
     setError(null);
 
@@ -96,7 +95,7 @@ export function AuthAutonomyToggle({ initialEnabled }: { initialEnabled: boolean
   }
 
   return (
-    <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+    <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-6">
       <div className="flex items-start gap-4">
         <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-sand">
           <ShieldCheck size={20} aria-hidden="true" />
@@ -104,12 +103,10 @@ export function AuthAutonomyToggle({ initialEnabled }: { initialEnabled: boolean
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="font-editorial text-2xl tracking-[-0.02em]">
-                Automatic purchase permissions
-              </h2>
+              <h2 className="text-lg font-medium leading-6">Automatic purchase permissions</h2>
               <p
                 id={descriptionId}
-                className="mt-2 max-w-[470px] text-sm leading-[1.75] text-muted-foreground"
+                className="mt-3 max-w-[470px] text-sm leading-6 text-muted-foreground"
               >
                 Allow proposals inside an active mandate&apos;s limits to proceed without an extra
                 approval. PayPal may still ask for buyer approval, and hard policy violations always

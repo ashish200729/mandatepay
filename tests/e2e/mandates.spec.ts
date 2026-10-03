@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { captureWorkspace } from "./workspace-capture";
 
 const isolatedApiUrl = process.env.MANDATEPAY_E2E_API_URL ?? process.env.API_URL ?? "";
 const mandatesConfigured =
@@ -16,7 +17,8 @@ test.describe("mandate workflow", () => {
     );
   });
 
-  test("parses, reviews, saves, activates, and reopens a mandate", async ({ page }) => {
+  test("parses, reviews, saves, activates, and reopens a mandate", async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const email = `mandate-e2e-${suffix}@mandatepay.local`;
     const password = `Test-${suffix}-password`;
@@ -28,6 +30,7 @@ test.describe("mandate workflow", () => {
     await page.getByRole("button", { name: "Create account" }).click();
 
     await expect(page).toHaveURL(/\/mandates\/new$/);
+    await captureWorkspace(page, testInfo, "mandate-create");
     await page
       .getByLabel("What should your agent be allowed to buy?")
       .fill(
@@ -39,12 +42,22 @@ test.describe("mandate workflow", () => {
       page.getByRole("heading", { name: "These are the permissions your agent will receive." }),
     ).toBeVisible();
     await expect(page.getByText("Original instruction")).toBeVisible();
+    await page.getByRole("button", { name: "Edit permissions", exact: true }).click();
     await expect(page.getByLabel("Maximum transaction")).toHaveValue("180.00");
     await expect(page.getByLabel("Automatic spending")).toHaveValue("150.00");
+    await page.getByLabel("Maximum transaction").fill("120.00");
+    await page.getByRole("button", { name: "Done editing", exact: true }).click();
+    await expect(page.getByRole("main").getByRole("alert")).toContainText(
+      "automatic spending limit cannot exceed",
+    );
+    await page.getByLabel("Maximum transaction").fill("180.00");
+    await page.getByRole("button", { name: "Done editing", exact: true }).click();
+    await captureWorkspace(page, testInfo, "mandate-review");
 
     await page.getByLabel(/I have reviewed these exact permissions/).check();
     await page.getByRole("button", { name: "Save draft" }).click();
     await expect(page.getByText("Draft saved.")).toBeVisible();
+    await captureWorkspace(page, testInfo, "mandate-saved");
 
     await page.getByRole("button", { name: "Activate mandate" }).click();
     await expect(page).toHaveURL(/\/mandates\/[^/]+$/);
@@ -62,10 +75,12 @@ test.describe("mandate workflow", () => {
     await page.getByRole("button", { name: "Resume mandate" }).click();
     await expect(page.getByText("ACTIVE")).toBeVisible();
     const mandateDetailUrl = page.url();
+    await captureWorkspace(page, testInfo, "mandate-detail");
 
     await page.getByRole("link", { name: "Chat", exact: true }).click();
     await expect(page).toHaveURL(/\/chat$/);
-    await page.getByText("Use structured product discovery instead", { exact: true }).click();
+    await page.getByRole("link", { name: "Browse products", exact: true }).click();
+    await expect(page).toHaveURL(/\/discover/);
     await page.getByLabel("Search products").fill("headphones");
     await page.getByRole("button", { name: "Search", exact: true }).click();
     await expect(page.getByText(/Demo Catalog — illustrative products/)).toBeVisible();
@@ -74,15 +89,17 @@ test.describe("mandate workflow", () => {
     for (let index = 0; index < 3; index += 1) await comparisons.nth(index).check();
     await page.getByRole("button", { name: "Compare selected (3)" }).click();
     await expect(page.getByRole("heading", { name: "Comparison ready." })).toBeVisible();
+    await captureWorkspace(page, testInfo, "discovery");
     await page
       .getByRole("button", { name: /Prepare proposal/ })
       .nth(1)
       .click();
-    await expect(page.getByText("REQUIRE_APPROVAL", { exact: true })).toBeVisible();
+    await expect(page.getByText("REQUIRE APPROVAL", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: "Approvals", exact: true }).click();
     await expect(page).toHaveURL(/\/approvals$/);
     await page.getByRole("button", { name: "Review proposal" }).click();
+    await captureWorkspace(page, testInfo, "approval");
     await page.getByRole("button", { name: "Approve proposal", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Approve this proposal?" })).toBeVisible();
     await page.getByRole("button", { name: "Yes, approve", exact: true }).click();
@@ -102,10 +119,12 @@ test.describe("mandate workflow", () => {
       .getByRole("link", { name: "Continue to Sandbox checkout" })
       .click();
     await expect(page.getByRole("heading", { name: "Confirm your purchase." })).toBeVisible();
+    await captureWorkspace(page, testInfo, "checkout");
     await page.getByRole("button", { name: "Open PayPal Sandbox" }).click();
     await expect(page).toHaveURL(/\/orders\/[^/?]+\?paypal=return$/);
     await page.getByRole("button", { name: "Complete Sandbox payment" }).click();
     await expect(page.getByText("Server confirmed capture", { exact: true })).toBeVisible();
+    await captureWorkspace(page, testInfo, "receipt-refund");
     const paymentId = new URL(page.url()).pathname.split("/").at(-1);
     const receipt = await (await page.request.get(`/api/orders/${paymentId}`)).json();
     const event = {
@@ -143,7 +162,10 @@ test.describe("mandate workflow", () => {
     });
     expect(pauseForRefund.ok()).toBeTruthy();
     await page.getByRole("link", { name: "Chat", exact: true }).click();
-    await expect(page.getByText("You can still ask about refunds.", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Your shopping brief starts here.", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Message the shopping agent")).toBeEnabled();
     await page
       .getByLabel("Message the shopping agent")
       .fill(
@@ -165,7 +187,7 @@ test.describe("mandate workflow", () => {
     expect(beforeConfirmedRefund.payment.refunds).toHaveLength(0);
     await page.getByRole("button", { name: "Request refund", exact: true }).click();
     await page.getByRole("button", { name: "Confirm refund", exact: true }).click();
-    await expect(page.getByText("PARTIALLY_REFUNDED", { exact: true })).toBeVisible();
+    await expect(page.getByText("PARTIALLY REFUNDED", { exact: true })).toBeVisible();
     const resumeAfterRefund = await page.request.post(`/api/mandates/${mandateId}/resume`, {
       headers: { origin: "http://127.0.0.1:3100" },
       data: { version: 2 },
@@ -193,13 +215,24 @@ test.describe("mandate workflow", () => {
     await page.getByRole("button", { name: "Revoke" }).click();
     await expect(page.getByRole("heading", { name: "Revoke this mandate?" })).toBeVisible();
     await page.getByRole("button", { name: "Yes, revoke mandate" }).click();
-    await expect(page.getByText("REVOKED")).toBeVisible();
+    await expect(page.getByText("REVOKED", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: "All mandates" }).click();
     await expect(page).toHaveURL(/\/mandates$/);
     await expect(page.getByText("Noise-cancelling headphones", { exact: true })).toBeVisible();
-    await expect(page.getByText("REVOKED")).toBeVisible();
+    await expect(page.getByText("REVOKED", { exact: true })).toBeVisible();
+    await captureWorkspace(page, testInfo, "mandate-list");
+    await page.getByLabel("Search mandates").fill("missing mandate");
+    await expect(page.getByText("No mandates match these filters.")).toBeVisible();
+    await page.getByRole("button", { name: "Clear filters" }).click();
+    await page.getByRole("link", { name: "Orders", exact: true }).click();
+    await expect(page.getByLabel("Search orders")).toBeVisible();
+    await captureWorkspace(page, testInfo, "order-list");
+    await page.getByLabel("Search orders").fill("missing order");
+    await expect(page.getByText("No orders match these filters.")).toBeVisible();
+    await page.getByRole("button", { name: "Clear filters" }).click();
+    await page.getByRole("link", { name: "Mandates", exact: true }).click();
     await page.getByRole("link", { name: /Noise-cancelling headphones/ }).click();
-    await expect(page.getByText("REVOKED")).toBeVisible();
+    await expect(page.getByText("REVOKED", { exact: true })).toBeVisible();
   });
 });

@@ -28,6 +28,7 @@ import type {
   MandateDetail as MandateDetailType,
   MandateFormState,
 } from "@/lib/mandates/types";
+import { WorkspaceLoading } from "@/components/workspace-ui";
 
 function statusClass(status: string) {
   if (status === "ACTIVE") return "bg-primary text-primary-foreground";
@@ -137,14 +138,7 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
   }
 
   if (loading) {
-    return (
-      <div
-        className="flex min-h-56 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <LoaderCircle size={18} className="mr-2 animate-spin" aria-hidden="true" /> Loading mandate…
-      </div>
-    );
+    return <WorkspaceLoading label="Loading mandate…" />;
   }
   if (!mandate || !form) {
     return (
@@ -177,13 +171,10 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
         <ArrowLeft size={15} aria-hidden="true" /> All mandates
       </Link>
       <div className="flex flex-wrap items-start justify-between gap-5">
-        <div className="flex items-start gap-3">
-          <span className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-sand">
-            <ShieldCheck size={22} aria-hidden="true" />
-          </span>
-          <div>
+        <div className="min-w-0 flex-1 basis-80">
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="font-editorial text-[clamp(2.4rem,5vw,4.5rem)] leading-[1.02] tracking-[-0.035em]">
+              <h1 className="break-words font-editorial text-3xl leading-tight tracking-[-0.025em] sm:text-[40px]">
                 {mandate.title}
               </h1>
               <span
@@ -201,6 +192,15 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {mandate.status === "ACTIVE" && !editing ? (
+            <Link
+              href={`/chat?mandate=${encodeURIComponent(mandate.id)}`}
+              className={cn(buttonVariants())}
+            >
+              Shop with this mandate
+              <ArrowLeft size={14} className="rotate-180" aria-hidden="true" />
+            </Link>
+          ) : null}
           {canEdit ? (
             <button
               type="button"
@@ -286,17 +286,15 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-sand-border bg-sand p-5 sm:p-7">
-        <p className="text-xs font-medium text-muted-foreground">Original instruction</p>
-        <blockquote className="mt-4 font-editorial text-2xl leading-tight tracking-[-0.02em]">
-          “{mandate.originalPrompt}”
-        </blockquote>
-      </section>
+      <details className="rounded-lg border border-border bg-secondary/50 px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium">Original instruction</summary>
+        <blockquote className="mt-3 text-sm leading-6">“{mandate.originalPrompt}”</blockquote>
+      </details>
 
       {editing ? (
         <div className="space-y-5">
-          <MandateForm value={form} onChange={setForm} disabled={pending === "save"} />
-          <div className="flex justify-end">
+          <MandateForm value={form} onChange={setForm} disabled={Boolean(pending)} />
+          <div className="sticky bottom-0 z-10 flex justify-end border-t border-border bg-background py-4">
             <button
               type="button"
               onClick={() => void saveEdit()}
@@ -313,17 +311,18 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
           </div>
         </div>
       ) : (
-        <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+        <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-7">
+          <h2 className="mb-5 text-base font-medium">Purchasing permissions</h2>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <p className="text-xs text-muted-foreground">Automatic spending</p>
-              <p className="mt-1 font-medium tabular-nums">
+              <p className="mt-2 text-2xl font-medium tabular-nums">
                 {formatUsdLabel(mandate.rules.autoSpendLimit)}
               </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Maximum transaction</p>
-              <p className="mt-1 font-medium tabular-nums">
+              <p className="mt-2 text-2xl font-medium tabular-nums">
                 {formatUsdLabel(mandate.rules.transactionLimit)}
               </p>
             </div>
@@ -358,9 +357,44 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
               <dd className="mt-1 font-medium">
                 {mandate.rules.newMerchantRequiresApproval
                   ? "Approval required"
-                  : "Allowed automatically"}
+                  : "No additional mandate approval"}
               </dd>
             </div>
+            {[
+              ["Blocked brands", mandate.rules.blockedBrands.join(", ") || "None"],
+              ["Allowed categories", mandate.rules.allowedCategories.join(", ") || "Any category"],
+              ["Blocked categories", mandate.rules.blockedCategories.join(", ") || "None"],
+              ["Blocked merchants", mandate.rules.blockedMerchants.join(", ") || "None"],
+              [
+                "Daily limit",
+                mandate.rules.dailyLimit === undefined
+                  ? "Not set"
+                  : formatUsdLabel(mandate.rules.dailyLimit),
+              ],
+              [
+                "Weekly limit",
+                mandate.rules.weeklyLimit === undefined
+                  ? "Not set"
+                  : formatUsdLabel(mandate.rules.weeklyLimit),
+              ],
+              [
+                "Monthly limit",
+                mandate.rules.monthlyLimit === undefined
+                  ? "Not set"
+                  : formatUsdLabel(mandate.rules.monthlyLimit),
+              ],
+              [
+                "Starts at · UTC",
+                mandate.rules.startsAt
+                  ? formatUtcDate(mandate.rules.startsAt)
+                  : "No scheduled start",
+              ],
+            ].map(([label, value]) => (
+              <div key={label} className="min-w-0">
+                <dt className="text-xs text-muted-foreground">{label}</dt>
+                <dd className="mt-1 break-words text-sm font-medium">{value}</dd>
+              </div>
+            ))}
           </dl>
           <details className="mt-8 border-t border-border pt-5">
             <summary className="cursor-pointer text-sm font-medium underline-offset-4 hover:underline">

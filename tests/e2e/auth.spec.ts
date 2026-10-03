@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { captureWorkspace } from "./workspace-capture";
 
 const authApiUrl = process.env.MANDATEPAY_E2E_API_URL ?? process.env.API_URL ?? "";
 const authConfigured =
@@ -14,7 +15,9 @@ test.describe("authenticated workspace flow", () => {
     );
   });
 
-  test("signs up in the isolated auth database, signs in, and signs out", async ({ page }) => {
+  test("signs up in the isolated auth database, signs in, and signs out", async ({
+    page,
+  }, testInfo) => {
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const email = `e2e-${suffix}@mandatepay.local`;
     const password = `Test-${suffix}-password`;
@@ -37,8 +40,10 @@ test.describe("authenticated workspace flow", () => {
     });
     await expect(autonomySwitch).toBeVisible();
     await expect(autonomySwitch).not.toBeChecked();
-    await autonomySwitch.check();
+    await captureWorkspace(page, testInfo, "settings");
+    await autonomySwitch.click();
     await expect(autonomySwitch).toBeChecked();
+    await expect(page.getByText("Automatic permissions are on", { exact: true })).toBeVisible();
     await page.reload();
     await expect(
       page.getByRole("switch", { name: "Automatic purchase permissions" }),

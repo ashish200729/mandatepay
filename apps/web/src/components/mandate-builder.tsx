@@ -19,6 +19,10 @@ import {
   EMPTY_MANDATE_FORM,
 } from "@/components/mandate-form";
 import type { MandateFormState } from "@/lib/mandates/types";
+import Link from "next/link";
+import { WorkspaceSteps } from "@/components/workspace-ui";
+import { formatUsdLabel, parseUsdDecimal } from "@/lib/mandates/money";
+import { MandatePermissions } from "@/components/mandate-permissions";
 
 type BuilderState = "prompt" | "parsing" | "review" | "clarification" | "saving" | "saved";
 
@@ -47,6 +51,7 @@ export function MandateBuilder() {
   const [clarification, setClarification] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authorized, setAuthorized] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<{ id: string; version: number } | null>(null);
   const [creationKey, setCreationKey] = useState(() => createMandateRequestKey());
 
@@ -71,7 +76,10 @@ export function MandateBuilder() {
         return;
       }
 
-      setForm(canonicalToForm(result.mandate));
+      const nextForm = canonicalToForm(result.mandate);
+      formToCanonical(nextForm);
+      setForm(nextForm);
+      setEditing(false);
       setState("review");
     } catch (cause) {
       setState("prompt");
@@ -129,47 +137,128 @@ export function MandateBuilder() {
     }
   }
 
+  if (draft)
+    return (
+      <div className="space-y-6">
+        <WorkspaceSteps steps={["Describe", "Review", "Activate"]} current={2} />
+        <section className="mx-auto max-w-2xl rounded-xl border border-border bg-card p-6 sm:p-8">
+          <ShieldCheck size={25} className="text-muted-foreground" aria-hidden="true" />
+          <h2 className="mt-5 font-editorial text-3xl">Draft saved.</h2>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            Activate this mandate when you’re ready to use these permissions for shopping. Saving a
+            draft does not authorize purchases.
+          </p>
+          <dl className="mt-6 grid gap-4 border-y border-border py-5 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs text-muted-foreground">Mandate</dt>
+              <dd className="mt-1 text-sm font-medium">{form.title}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Spending permission</dt>
+              <dd className="mt-1 text-sm font-medium">
+                Automatic {formatUsdLabel(parseUsdDecimal(form.autoSpendLimit))} · Maximum{" "}
+                {formatUsdLabel(parseUsdDecimal(form.transactionLimit))}
+              </dd>
+            </div>
+          </dl>
+          {error ? (
+            <div className="mt-5">
+              <StatusMessage error>{error}</StatusMessage>
+            </div>
+          ) : null}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => void handleActivate()}
+              disabled={isBusy}
+              className={buttonVariants()}
+            >
+              {isBusy ? (
+                <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+              ) : (
+                <ShieldCheck size={15} aria-hidden="true" />
+              )}
+              {isBusy ? "Activating…" : "Activate mandate"}
+            </button>
+            <Link
+              href={`/mandates/${encodeURIComponent(draft.id)}`}
+              className={buttonVariants({ variant: "outline" })}
+            >
+              View saved draft
+              <ArrowRight size={15} aria-hidden="true" />
+            </Link>
+          </div>
+        </section>
+      </div>
+    );
+
   if (state === "prompt" || state === "parsing" || state === "clarification") {
     return (
       <div className="space-y-7">
-        <div className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-          <label
-            htmlFor="mandate-prompt"
-            className="block font-editorial text-3xl tracking-[-0.025em] sm:text-4xl"
-          >
-            What should your agent be allowed to buy?
-          </label>
-          <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
-            Describe the product, budget, brands, conditions, and when the agent should come back to
-            you.
-          </p>
-          <textarea
-            id="mandate-prompt"
-            maxLength={12_000}
-            value={prompt}
-            onChange={(event) => setPrompt(event.currentTarget.value)}
-            disabled={isBusy}
-            placeholder="Find Sony or Bose noise-cancelling headphones under $180. Buy new only. Automatically spend up to $150 and ask me above that."
-            className="mt-7 min-h-44 w-full resize-y rounded-2xl border border-border bg-background px-4 py-4 text-base leading-relaxed transition-colors placeholder:text-muted-foreground/70 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-4 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
-            <span className="text-xs text-muted-foreground">
-              The prompt is retained as the original instruction for audit.
-            </span>
-            <button
-              type="button"
-              onClick={() => void handleParse()}
-              disabled={isBusy || !prompt.trim()}
-              className={cn(buttonVariants({ size: "lg" }), "min-w-36")}
+        <WorkspaceSteps steps={["Describe", "Review", "Activate"]} current={0} />
+        <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-7">
+            <label
+              htmlFor="mandate-prompt"
+              className="block text-lg font-medium tracking-[-0.02em]"
             >
-              {state === "parsing" ? (
-                <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
-              ) : (
-                <ArrowRight size={16} aria-hidden="true" />
-              )}
-              {state === "parsing" ? "Reading request…" : "Review mandate"}
-            </button>
+              What should your agent be allowed to buy?
+            </label>
+            <p className="mt-3 max-w-[620px] text-sm leading-relaxed text-muted-foreground">
+              Describe the product, budget, brands, conditions, and when the agent should come back
+              to you.
+            </p>
+            <textarea
+              id="mandate-prompt"
+              maxLength={12_000}
+              value={prompt}
+              onChange={(event) => setPrompt(event.currentTarget.value)}
+              disabled={isBusy}
+              placeholder="Find Sony or Bose noise-cancelling headphones under $180. Buy new only. Automatically spend up to $150 and ask me above that."
+              className="mt-5 min-h-44 w-full resize-y rounded-lg border border-border bg-background px-4 py-4 text-sm leading-7 transition-colors placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
+              <span className="text-xs text-muted-foreground">
+                You’ll review the exact rules before activation.
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleParse()}
+                disabled={isBusy || !prompt.trim()}
+                className={cn(buttonVariants({ size: "lg" }), "min-w-36")}
+              >
+                {state === "parsing" ? (
+                  <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <ArrowRight size={16} aria-hidden="true" />
+                )}
+                {state === "parsing" ? "Reading request…" : "Review mandate"}
+              </button>
+            </div>
           </div>
+          <aside className="px-1 py-2 text-sm">
+            <h2 className="font-medium">A clear request includes</h2>
+            <dl className="mt-5 space-y-5 text-sm">
+              <div>
+                <dt className="font-medium">What to buy</dt>
+                <dd className="mt-1 leading-6 text-muted-foreground">
+                  Product, brands, and condition.
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium">Your maximum</dt>
+                <dd className="mt-1 leading-6 text-muted-foreground">
+                  A hard limit for each purchase.
+                </dd>
+              </div>
+              <div>
+                <dt className="font-medium">When to ask you</dt>
+                <dd className="mt-1 leading-6 text-muted-foreground">
+                  An automatic limit below your maximum, or approval for every purchase.
+                </dd>
+              </div>
+            </dl>
+          </aside>
         </div>
         {clarification ? (
           <StatusMessage>
@@ -182,107 +271,108 @@ export function MandateBuilder() {
     );
   }
 
-  const draftReady = state === "saved" && draft;
   return (
     <div className="space-y-7">
+      <WorkspaceSteps steps={["Describe", "Review", "Activate"]} current={1} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Review before saving
-          </p>
-          <h2 className="mt-2 font-editorial text-3xl tracking-[-0.025em] sm:text-4xl">
+          <h2 className="text-xl font-medium leading-7 tracking-[-0.02em]">
             These are the permissions your agent will receive.
           </h2>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setState("prompt");
-            setError(null);
-          }}
-          disabled={isBusy || Boolean(draft)}
-          className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
-        >
-          <ArrowLeft size={15} aria-hidden="true" /> Edit request
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {!editing ? (
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(true);
+                setAuthorized(false);
+              }}
+              disabled={isBusy}
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              Edit permissions
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setState("prompt");
+              setError(null);
+            }}
+            disabled={isBusy}
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+          >
+            <ArrowLeft size={15} aria-hidden="true" /> Edit request
+          </button>
+        </div>
       </div>
 
-      <section className="rounded-2xl border border-sand-border bg-sand p-5 sm:p-7">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <ShieldCheck size={16} aria-hidden="true" /> Original instruction
-        </div>
-        <blockquote className="mt-4 font-editorial text-2xl leading-tight tracking-[-0.02em]">
-          “{prompt}”
-        </blockquote>
-      </section>
+      <details className="rounded-lg border border-border bg-secondary/50 px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium">Original instruction</summary>
+        <blockquote className="mt-3 text-sm leading-6">“{prompt}”</blockquote>
+      </details>
 
-      <MandateForm
-        value={form}
-        onChange={(next) => {
-          setForm(next);
-          setAuthorized(false);
-          setCreationKey(createMandateRequestKey());
-        }}
-        disabled={isBusy || Boolean(draft)}
-      />
+      {editing ? (
+        <MandateForm
+          value={form}
+          onChange={(next) => {
+            setForm(next);
+            setAuthorized(false);
+            setCreationKey(createMandateRequestKey());
+          }}
+          disabled={isBusy}
+        />
+      ) : (
+        <MandatePermissions mandate={formToCanonical(form)} />
+      )}
 
-      {draftReady ? (
-        <StatusMessage>
-          Draft saved. The exact permission version is ready for activation.
-        </StatusMessage>
-      ) : null}
       {error ? <StatusMessage error>{error}</StatusMessage> : null}
 
-      {!draft ? (
-        <label className="flex items-start gap-3 rounded-2xl border border-border bg-card p-5 text-sm leading-relaxed has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-4 has-[:focus-visible]:outline-ring">
-          <input
-            type="checkbox"
-            checked={authorized}
-            onChange={(event) => setAuthorized(event.currentTarget.checked)}
+      {editing ? (
+        <div className="flex justify-end border-t border-border pt-4">
+          <button
+            type="button"
             disabled={isBusy}
-            className="mt-0.5 size-4 shrink-0 accent-primary"
-          />
-          <span>
-            I have reviewed these exact permissions and authorize MandatePay to save this mandate as
-            a draft.
-          </span>
-        </label>
-      ) : null}
+            onClick={() => {
+              if (validateForm()) setEditing(false);
+            }}
+            className={buttonVariants({ variant: "outline" })}
+          >
+            Done editing
+            <Check size={15} aria-hidden="true" />
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border py-4">
+          <label className="flex max-w-xl items-start gap-3 text-sm leading-6 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-4 has-[:focus-visible]:outline-ring">
+            <input
+              type="checkbox"
+              checked={authorized}
+              onChange={(event) => setAuthorized(event.currentTarget.checked)}
+              disabled={isBusy}
+              className="mt-0.5 size-4 shrink-0 accent-primary"
+            />
+            <span>I have reviewed these exact permissions and authorize saving this draft.</span>
+          </label>
 
-      <div className="flex flex-wrap justify-end gap-3">
-        {!draft ? (
-          <button
-            type="button"
-            onClick={() => void handleSave()}
-            disabled={isBusy || !authorized}
-            className={cn(buttonVariants({ size: "lg" }))}
-          >
-            {state === "saving" ? (
-              <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
-            ) : (
-              <Check size={16} aria-hidden="true" />
-            )}
-            {state === "saving" ? "Saving draft…" : "Save draft"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void handleActivate()}
-            disabled={isBusy}
-            className={cn(buttonVariants({ size: "lg" }))}
-          >
-            {state === "saving" ? (
-              <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
-            ) : (
-              <ShieldCheck size={16} aria-hidden="true" />
-            )}
-            {state === "saving" ? "Activating…" : "Activate mandate"}
-          </button>
-        )}
-      </div>
-      <p className="text-right text-xs text-muted-foreground">
-        Activation is explicit. A draft cannot authorize a purchase.
-      </p>
+          <div className="flex flex-wrap justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={isBusy || !authorized}
+              className={cn(buttonVariants({ size: "lg" }))}
+            >
+              {state === "saving" ? (
+                <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
+              ) : (
+                <Check size={16} aria-hidden="true" />
+              )}
+              {state === "saving" ? "Saving draft…" : "Save draft"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

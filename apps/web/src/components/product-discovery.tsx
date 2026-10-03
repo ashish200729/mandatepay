@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
-  Check,
   CircleAlert,
   ExternalLink,
   LoaderCircle,
@@ -26,6 +25,13 @@ import {
   searchProducts,
 } from "@/lib/products/client";
 import type { NormalizedProduct, ProductRanking, PurchaseProposal } from "@/lib/products/types";
+import { activeShoppingMandates, selectShoppingMandate } from "@/lib/agent/mandates";
+import {
+  workspaceField,
+  WorkspaceLoading,
+  WorkspaceSteps,
+  WorkspaceStatus,
+} from "@/components/workspace-ui";
 
 function sourceLabel(source: NormalizedProduct["source"]) {
   return source === "demo" ? "Demo Catalog" : "Channel3 discovery";
@@ -36,33 +42,37 @@ function ProductCard({
   selected,
   recommended,
   onToggle,
+  disabled,
+  selectionFull,
+  onPropose,
 }: {
   product: NormalizedProduct;
   selected: boolean;
   recommended: ProductRanking | undefined;
   onToggle: () => void;
+  disabled: boolean;
+  selectionFull: boolean;
+  onPropose: () => void;
 }) {
   const productUrl = product.source === "channel3" ? safeExternalUrl(product.productUrl) : null;
   return (
     <article
       className={cn(
-        "rounded-2xl border bg-card p-5 transition-[border-color,box-shadow]",
-        selected ? "border-foreground shadow-[0_10px_28px_rgba(27,20,14,0.07)]" : "border-border",
+        "flex min-w-0 flex-col rounded-xl border bg-card p-5 transition-colors motion-reduce:transition-none",
+        selected ? "border-foreground" : "border-border",
       )}
     >
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <span className="inline-flex rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
             {sourceLabel(product.source)}
           </span>
-          <h3 className="mt-4 font-editorial text-2xl leading-tight tracking-[-0.02em]">
-            {product.title}
-          </h3>
+          <h3 className="mt-3 break-words text-base font-medium leading-6">{product.title}</h3>
           <p className="mt-2 text-sm text-muted-foreground">
             {product.brand} · {product.merchant}
           </p>
         </div>
-        <span className="text-xl font-medium tabular-nums">
+        <span className="shrink-0 text-lg font-medium tabular-nums">
           {formatUsdLabel(product.priceMinor)}
         </span>
       </div>
@@ -94,6 +104,7 @@ function ProductCard({
           <input
             type="checkbox"
             checked={selected}
+            disabled={disabled || (!selected && selectionFull)}
             onChange={onToggle}
             className="size-4 accent-primary"
           />{" "}
@@ -115,13 +126,29 @@ function ProductCard({
           ? "This catalog item can become a local proposal."
           : "External discovery only. It cannot be sent to checkout."}
       </p>
+      {recommended && product.source === "demo" ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onPropose}
+          className={cn(
+            buttonVariants({ variant: "outline" }),
+            "mt-4 h-auto min-h-11 whitespace-normal rounded-lg py-2 text-left",
+          )}
+        >
+          Prepare proposal · {product.title}
+          <ArrowRight size={14} aria-hidden="true" />
+        </button>
+      ) : null}
     </article>
   );
 }
 
-export function ProductDiscovery() {
+export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?: string }) {
   const [mandates, setMandates] = useState<MandateDetail[]>([]);
   const [mandatesLoading, setMandatesLoading] = useState(true);
+  const [mandateId, setMandateId] = useState(initialMandateId);
+  const [searched, setSearched] = useState(false);
   const [mandateError, setMandateError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [products, setProducts] = useState<NormalizedProduct[]>([]);
@@ -139,8 +166,8 @@ export function ProductDiscovery() {
   const [error, setError] = useState<string | null>(null);
 
   const activeMandate = useMemo(
-    () => mandates.find((mandate) => mandate.status === "ACTIVE") ?? null,
-    [mandates],
+    () => mandates.find((mandate) => mandate.id === mandateId) ?? null,
+    [mandates, mandateId],
   );
 
   const loadMandates = useCallback(async () => {
@@ -148,15 +175,18 @@ export function ProductDiscovery() {
     setMandateError(null);
     try {
       const next = await listMandates();
-      setMandates(next);
-      const active = next.find((mandate) => mandate.status === "ACTIVE");
-      if (active) setQuery((current) => current || active.rules.productIntent);
+      const active = activeShoppingMandates(next);
+      setMandates(active);
+      const selectedId = selectShoppingMandate(active, initialMandateId);
+      setMandateId(selectedId);
+      const selected = active.find((mandate) => mandate.id === selectedId);
+      if (selected) setQuery((current) => current || selected.rules.productIntent);
     } catch (cause) {
       setMandateError(cause instanceof Error ? cause.message : "Mandates could not be loaded.");
     } finally {
       setMandatesLoading(false);
     }
-  }, []);
+  }, [initialMandateId]);
 
   useEffect(() => {
     // Initial client synchronization with the protected mandate collection.
@@ -179,6 +209,7 @@ export function ProductDiscovery() {
   async function search() {
     if (!activeMandate || loading) return;
     setLoading("search");
+    setSearched(true);
     setError(null);
     setRanking([]);
     setProposal(null);
@@ -235,17 +266,7 @@ export function ProductDiscovery() {
     }
   }
 
-  if (mandatesLoading) {
-    return (
-      <div
-        className="flex min-h-56 items-center justify-center text-sm text-muted-foreground"
-        role="status"
-      >
-        <LoaderCircle size={18} className="mr-2 animate-spin" aria-hidden="true" /> Loading active
-        mandates…
-      </div>
-    );
-  }
+  if (mandatesLoading) return <WorkspaceLoading label="Loading active mandates…" />;
   if (mandateError) {
     return (
       <div
@@ -263,7 +284,7 @@ export function ProductDiscovery() {
       </div>
     );
   }
-  if (!activeMandate) {
+  if (!mandates.length) {
     return (
       <section className="rounded-2xl border border-border bg-card p-8 text-center sm:p-14">
         <ShieldCheck size={28} className="mx-auto" aria-hidden="true" />
@@ -281,28 +302,68 @@ export function ProductDiscovery() {
   }
 
   return (
-    <div className="space-y-7">
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
+    <div className="space-y-6">
+      <WorkspaceSteps
+        steps={["Find products", "Compare options", "Review proposal"]}
+        current={proposal ? 2 : ranking.length ? 1 : 0}
+      />
+      <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              Active mandate
-            </p>
-            <h2 className="mt-2 font-editorial text-2xl tracking-[-0.02em]">
-              {activeMandate.title}
-            </h2>
+            <label className="block text-sm font-medium">
+              Shopping permissions
+              <select
+                value={mandateId}
+                disabled={loading !== null}
+                onChange={(event) => {
+                  const id = event.currentTarget.value;
+                  setMandateId(id);
+                  setQuery(
+                    mandates.find((mandate) => mandate.id === id)?.rules.productIntent ?? "",
+                  );
+                  setProducts([]);
+                  setSelectedIds([]);
+                  setRanking([]);
+                  setProposal(null);
+                  setProposalAttempt(null);
+                  setSearched(false);
+                  setError(null);
+                  setNotice(null);
+                }}
+                className={cn(workspaceField, "mt-2 block sm:w-96")}
+              >
+                <option value="">Choose a mandate</option>
+                {mandates.map((mandate) => (
+                  <option key={mandate.id} value={mandate.id}>
+                    {mandate.title} · v{mandate.version}
+                  </option>
+                ))}
+              </select>
+            </label>
             <p className="mt-1 text-sm text-muted-foreground">
-              Auto {formatUsdLabel(activeMandate.rules.autoSpendLimit)} · Max{" "}
-              {formatUsdLabel(activeMandate.rules.transactionLimit)} ·{" "}
-              {activeMandate.rules.allowedConditions.join(", ")}
+              {activeMandate ? (
+                <>
+                  Automatic {formatUsdLabel(activeMandate.rules.autoSpendLimit)} · Maximum{" "}
+                  {formatUsdLabel(activeMandate.rules.transactionLimit)} ·{" "}
+                  {activeMandate.rules.allowedConditions.join(", ")}
+                </>
+              ) : (
+                "Select the permission set for this search. No mandate is chosen automatically when several are active."
+              )}
             </p>
           </div>
-          <span className="rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground">
-            ACTIVE
-          </span>
+          {activeMandate ? (
+            <Link
+              href={`/mandates/${encodeURIComponent(activeMandate.id)}`}
+              className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+            >
+              View permissions
+              <ArrowRight size={14} aria-hidden="true" />
+            </Link>
+          ) : null}
         </div>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-          <label className="flex-1">
+          <label className="min-w-0 sm:flex-1">
             <span className="sr-only">Search products</span>
             <div className="relative">
               <Search
@@ -317,14 +378,15 @@ export function ProductDiscovery() {
                   if (event.key === "Enter") void search();
                 }}
                 placeholder="Search products within this mandate"
-                className="h-12 w-full rounded-xl border border-border bg-background pl-11 pr-4 text-sm outline-hidden focus:border-foreground/45 focus:ring-4 focus:ring-foreground/8"
+                disabled={!activeMandate || loading !== null}
+                className={cn(workspaceField, "h-12 pl-11")}
               />
             </div>
           </label>
           <button
             type="button"
             onClick={() => void search()}
-            disabled={loading !== null}
+            disabled={loading !== null || !activeMandate || !query.trim()}
             className={cn(buttonVariants({ size: "lg" }), "sm:min-w-32")}
           >
             {loading === "search" ? (
@@ -375,60 +437,43 @@ export function ProductDiscovery() {
       ) : null}
       {products.length ? (
         <div className="grid gap-5 lg:grid-cols-2">
-          {products.map((product) => (
-            <ProductCard
-              key={`${product.source}:${product.externalId}`}
-              product={product}
-              selected={selectedIds.includes(product.externalId)}
-              recommended={ranking.find((item) => item.productId === product.externalId)}
-              onToggle={() => toggleProduct(product)}
-            />
-          ))}
+          {[...products]
+            .sort(
+              (a, b) =>
+                (ranking.find((item) => item.productId === a.externalId)?.rank ?? 999) -
+                (ranking.find((item) => item.productId === b.externalId)?.rank ?? 999),
+            )
+            .map((product) => (
+              <ProductCard
+                key={`${product.source}:${product.externalId}`}
+                product={product}
+                selected={selectedIds.includes(product.externalId)}
+                recommended={ranking.find((item) => item.productId === product.externalId)}
+                onToggle={() => toggleProduct(product)}
+                disabled={loading !== null}
+                selectionFull={selectedIds.length >= 3}
+                onPropose={() => void propose(product)}
+              />
+            ))}
         </div>
       ) : null}
       {ranking.length ? (
-        <section className="rounded-2xl border border-border bg-card p-5 sm:p-7">
-          <h2 className="font-editorial text-2xl tracking-[-0.02em]">Comparison ready.</h2>
+        <section className="border-t border-border pt-5">
+          <h2 className="text-base font-medium">Comparison ready.</h2>
           <p className="mt-2 text-sm text-muted-foreground">
             The ranking explains fit and trade-offs. Select a Demo Catalog recommendation to prepare
             a proposal.
           </p>
-          <div className="mt-5 space-y-3">
-            {ranking.map((item) => {
-              const product = products.find((candidate) => candidate.externalId === item.productId);
-              return product?.source === "demo" ? (
-                <button
-                  key={item.productId}
-                  type="button"
-                  onClick={() => void propose(product)}
-                  disabled={loading !== null}
-                  className="flex min-h-12 w-full items-center justify-between gap-4 rounded-xl border border-border px-4 text-left text-sm transition-colors hover:border-foreground/35 hover:bg-secondary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-                >
-                  {" "}
-                  <span className="flex items-center gap-3">
-                    <span className="flex size-7 items-center justify-center rounded-full bg-sand text-xs font-medium">
-                      {item.rank}
-                    </span>
-                    <span className="font-medium">Prepare proposal · {product.title}</span>
-                  </span>
-                  <span className="text-muted-foreground">
-                    {loading === "proposal" ? "Preparing…" : "Continue"}{" "}
-                    <ArrowRight size={15} className="ml-1 inline" aria-hidden="true" />
-                  </span>
-                </button>
-              ) : null;
-            })}
-          </div>
         </section>
       ) : null}
       {proposal ? (
         <section className="rounded-2xl border border-sand-border bg-sand p-5 sm:p-7" role="status">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <Check size={17} aria-hidden="true" /> Proposal evaluated
+            <ShieldCheck size={17} aria-hidden="true" /> Proposal evaluated
           </div>
-          <p className="mt-3 font-editorial text-2xl tracking-[-0.02em]">
-            {proposal.decision ?? proposal.status ?? "PROPOSAL_READY"}
-          </p>
+          <div className="mt-3">
+            <WorkspaceStatus value={proposal.decision ?? proposal.status ?? "PROPOSAL_READY"} />
+          </div>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {proposal.policyReason ??
               proposal.reason ??
@@ -446,7 +491,42 @@ export function ProductDiscovery() {
               Continue to Sandbox checkout <ArrowRight size={15} aria-hidden="true" />
             </Link>
           ) : null}
+          {proposal.status === "AWAITING_APPROVAL" ? (
+            <Link
+              href={`/approvals?proposal=${encodeURIComponent(proposal.id)}`}
+              className={cn(buttonVariants({ size: "sm" }), "mt-5")}
+            >
+              Review approval
+              <ArrowRight size={15} aria-hidden="true" />
+            </Link>
+          ) : null}
         </section>
+      ) : null}
+      {loading ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <LoaderCircle
+            size={15}
+            className="animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+          {loading === "compare"
+            ? "Comparing selected products…"
+            : loading === "proposal"
+              ? "Preparing your proposal…"
+              : "Searching your catalog…"}
+        </p>
+      ) : !products.length && !error ? (
+        <div className="py-8 text-center">
+          <Search size={24} className="mx-auto text-muted-foreground" aria-hidden="true" />
+          <h2 className="mt-4 text-base font-medium">
+            {searched ? "No matching products." : "Find the right option."}
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {searched
+              ? "Try a different search within your mandate."
+              : "Search, choose up to three products, then compare their fit."}
+          </p>
+        </div>
       ) : null}
     </div>
   );

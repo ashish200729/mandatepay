@@ -13,20 +13,20 @@ export function WorkspacePage({
 }) {
   return (
     <div>
-      <div className="max-w-[720px]">
-        <div className="flex items-start gap-4">
-          <span className="mt-1.5 hidden size-10 shrink-0 items-center justify-center rounded-xl bg-sand text-foreground sm:flex">
+      <div className="max-w-[760px]">
+        <div className="flex items-center gap-3">
+          <span className="hidden shrink-0 text-muted-foreground sm:flex">
             <Icon size={18} strokeWidth={1.6} aria-hidden="true" />
           </span>
-          <h1 className="font-editorial text-[clamp(2.6rem,5vw,4.8rem)] leading-[1.02] tracking-[-0.035em]">
+          <h1 className="font-editorial text-3xl leading-tight tracking-[-0.025em] sm:text-[40px]">
             {title}
           </h1>
         </div>
-        <p className="mt-5 max-w-[580px] text-base leading-[1.8] text-muted-foreground sm:text-lg">
+        <p className="mt-3 max-w-[640px] text-sm leading-6 text-muted-foreground sm:text-[15px]">
           {description}
         </p>
       </div>
-      <div className="mt-12">{children}</div>
+      <div className="mt-8">{children}</div>
     </div>
   );
 }

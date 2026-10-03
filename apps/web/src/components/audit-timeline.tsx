@@ -51,11 +51,11 @@ export function AuditTimeline({ entityId }: { entityId: string }) {
   }, [load]);
 
   return (
-    <section className="rounded-2xl border border-border bg-card p-6 sm:p-8">
+    <section className="min-w-0 rounded-xl border border-border bg-card p-5 sm:p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="font-editorial text-2xl tracking-[-0.02em]">Audit timeline</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <h2 className="text-lg font-medium">Audit timeline</h2>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
             Persisted events for this record and its related decisions.
           </p>
         </div>
@@ -89,8 +89,10 @@ export function AuditTimeline({ entityId }: { entityId: string }) {
                 aria-hidden="true"
               />
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm font-medium">{event.eventType.replaceAll("_", " ")}</p>
-                <time className="text-xs text-muted-foreground">
+                <p className="break-words text-xs font-medium">
+                  {event.eventType.replaceAll("_", " ")}
+                </p>
+                <time dateTime={event.createdAt} className="text-xs text-muted-foreground">
                   {formatUtcDate(event.createdAt)}
                 </time>
               </div>
@@ -98,7 +100,7 @@ export function AuditTimeline({ entityId }: { entityId: string }) {
                 {event.entityType.replaceAll("_", " ")}
               </p>
               {eventDetail(event) ? (
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">
                   {eventDetail(event)}
                 </p>
               ) : null}
