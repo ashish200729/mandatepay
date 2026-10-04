@@ -109,6 +109,41 @@ async function spendContext(
   merchant: string,
   now: Date,
 ) {
+  // The caller holds the user/mandate locks. Unpaid expired holds may be
+  // released; an uncertain capture must continue consuming spending capacity.
+  const stale = await tx.spendReservation.findMany({
+    where: {
+      mandateId,
+      status: ReservationStatus.ACTIVE,
+      isSample: false,
+      expiresAt: { lte: now },
+    },
+    include: { proposal: { include: { payment: true } } },
+  });
+  for (const reservation of stale) {
+    const payment = reservation.proposal.payment;
+    if (
+      reservation.proposal.status === ProposalStatus.PAYMENT_PENDING ||
+      payment?.status === PaymentStatus.CAPTURE_PENDING ||
+      payment?.paypalCaptureId ||
+      (payment && capturedStatuses.includes(payment.status))
+    )
+      continue;
+    await tx.spendReservation.update({
+      where: { id: reservation.id },
+      data: { status: ReservationStatus.EXPIRED, releasedAt: now },
+    });
+    await tx.auditEvent.create({
+      data: {
+        userId,
+        eventType: AuditEventType.SPEND_RESERVATION_RELEASED,
+        entityType: AuditEntityType.SPEND_RESERVATION,
+        entityId: reservation.id,
+        dedupeKey: `expired-reservation:${reservation.id}`,
+        payload: { reason: "AUTHORIZATION_EXPIRED", proposalId: reservation.proposalId },
+      },
+    });
+  }
   const periods = {
     daily: utcPeriod(now, ReservationWindow.DAILY),
     weekly: utcPeriod(now, ReservationWindow.WEEKLY),
@@ -117,11 +152,14 @@ async function spendContext(
   const payments = await tx.payment.findMany({
     where: {
       mandateId,
+      isSample: false,
+      proposal: { isSample: false },
       status: { in: capturedStatuses },
       capturedAt: { not: null },
     },
     select: { amount: true, currency: true, capturedAt: true },
   });
+  for (const payment of payments) assertCurrency(payment.currency);
   const confirmedFor = (window: { start: Date; end: Date }) =>
     sum(
       payments.filter(
@@ -132,19 +170,28 @@ async function spendContext(
       ),
     );
   const reservations = await tx.spendReservation.findMany({
-    where: { mandateId, proposalId: { not: proposalId }, status: ReservationStatus.ACTIVE },
+    where: {
+      mandateId,
+      proposalId: { not: proposalId },
+      isSample: false,
+      proposal: { isSample: false },
+      status: ReservationStatus.ACTIVE,
+    },
     select: { id: true, amount: true, currency: true, window: true },
   });
   type PolicyWindow = "DAILY" | "WEEKLY" | "MONTHLY";
   const otherReservations = reservations.map(
-    (reservation: { id: string; amount: bigint; currency: string; window: ReservationWindow }) => ({
-      id: reservation.id,
-      amount: safeMinor(reservation.amount, "reservation amount"),
-      currency: "USD" as const,
-      windows: (reservation.window === ReservationWindow.TRANSACTION
-        ? ["DAILY", "WEEKLY", "MONTHLY"]
-        : [reservation.window]) as PolicyWindow[],
-    }),
+    (reservation: { id: string; amount: bigint; currency: string; window: ReservationWindow }) => {
+      assertCurrency(reservation.currency);
+      return {
+        id: reservation.id,
+        amount: safeMinor(reservation.amount, "reservation amount"),
+        currency: "USD" as const,
+        windows: (reservation.window === ReservationWindow.TRANSACTION
+          ? ["DAILY", "WEEKLY", "MONTHLY"]
+          : [reservation.window]) as PolicyWindow[],
+      };
+    },
   );
   return {
     currency: "USD" as const,
@@ -169,6 +216,7 @@ async function spendContext(
       (await tx.payment.count({
         where: {
           userId,
+          isSample: false,
           status: { in: capturedStatuses },
           capturedAt: { not: null },
           proposal: { productSnapshot: { merchant } },
@@ -275,7 +323,7 @@ async function loadLockedContext(
 ) {
   await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id);
   const proposal = await tx.purchaseProposal.findUnique({
-    where: { id: proposalId },
+    where: { id: proposalId, isSample: false },
     include: { productSnapshot: true, mandate: true, mandateVersion: true, payment: true },
   });
   if (!proposal || proposal.userId !== user.id) {
@@ -287,12 +335,15 @@ async function loadLockedContext(
     proposal.id,
   );
   const locked = await tx.purchaseProposal.findUnique({
-    where: { id: proposal.id },
+    where: { id: proposal.id, isSample: false },
     include: { productSnapshot: true, mandate: true, mandateVersion: true, payment: true },
   });
   if (!locked || locked.userId !== user.id) {
     throw new DatabaseError("NOT_FOUND", "Proposal was not found for this user.");
   }
+  // Lock contention may outlast an approval/proposal deadline. Evaluate time
+  // only after acquiring the serialization boundary, never at request start.
+  now.setTime(Date.now());
   const currencyValues = [
     locked.mandate.currency,
     locked.mandateVersion.currency,

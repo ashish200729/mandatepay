@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
   AuditEntityType,
   AuditEventType,
@@ -18,7 +19,12 @@ import {
   type PayPalRefund,
 } from "@mandatepay/paypal";
 import { toMinorUnits } from "@mandatepay/shared";
-import { paymentReceiptInclude, serializePayment, type PaymentReceipt } from "./payments.js";
+import {
+  paymentReceiptInclude,
+  receiptForUser,
+  serializePayment,
+  type PaymentReceipt,
+} from "./payments.js";
 
 type Owner = { id: string };
 type TransactionClient = Prisma.TransactionClient;
@@ -28,6 +34,11 @@ const activeRefundStatuses: RefundStatus[] = [
   RefundStatus.APPROVED,
   RefundStatus.SUBMITTED,
   RefundStatus.COMPLETED,
+];
+const pendingRefundStatuses: readonly RefundStatus[] = [
+  RefundStatus.REQUESTED,
+  RefundStatus.APPROVED,
+  RefundStatus.SUBMITTED,
 ];
 
 const refundInclude = {
@@ -121,10 +132,11 @@ function requestFingerprint(input: {
 }
 
 function providerTimestamp(refund: PayPalRefund): Date {
-  if (!refund.create_time || !/Z$/u.test(refund.create_time)) {
+  const timestamp = z.iso.datetime({ offset: true }).safeParse(refund.create_time);
+  if (!timestamp.success) {
     throw new RefundServiceError("PAYPAL_RESPONSE_INVALID");
   }
-  const parsed = new Date(refund.create_time);
+  const parsed = new Date(timestamp.data);
   if (Number.isNaN(parsed.getTime())) throw new RefundServiceError("PAYPAL_RESPONSE_INVALID");
   return parsed;
 }
@@ -168,7 +180,7 @@ async function lockPaymentInOrder(
 ): Promise<PaymentReceipt> {
   await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', userId);
   const unlocked = await tx.payment.findFirst({
-    where: { id: paymentId, userId },
+    where: { id: paymentId, userId, isSample: false, proposal: { isSample: false } },
     select: { id: true, mandateId: true, proposalId: true },
   });
   if (!unlocked) throw new DatabaseError("NOT_FOUND", "Payment was not found for this user.");
@@ -219,7 +231,7 @@ async function claimRefund(
   return context.database.$transaction(async (tx) => {
     await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id);
     const existing = await tx.refund.findFirst({
-      where: { userId: user.id, idempotencyKey: input.requestKey },
+      where: { userId: user.id, isSample: false, idempotencyKey: input.requestKey },
       include: refundInclude,
     });
     if (existing) {
@@ -243,7 +255,7 @@ async function claimRefund(
       throw new DatabaseError("INVALID_STATE", "The captured payment is not refundable.");
     }
     const aggregate = await tx.refund.aggregate({
-      where: { paymentId: payment.id, status: { in: activeRefundStatuses } },
+      where: { paymentId: payment.id, isSample: false, status: { in: activeRefundStatuses } },
       _sum: { amount: true },
     });
     const alreadyRefunded = aggregate._sum.amount ?? 0n;
@@ -427,7 +439,7 @@ async function completeRefund(
       include: refundInclude,
     });
     const aggregate = await tx.refund.aggregate({
-      where: { paymentId: payment.id, status: RefundStatus.COMPLETED },
+      where: { paymentId: payment.id, isSample: false, status: RefundStatus.COMPLETED },
       _sum: { amount: true },
     });
     await tx.payment.update({
@@ -570,9 +582,12 @@ async function applyProviderRefund(
   if (refund.status === RefundStatus.SUBMITTED && refund.paypalRefundId) {
     try {
       const existing = await context.paypal.getRefund(refund.paypalRefundId);
-      return reconcile(existing);
+      return await reconcile(existing);
     } catch (error) {
-      if (!(error instanceof PayPalError)) throw error;
+      if (!isPendingProviderError(error)) throw error;
+      // A known provider refund only needs reconciliation. Do not resubmit
+      // the refund mutation when its status lookup is temporarily unavailable.
+      return refundResult(context, user.id, refund.id, true);
     }
   }
 
@@ -584,7 +599,7 @@ async function applyProviderRefund(
       invoiceId: refund.id,
       reason: refund.reason,
     });
-    return reconcile(providerRefund);
+    return await reconcile(providerRefund);
   } catch (error) {
     if (!isPendingProviderError(error)) throw error;
     const current = await currentPaymentForRefund(context, user.id, refund.id);
@@ -622,4 +637,48 @@ export async function refundPayment(
   await providerCapture(context, payment);
   const submitted = await markSubmitted(context, user, claimed.refund.id);
   return applyProviderRefund(context, user, submitted, submitted.payment);
+}
+
+/** Reconciles at most two known refunds per check using provider reads only. */
+export async function reconcileRefundStatus(
+  context: RefundServiceContext,
+  user: Owner,
+  paymentId: string,
+) {
+  if (!context.paypal) throw new RefundServiceError("PAYPAL_UNAVAILABLE");
+  const payment = await receiptForUser(context.database, user.id, paymentId);
+  const pending = await context.database.refund.findMany({
+    where: {
+      paymentId: payment.id,
+      userId: user.id,
+      isSample: false,
+      status: { in: [RefundStatus.REQUESTED, RefundStatus.APPROVED, RefundStatus.SUBMITTED] },
+      paypalRefundId: { not: null },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 2,
+    include: refundInclude,
+  });
+  if (pending.length) {
+    try {
+      await providerCapture(context, payment);
+      for (const refund of pending) {
+        const provider = await context.paypal.getRefund(refund.paypalRefundId!);
+        validateProviderRefund(provider, refund, payment);
+        if (provider.id !== refund.paypalRefundId)
+          throw new RefundServiceError("PAYPAL_RESPONSE_INVALID");
+        if (provider.status === "COMPLETED")
+          await completeRefund(context, user, refund.id, provider, providerTimestamp(provider));
+        else if (provider.status === "FAILED" || provider.status === "CANCELLED")
+          await markRefundFailed(context, user, refund.id, provider);
+      }
+    } catch (error) {
+      if (!isPendingProviderError(error)) throw error;
+    }
+  }
+  const current = await receiptForUser(context.database, user.id, payment.id);
+  return {
+    payment: serializePayment(current),
+    pending: current.refunds.some((refund) => pendingRefundStatuses.includes(refund.status)),
+  };
 }

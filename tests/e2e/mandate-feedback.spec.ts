@@ -25,7 +25,7 @@ test.beforeEach(async ({ page }) => {
   const response = await page.request.post("http://127.0.0.1:4100/api/auth/sign-up/email", {
     headers: {
       origin: "http://127.0.0.1:3100",
-      "x-forwarded-for": `192.0.2.${220 + test.info().parallelIndex}`,
+      "x-forwarded-for": `2001:db8:${suffix.slice(0, 4)}:${suffix.slice(4, 8)}::1`,
     },
     data: {
       name: "Mandate feedback test",

@@ -1,7 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { DatabaseError, type DatabaseClient } from "@mandatepay/database";
-import { refundPayment, RefundServiceError, type RefundGateway } from "../services/refunds.js";
+import {
+  refundPayment,
+  reconcileRefundStatus,
+  RefundServiceError,
+  type RefundGateway,
+} from "../services/refunds.js";
 
 type AuthenticatedUser = { id: string };
 
@@ -17,7 +22,7 @@ export interface RefundRouteContext {
 
 const refundBodySchema = z
   .object({
-    amountMinor: z.number().int().safe().nullable(),
+    amountMinor: z.number().int().safe().positive().nullable(),
     reason: z.string().trim().min(1).max(255),
     requestKey: z.string().trim().min(1).max(255),
     confirmed: z.literal(true),
@@ -64,6 +69,31 @@ function error(reply: FastifyReply, cause: unknown) {
 }
 
 export function registerRefundRoutes(app: FastifyInstance, context: RefundRouteContext) {
+  app.post("/api/payments/:id/refund-status", async (request, reply) => {
+    if (!context.isTrustedOrigin(originOf(request)))
+      return reply.status(403).send({ error: "Request origin is not trusted." });
+    const user = await context.requireUser(request, reply);
+    if (!user) return;
+    const params = idSchema.safeParse(request.params);
+    if (
+      !params.success ||
+      !z
+        .object({})
+        .strict()
+        .safeParse(request.body ?? {}).success
+    )
+      return reply.status(400).send({ error: "Status check request is invalid." });
+    try {
+      const result = await reconcileRefundStatus(
+        { database: context.database, paypal: context.paypal },
+        user,
+        params.data.id,
+      );
+      return reply.status(result.pending ? 202 : 200).send(result);
+    } catch (cause) {
+      return error(reply, cause);
+    }
+  });
   app.post("/api/payments/:id/refund", async (request, reply) => {
     if (!context.isTrustedOrigin(originOf(request))) {
       return reply.status(403).send({ error: "Request origin is not trusted." });

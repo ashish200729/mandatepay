@@ -107,6 +107,91 @@ describe("auth API proxy", () => {
     expect(await response.text()).not.toContain("database password");
   });
 
+  it.each([
+    ["paypal", "orders"],
+    ["paypal", "orders", "payment-1", "capture"],
+    ["payments", "payment-1", "refund"],
+  ])("allows slow financial operation %j to finish after ten seconds", async (...path) => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), delay);
+        return controller.signal;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_target, init) =>
+          new Promise((resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+            setTimeout(() => resolve(Response.json({ pending: false })), 12_000);
+          }),
+      );
+      const response = proxyToApi(
+        new Request(`http://localhost:3000/api/${path.join("/")}`, { method: "POST" }),
+        { path },
+      );
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect((await response).status).toBe(200);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a refund timeout as an unconfirmed outcome instead of a failed refund", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), delay);
+        return controller.signal;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_target, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+      const response = proxyToApi(
+        new Request("http://localhost:3000/api/payments/payment-1/refund", { method: "POST" }),
+        { path: ["payments", "payment-1", "refund"] },
+      );
+      await vi.advanceTimersByTimeAsync(70_000);
+      const result = await response;
+      expect(result.status).toBe(504);
+      expect(await result.json()).toMatchObject({
+        code: "PAYPAL_OUTCOME_UNKNOWN",
+        error: expect.stringContaining("Refresh this order"),
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["PAYPAL_RESPONSE_INVALID", "PAYPAL_OUTCOME_UNKNOWN", "private unknown code"])(
+    "retains safe refund guidance for %s without leaking upstream details",
+    async (code) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        Response.json(
+          { code, error: "private provider payload and secret token" },
+          { status: 503 },
+        ),
+      );
+      const result = await proxyToApi(
+        new Request("http://localhost:3000/api/payments/payment-1/refund", { method: "POST" }),
+        { path: ["payments", "payment-1", "refund"] },
+      );
+      const payload = await result.json();
+      expect(payload.error).toContain("Refresh this order");
+      expect(JSON.stringify(payload)).not.toContain("private");
+    },
+  );
+
   it("allows a multi-round chat to finish after the ordinary ten-second deadline", async () => {
     vi.useFakeTimers();
     try {

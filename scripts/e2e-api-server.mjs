@@ -22,7 +22,7 @@ const client = new PayPalClient(
   }),
   { fetch: fixture.transport },
 );
-const app = await createApp({ paypalClient: client });
+const app = await createApp({ paypalClient: client, testAuthPostMaximum: 200 });
 app.get("/__e2e/paypal/return-url/:id", async (request, reply) => {
   const value = fixture.returnUrl(request.params.id);
   return value ? { url: value } : reply.status(404).send({ error: "Fixture order not found" });

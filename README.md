@@ -17,6 +17,8 @@ npm install --global pnpm@10.34.6
 pnpm install --frozen-lockfile
 ```
 
+Use pnpm for workspace dependencies; the npm command above only installs pnpm itself. After pulling changes that add packages, stop the dev server, run `pnpm install --frozen-lockfile` from the repository root, then restart with `pnpm dev`. This restores missing packages such as `react-markdown` and `remark-gfm`. Running `npm i` against this pnpm installation can fail with `Cannot read properties of null (reading 'matches')`.
+
 For the automatic local database setup, install PostgreSQL 17 and make `initdb`, `pg_ctl`, `psql`, and `createdb` available on PATH. On macOS with Homebrew:
 
 ```sh

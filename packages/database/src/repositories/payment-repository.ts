@@ -2,7 +2,12 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { PaymentStatus, ProposalStatus, RefundStatus } from "../generated/prisma/enums.js";
 import { getPrismaClient } from "../client.js";
 import { DatabaseError } from "../errors.js";
-import { assertCurrency, assertMinorUnits, SUPPORTED_CURRENCY } from "../money.js";
+import {
+  assertCurrency,
+  assertMinorUnits,
+  assertPositiveMinorUnits,
+  SUPPORTED_CURRENCY,
+} from "../money.js";
 
 export interface CreatePaymentInput {
   userId: string;
@@ -40,6 +45,7 @@ export class PaymentRepository {
     }
 
     return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${input.userId} FOR UPDATE`;
       const existing = await tx.payment.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
         include: paymentInclude,
@@ -215,12 +221,21 @@ export class PaymentRepository {
 
   async markFailed(paymentId: string, userId: string, failureCode: string) {
     return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Payment" WHERE id = ${paymentId} FOR UPDATE`;
       const payment = await tx.payment.findFirst({ where: { id: paymentId, userId } });
       if (!payment) {
         throw new DatabaseError("NOT_FOUND", "Payment was not found for this user.");
       }
-      if (payment.status === PaymentStatus.COMPLETED) {
-        throw new DatabaseError("INVALID_STATE", "A completed payment cannot be marked failed.");
+      if (
+        payment.status === PaymentStatus.COMPLETED ||
+        payment.status === PaymentStatus.PARTIALLY_REFUNDED ||
+        payment.status === PaymentStatus.REFUNDED ||
+        payment.status === PaymentStatus.CAPTURE_PENDING
+      ) {
+        throw new DatabaseError(
+          "INVALID_STATE",
+          "A settled or uncertain capture cannot be marked failed without provider reconciliation.",
+        );
       }
       const updated = await tx.payment.update({
         where: { id: payment.id },
@@ -236,13 +251,14 @@ export class PaymentRepository {
   }
 
   async requestRefund(input: CreateRefundInput) {
-    assertMinorUnits(input.amount, "refund amount");
+    assertPositiveMinorUnits(input.amount, "refund amount");
     assertCurrency(input.currency ?? SUPPORTED_CURRENCY);
     if (!input.idempotencyKey.trim()) {
       throw new DatabaseError("INVALID_DOMAIN_INPUT", "Refund idempotencyKey is required.");
     }
 
     return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${input.userId} FOR UPDATE`;
       const existing = await tx.refund.findFirst({
         where: { userId: input.userId, idempotencyKey: input.idempotencyKey },
       });
@@ -253,6 +269,15 @@ export class PaymentRepository {
             "Refund idempotency key belongs to another refund.",
           );
         }
+        if (
+          existing.amount !== input.amount ||
+          existing.currency !== (input.currency ?? SUPPORTED_CURRENCY) ||
+          existing.reason !== (input.reason?.trim() || null)
+        )
+          throw new DatabaseError(
+            "CONFLICT",
+            "Refund idempotency key was reused with different details.",
+          );
         return existing;
       }
 
@@ -331,6 +356,14 @@ export class PaymentRepository {
 
   async markRefundCompleted(refundId: string, userId: string) {
     return this.db.$transaction(async (tx) => {
+      const owned = await tx.refund.findFirst({
+        where: { id: refundId, userId },
+        select: { paymentId: true },
+      });
+      if (!owned) throw new DatabaseError("NOT_FOUND", "Refund was not found for this user.");
+      // Serialize all settlements for the payment before locking a child
+      // refund so concurrent partial refunds cannot lose their combined total.
+      await tx.$queryRaw`SELECT id FROM "Payment" WHERE id = ${owned.paymentId} FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM "Refund" WHERE id = ${refundId} FOR UPDATE`;
       const refund = await tx.refund.findFirst({ where: { id: refundId, userId } });
       if (!refund) throw new DatabaseError("NOT_FOUND", "Refund was not found for this user.");

@@ -17,6 +17,7 @@ import { AuditRepository } from "../../src/repositories/audit-repository.js";
 import { MandateRepository } from "../../src/repositories/mandate-repository.js";
 import { ProposalRepository } from "../../src/repositories/proposal-repository.js";
 import { SpendRepository } from "../../src/repositories/spend-repository.js";
+import { PaymentRepository } from "../../src/repositories/payment-repository.js";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 if (!connectionString) {
@@ -42,6 +43,97 @@ describe("database phase integration", () => {
   let versionId = "";
   let productId = "";
   let failedProposalId = "";
+
+  async function paymentFixture(key: string, status: PaymentStatus) {
+    const proposal = await new ProposalRepository(db).create({
+      userId: userAId,
+      mandateId,
+      mandateVersionId: versionId,
+      productSnapshotId: productId,
+      quantity: 1,
+      shipping: 0n,
+      tax: 0n,
+      idempotencyKey: `repo-review-${suffix}-${key}`,
+    });
+    return db.payment.create({
+      data: {
+        userId: userAId,
+        mandateId,
+        proposalId: proposal.id,
+        amount: proposal.total,
+        currency: "USD",
+        status,
+        idempotencyKey: `repo-review-payment-${suffix}-${key}`,
+        paypalCaptureId: status === "COMPLETED" ? `repo-capture-${suffix}-${key}` : null,
+      },
+    });
+  }
+
+  it("preserves terminal/in-flight payments and immutable refund retries in repository helpers", async () => {
+    const payments = new PaymentRepository(db);
+    for (const status of [
+      PaymentStatus.CAPTURE_PENDING,
+      PaymentStatus.COMPLETED,
+      PaymentStatus.PARTIALLY_REFUNDED,
+      PaymentStatus.REFUNDED,
+    ]) {
+      const payment = await paymentFixture("status-" + status, status);
+      await expect(payments.markFailed(payment.id, userAId, "timeout")).rejects.toMatchObject({
+        code: "INVALID_STATE",
+      });
+      expect((await db.payment.findUniqueOrThrow({ where: { id: payment.id } })).status).toBe(
+        status,
+      );
+    }
+    const payment = await paymentFixture("refund-retry", "COMPLETED");
+    await expect(
+      payments.requestRefund({
+        userId: userAId,
+        paymentId: payment.id,
+        amount: 0n,
+        idempotencyKey: "zero-" + suffix,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_MONEY" });
+    const request = {
+      userId: userAId,
+      paymentId: payment.id,
+      amount: 100n,
+      reason: "Return",
+      idempotencyKey: "immutable-refund-" + suffix,
+    };
+    const replayed = await Promise.all([
+      payments.requestRefund(request),
+      payments.requestRefund(request),
+    ]);
+    expect(replayed[0]!.id).toBe(replayed[1]!.id);
+    await expect(payments.requestRefund({ ...request, amount: 200n })).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("serializes repository partial refund settlements against their shared payment", async () => {
+    const payment = await paymentFixture("concurrent-refunds", "COMPLETED");
+    const payments = new PaymentRepository(db);
+    const first = await payments.requestRefund({
+      userId: userAId,
+      paymentId: payment.id,
+      amount: payment.amount / 2n,
+      idempotencyKey: "concurrent-refund-a-" + suffix,
+    });
+    const second = await payments.requestRefund({
+      userId: userAId,
+      paymentId: payment.id,
+      amount: payment.amount - first.amount,
+      idempotencyKey: "concurrent-refund-b-" + suffix,
+    });
+    await Promise.all([
+      payments.markRefundCompleted(first.id, userAId),
+      payments.markRefundCompleted(second.id, userAId),
+    ]);
+    expect((await db.payment.findUniqueOrThrow({ where: { id: payment.id } })).status).toBe(
+      "REFUNDED",
+    );
+  });
 
   beforeAll(async () => {
     const first = await db.user.create({ data: { email: userA, name: "Database test A" } });

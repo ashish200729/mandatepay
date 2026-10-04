@@ -125,17 +125,41 @@ test.describe("conversational shopping and read-only dashboard", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
 
     const blocked = await sendMessage(page, "Prepare the refurbished Bose headphones for review.");
-    expect(blocked.proposals).toHaveLength(1);
-    const blockedProposal = blocked.proposals[0];
-    expect(blockedProposal.proposal.status).toBe("BLOCKED");
-    expect(blockedProposal.decision.decision).toBe("BLOCK");
-    expect(blockedProposal.decision.reasonCodes).toContain("CONDITION_NOT_ALLOWED");
+    // Search enforces NEW-only permissions before a proposal can be prepared.
+    expect(blocked.proposals).toHaveLength(0);
+    expect(blocked.steps.map((step: { name: string }) => step.name)).toEqual([
+      "get_active_mandates",
+      "search_products",
+    ]);
     const blockedCard = page
       .getByRole("article")
       .filter({ hasText: "Bose QuietComfort Refurbished Headphones" });
-    await expect(blockedCard.getByText("AgentGuard: BLOCK", { exact: true })).toBeVisible();
-    await expect(blockedCard.getByRole("link")).toHaveCount(0);
+    await expect(blockedCard).toHaveCount(0);
     expect((await (await page.request.get("/api/orders")).json()).orders).toHaveLength(0);
+
+    // A caller supplying a known controlled SKU directly must still be blocked
+    // by AgentGuard. Keep that policy and dashboard coverage separate from chat filtering.
+    const headers = { origin: "http://127.0.0.1:3100" };
+    const attempted = await page.request.post("/api/proposals", {
+      headers,
+      data: {
+        mandateId: selectedMandateId,
+        source: "demo",
+        productId: "demo-headphones-refurbished",
+        quantity: 1,
+        requestKey: crypto.randomUUID(),
+      },
+    });
+    expect(attempted.ok()).toBeTruthy();
+    const { proposal: attemptedProposal } = await attempted.json();
+    const evaluated = await page.request.post(`/api/proposals/${attemptedProposal.id}/evaluate`, {
+      headers,
+      data: {},
+    });
+    expect(evaluated.ok()).toBeTruthy();
+    const blockedProposal = await evaluated.json();
+    expect(blockedProposal.proposal.status).toBe("BLOCKED");
+    expect(blockedProposal.decision.reasonCodes).toContain("CONDITION_NOT_ALLOWED");
 
     await page.getByRole("link", { name: "Control center", exact: true }).click();
     const table = await askDashboard(page, "Show headphone transactions above $150 as a table.");

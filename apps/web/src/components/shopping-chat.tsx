@@ -219,6 +219,9 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
   const threadContent = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const followLatest = useRef(true);
+  const threadLayout = useRef<{ width: number; height: number; contentHeight: number } | null>(
+    null,
+  );
   const productContext = useRef<{ mandateId: string | undefined; value: string } | null>(null);
 
   useEffect(() => {
@@ -229,8 +232,13 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
   useEffect(() => {
     if (!thread.current || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      if (followLatest.current && thread.current)
-        thread.current.scrollTop = thread.current.scrollHeight;
+      if (!thread.current) return;
+      if (followLatest.current) thread.current.scrollTop = thread.current.scrollHeight;
+      threadLayout.current = {
+        width: thread.current.clientWidth,
+        height: thread.current.clientHeight,
+        contentHeight: thread.current.scrollHeight,
+      };
     });
     observer.observe(thread.current);
     if (threadContent.current) observer.observe(threadContent.current);
@@ -409,6 +417,18 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
         onScroll={() => {
           const element = thread.current;
           if (!element) return;
+          const previous = threadLayout.current;
+          const changed =
+            previous &&
+            (previous.width !== element.clientWidth ||
+              previous.height !== element.clientHeight ||
+              previous.contentHeight !== element.scrollHeight);
+          if (changed && followLatest.current) element.scrollTop = element.scrollHeight;
+          threadLayout.current = {
+            width: element.clientWidth,
+            height: element.clientHeight,
+            contentHeight: element.scrollHeight,
+          };
           const away = element.scrollHeight - element.scrollTop - element.clientHeight > 80;
           followLatest.current = !away;
           setAwayFromLatest(away);

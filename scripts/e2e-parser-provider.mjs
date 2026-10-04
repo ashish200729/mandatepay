@@ -26,9 +26,12 @@ function toolResult(input, name) {
 }
 
 function shoppingMessage(input) {
+  const initialMandateChoice =
+    input.tool_choice?.type === "function" &&
+    input.tool_choice.function?.name === "get_active_mandates";
   if (
     input.response_format !== undefined ||
-    input.tool_choice !== "auto" ||
+    (input.tool_choice !== "auto" && !initialMandateChoice) ||
     input.tools.length !== shoppingToolNames.length ||
     input.tools.some(
       (tool, index) =>
@@ -45,6 +48,9 @@ function shoppingMessage(input) {
     content: null,
     tool_calls: [toolCall(name, arguments_)],
   });
+  // Match the actual runner's required first tool, including refund sessions
+  // with no active mandate. Later rounds remain in automatic tool mode.
+  if (initialMandateChoice) return call("get_active_mandates", {});
   const refund =
     /^Prepare a \$20 partial refund for transaction ([a-z0-9-]+) because One item was damaged\.$/u.exec(
       prompt,
@@ -79,8 +85,16 @@ function shoppingMessage(input) {
       brands: ["Sony", "Bose"],
       category: "Headphones",
     });
-  if (!search.products?.some((product) => product.externalId === selection))
+  if (!search.products?.some((product) => product.externalId === selection)) {
+    // The NEW-only mandate excludes this controlled refurbished SKU before
+    // proposal creation. Keep that boundary intact in the synthetic model.
+    if (selection === "demo-headphones-refurbished")
+      return {
+        role: "assistant",
+        content: "The requested refurbished product is unavailable under this mandate.",
+      };
     throw new Error("Missing trusted shopping fixture product");
+  }
   if (!toolResult(input, "compare_products"))
     return call("compare_products", {
       productIds: search.products.map((product) => product.externalId),
@@ -231,7 +245,20 @@ export async function startE2eParserProvider() {
           usage: { prompt_tokens: 100, completion_tokens: 100, total_tokens: 200 },
         }),
       );
-    } catch {
+    } catch (error) {
+      const known = [
+        "Unexpected shopping fixture contract",
+        "Unexpected test provider contract",
+        "Unknown shopping fixture scenario",
+        "Missing trusted shopping fixture product",
+        "Missing owned refund fixture transaction",
+      ];
+      console.warn(
+        JSON.stringify({
+          event: "e2e_provider_request_rejected",
+          reason: known.includes(error?.message) ? error.message : "INVALID_TEST_REQUEST",
+        }),
+      );
       response.writeHead(400).end(JSON.stringify({ error: "Invalid test provider request" }));
     }
   });

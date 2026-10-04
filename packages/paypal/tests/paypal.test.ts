@@ -59,6 +59,7 @@ const refundResponse = {
   status: "COMPLETED",
   amount: { currency_code: "USD", value: "5.00" },
   invoice_id: "refund-local",
+  create_time: "2026-10-03T23:00:06-07:00",
 };
 
 function queueFetch(
@@ -329,6 +330,59 @@ describe("PayPal Sandbox client", () => {
     expect(new Headers(transport.calls[2]!.init?.headers).get("PayPal-Request-Id")).toBe(
       "refund-partial",
     );
+  });
+
+  it.each(["x".repeat(39), "非ASCII", "invalid\nheader"])(
+    "rejects unsupported idempotency key %s before network access",
+    async (requestId) => {
+      const transport = queueFetch(() => jsonResponse(tokenResponse()));
+      const client = new PayPalClient(sandboxConfig(), { fetch: transport.fetcher });
+      await expect(client.captureOrder("ORDER-123", requestId)).rejects.toBeInstanceOf(
+        PayPalInputError,
+      );
+      expect(transport.calls).toHaveLength(0);
+    },
+  );
+
+  it("clears a rejected cached token without automatically repeating a financial call", async () => {
+    let tokens = 0;
+    let resources = 0;
+    const transport = queueFetch((url) => {
+      if (url.endsWith("/oauth2/token")) {
+        tokens++;
+        return jsonResponse(tokenResponse());
+      }
+      if (++resources === 1) return jsonResponse({}, 401);
+      return jsonResponse(orderResponse());
+    });
+    const client = new PayPalClient(sandboxConfig(), { fetch: transport.fetcher });
+    await expect(client.getOrder("ORDER-123")).rejects.toMatchObject({ status: 401 });
+    expect(resources).toBe(1);
+    expect(await client.getOrder("ORDER-123")).toMatchObject({ id: "ORDER-123" });
+    expect(tokens).toBe(2);
+  });
+
+  it("hydrates a minimal refund with a read without repeating the refund mutation", async () => {
+    const transport = queueFetch((url, init) => {
+      if (url.endsWith("/oauth2/token")) return jsonResponse(tokenResponse());
+      return init?.method === "POST"
+        ? jsonResponse({ id: "REFUND-123", status: "COMPLETED" })
+        : jsonResponse(refundResponse);
+    });
+    const client = new PayPalClient(sandboxConfig(), { fetch: transport.fetcher });
+    expect(
+      await client.refundCapture({
+        captureId: "CAPTURE-123",
+        requestId: "stable-refund",
+        amountMinor: 500,
+      }),
+    ).toMatchObject(refundResponse);
+    expect(
+      transport.calls.filter(
+        (call) => call.url.endsWith("/refund") && call.init?.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(transport.calls.at(-1)?.url).toContain("/v2/payments/refunds/REFUND-123");
   });
 
   it("validates capture currency and does not treat malformed responses as completed", async () => {

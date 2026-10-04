@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Check,
@@ -24,6 +25,7 @@ import type { PayPalStatus } from "@/lib/payments/types";
 import { WorkspaceLoading, WorkspaceSteps } from "@/components/workspace-ui";
 
 export function OrderCheckout({ proposalId }: { proposalId: string }) {
+  const router = useRouter();
   const [approval, setApproval] = useState<ApprovalDetail | null>(null);
   const [paypalStatus, setPaypalStatus] = useState<PayPalStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,6 +68,10 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
     setError(null);
     try {
       const result = await createPaypalOrder(approval.proposal.id);
+      if (result.pending) {
+        router.push(`/orders/${encodeURIComponent(result.payment.id)}`);
+        return;
+      }
       if (!result.approvalUrl || !isSafeSandboxApprovalUrl(result.approvalUrl)) {
         throw new Error("PayPal did not return a safe Sandbox approval URL.");
       }

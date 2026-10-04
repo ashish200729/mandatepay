@@ -250,6 +250,11 @@ describe("Channel3 discovery client", () => {
     expect(sony.length).toBeGreaterThan(0);
     expect(sony[0]?.source).toBe("demo");
     expect(searchDemoCatalog("noise-cancelling headphones").length).toBeGreaterThan(0);
+    expect(searchDemoCatalog("Sony or Bose headphones")).toHaveLength(3);
+    expect(searchDemoCatalog("headphones Sony or Bose")).toHaveLength(3);
+    expect(searchDemoCatalog("Nike or Sony headphones", 20, ["Nike", "Sony"])).toHaveLength(2);
+    expect(searchDemoCatalog("Sony or Bose printer paper")).toHaveLength(0);
+    expect(searchDemoCatalog("Mandate Supply Co. or Sony paper")).toHaveLength(1);
     expect(lookupDemoProduct("demo-sku-headphones-169")?.priceMinor).toBe(16_900);
   });
 

@@ -654,4 +654,197 @@ describe("PayPal payment boundary", () => {
       createOrder.mock.calls.at(-2)?.[0].requestId,
     );
   });
+
+  it("settles a lost capture with an offset timestamp through read-only recovery after expiry and catalogue removal", async () => {
+    const { proposal, snapshot } = await createProposal(13900n, "review-read-recovery");
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/paypal/orders",
+      headers: headers(userA),
+      payload: { proposalId: proposal.id },
+    });
+    const payment = created.json().payment;
+    captureOrder.mockRejectedValueOnce(
+      new PayPalProviderError("UPSTREAM_TIMEOUT", undefined, { unknownOutcome: true }),
+    );
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/paypal/orders/${payment.id}/capture`,
+          headers: headers(userA),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(202);
+    const mutations = captureOrder.mock.calls.length;
+    await database.purchaseProposal.update({
+      where: { id: proposal.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    products.delete(snapshot.externalId);
+    const capture = {
+      ...providerCapture({
+        id: `CAPTURE-RECOVER-${testRunId}`,
+        amount: 13900,
+        customId: proposal.id,
+      }),
+      create_time: "2026-10-03T23:00:06-07:00",
+    };
+    getOrder.mockResolvedValueOnce({
+      ...providerOrder({
+        id: payment.paypalOrderId,
+        status: "COMPLETED",
+        amount: 13900,
+        referenceId: payment.id,
+        customId: proposal.id,
+      }),
+      purchase_units: [
+        {
+          reference_id: payment.id,
+          custom_id: proposal.id,
+          amount: money(13900),
+          payments: { captures: [capture] },
+        },
+      ],
+    });
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${payment.id}/reconcile`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().payment.status).toBe("COMPLETED");
+    expect(result.json().payment.capturedAt).toBe("2026-10-04T06:00:06.000Z");
+    expect(captureOrder.mock.calls.length).toBe(mutations);
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { proposalId: proposal.id } }))
+        .status,
+    ).toBe("CONSUMED");
+  });
+
+  it("keeps payment recovery owned, origin-checked and free of captures for approved orders", async () => {
+    const { proposal } = await createProposal(13900n, "review-approved-status");
+    const payment = (
+      await app.inject({
+        method: "POST",
+        url: "/api/paypal/orders",
+        headers: headers(userA),
+        payload: { proposalId: proposal.id },
+      })
+    ).json().payment;
+    const mutations = captureOrder.mock.calls.length;
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/paypal/orders/${payment.id}/reconcile`,
+          headers: headers(userB),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/paypal/orders/${payment.id}/reconcile`,
+          headers: { ...headers(userA), origin: "https://attacker.example" },
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(403);
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${payment.id}/reconcile`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(result.json().payment.status).toBe("APPROVED");
+    expect(result.json().payment.authorizationExpiresAt).toBeTruthy();
+    expect(captureOrder.mock.calls.length).toBe(mutations);
+  });
+
+  it("does not expose or execute seeded sample payments", async () => {
+    const { proposal } = await createProposal(13900n, "review-sample");
+    const payment = (
+      await app.inject({
+        method: "POST",
+        url: "/api/paypal/orders",
+        headers: headers(userA),
+        payload: { proposalId: proposal.id },
+      })
+    ).json().payment;
+    await database.payment.update({ where: { id: payment.id }, data: { isSample: true } });
+    const mutations = captureOrder.mock.calls.length;
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/orders/${payment.id}`,
+          headers: headers(userA),
+        })
+      ).statusCode,
+    ).toBe(404);
+    for (const action of ["capture", "reconcile"])
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/paypal/orders/${payment.id}/${action}`,
+            headers: headers(userA),
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/paypal/orders",
+          headers: headers(userA),
+          payload: { proposalId: proposal.id },
+        })
+      ).statusCode,
+    ).toBe(404);
+    const list = await app.inject({ method: "GET", url: "/api/orders", headers: headers(userA) });
+    expect(list.json().orders.some((row: { id: string }) => row.id === payment.id)).toBe(false);
+    expect(captureOrder.mock.calls.length).toBe(mutations);
+  });
+
+  it("preserves refunded receipts when order/capture requests are repeated", async () => {
+    const { proposal, snapshot } = await createProposal(13900n, "review-refunded-replay");
+    const payment = (
+      await app.inject({
+        method: "POST",
+        url: "/api/paypal/orders",
+        headers: headers(userA),
+        payload: { proposalId: proposal.id },
+      })
+    ).json().payment;
+    await database.payment.update({
+      where: { id: payment.id },
+      data: { status: "REFUNDED", paypalCaptureId: `CAPTURE-REFUNDED-${testRunId}` },
+    });
+    products.delete(snapshot.externalId);
+    const mutations = captureOrder.mock.calls.length;
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${payment.id}/capture`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().payment.status).toBe("REFUNDED");
+    const order = await app.inject({
+      method: "POST",
+      url: "/api/paypal/orders",
+      headers: headers(userA),
+      payload: { proposalId: proposal.id },
+    });
+    expect(order.statusCode).toBe(200);
+    expect(order.json().payment.status).toBe("REFUNDED");
+    expect(captureOrder.mock.calls.length).toBe(mutations);
+  });
 });

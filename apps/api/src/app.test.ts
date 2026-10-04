@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
+import { env } from "./env.js";
 
 describe("foundation API", () => {
   let app: Awaited<ReturnType<typeof createApp>> | undefined;
@@ -47,5 +48,15 @@ describe("foundation API", () => {
       status: "unavailable",
       code: "AUTH_UNAVAILABLE",
     });
+  });
+
+  it("does not permit fixture authentication limits outside test mode", async () => {
+    await expect(
+      createApp({
+        authRuntime: null,
+        config: { ...env, NODE_ENV: "production" },
+        testAuthPostMaximum: 200,
+      }),
+    ).rejects.toThrow("only by isolated test servers");
   });
 });

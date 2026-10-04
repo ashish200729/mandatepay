@@ -77,6 +77,12 @@ export function readPayment(value: unknown): PaymentRecord {
     throw new Error("Payment response was not valid.");
   if (candidate.currency !== "USD") throw new Error("Only USD payments are supported.");
   if (!Array.isArray(candidate.refunds)) throw new Error("Payment response has invalid refunds.");
+  const authorizationExpiresAt =
+    candidate.authorizationExpiresAt === undefined
+      ? null
+      : readNullableString(candidate.authorizationExpiresAt, "authorizationExpiresAt");
+  if (authorizationExpiresAt !== null && !Number.isFinite(Date.parse(authorizationExpiresAt)))
+    throw new Error("Payment response has invalid authorization expiry.");
   return {
     id: readString(candidate.id, "id"),
     proposalId: readString(candidate.proposalId, "proposalId"),
@@ -87,6 +93,7 @@ export function readPayment(value: unknown): PaymentRecord {
     paypalCaptureId: readNullableString(candidate.paypalCaptureId, "paypalCaptureId"),
     capturedAt: readNullableString(candidate.capturedAt, "capturedAt"),
     createdAt: readString(candidate.createdAt, "createdAt"),
+    authorizationExpiresAt,
     product: {
       title: readString(product.title, "product.title"),
       brand: readString(product.brand, "product.brand"),
@@ -99,15 +106,27 @@ export function readPayment(value: unknown): PaymentRecord {
 }
 
 async function request(path: string, init?: RequestInit) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    ...init,
-    headers: {
-      accept: "application/json",
-      ...(init?.body ? { "content-type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+  const financialMutation = init?.method === "POST";
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      ...(financialMutation ? { signal: init?.signal ?? AbortSignal.timeout(75_000) } : {}),
+      headers: {
+        accept: "application/json",
+        ...(init?.body ? { "content-type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+  } catch (cause) {
+    if (!financialMutation) throw cause;
+    const operation = /\/refund(?:-status)?$/.test(path) ? "refund" : "payment";
+    throw new PaymentApiError(
+      `The ${operation} outcome has not been confirmed. Refresh this order to check its status before retrying.`,
+      503,
+    );
+  }
   const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
   if (!response.ok) {
     const message =
@@ -134,6 +153,7 @@ export async function createPaypalOrder(proposalId: string) {
   return {
     payment: readPayment(payload.payment),
     approvalUrl: payload.approvalUrl as string | null,
+    pending: payload.pending === true,
   };
 }
 
@@ -142,6 +162,24 @@ export async function capturePaypalOrder(paymentId: string) {
     await request(`/api/paypal/orders/${encodeURIComponent(paymentId)}/capture`, {
       method: "POST",
       body: JSON.stringify({}),
+    }),
+  );
+}
+
+export async function checkPaymentStatus(paymentId: string) {
+  return readPayment(
+    await request(`/api/paypal/orders/${encodeURIComponent(paymentId)}/reconcile`, {
+      method: "POST",
+      body: "{}",
+    }),
+  );
+}
+
+export async function checkRefundStatus(paymentId: string) {
+  return readPayment(
+    await request(`/api/payments/${encodeURIComponent(paymentId)}/refund-status`, {
+      method: "POST",
+      body: "{}",
     }),
   );
 }

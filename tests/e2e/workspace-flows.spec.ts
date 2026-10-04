@@ -165,6 +165,13 @@ test("keeps the composer in view, retries with the same key, and scrolls convers
         ),
       )
       .toBe(true);
+    // Let resize observers finish before simulating a separate user scroll.
+    await log.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
     expect(await log.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
     await log.evaluate((element) => {
       element.scrollTop = 0;
@@ -232,10 +239,10 @@ test("locks refund details while the provider outcome is pending", async ({ page
   await page.getByLabel("Reason", { exact: true }).fill("Return this purchase.");
   await page.getByRole("button", { name: "Request refund", exact: true }).click();
   await page.getByRole("button", { name: "Confirm refund", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Retry pending refund" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry same refund" })).toBeVisible();
   await expect(page.getByRole("radio", { name: "Partial refund", exact: true })).toBeDisabled();
   await expect(page.getByLabel("Reason", { exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Retry pending refund" }).click();
+  await page.getByRole("button", { name: "Retry same refund" }).click();
   await expect.poll(() => keys.length).toBe(2);
   expect(keys[0]).toBe(keys[1]);
 });

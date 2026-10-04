@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
   AuditEntityType,
   AuditEventType,
@@ -28,8 +29,8 @@ import { revalidateAuthorizationInTransaction, type TransactionClient } from "./
 type Owner = { id: string };
 
 export const paymentReceiptInclude = {
-  proposal: { include: { productSnapshot: true, mandateVersion: true } },
-  refunds: { orderBy: { createdAt: "asc" as const } },
+  proposal: { include: { productSnapshot: true, mandateVersion: true, approval: true } },
+  refunds: { where: { isSample: false }, orderBy: { createdAt: "asc" as const } },
 } as const;
 
 export type PaymentReceipt = Prisma.PaymentGetPayload<{ include: typeof paymentReceiptInclude }>;
@@ -38,11 +39,17 @@ const receiptInclude = paymentReceiptInclude;
 
 const inFlightOrderRequests = new Map<string, Promise<PayPalOrder>>();
 const inFlightCaptureRequests = new Map<string, Promise<PayPalCapture>>();
+const settledPaymentStatuses: readonly PaymentStatus[] = [
+  PaymentStatus.COMPLETED,
+  PaymentStatus.PARTIALLY_REFUNDED,
+  PaymentStatus.REFUNDED,
+];
 
 export interface PayPalGateway {
   createOrder(input: CreateOrderInput): Promise<PayPalOrder>;
   getOrder(orderId: string): Promise<PayPalOrder>;
   captureOrder(orderId: string, requestId: string): Promise<PayPalCapture>;
+  getCapture?(captureId: string): Promise<PayPalCapture>;
 }
 
 export interface DemoProductFacts {
@@ -88,6 +95,7 @@ export interface PaymentDTO {
   readonly paypalCaptureId: string | null;
   readonly capturedAt: string | null;
   readonly createdAt: string;
+  readonly authorizationExpiresAt: string | null;
   readonly product: {
     readonly title: string;
     readonly brand: string;
@@ -133,6 +141,17 @@ function paymentDTO(payment: PaymentReceipt): PaymentDTO {
     paypalCaptureId: payment.paypalCaptureId,
     capturedAt: payment.capturedAt?.toISOString() ?? null,
     createdAt: payment.createdAt.toISOString(),
+    authorizationExpiresAt: new Date(
+      Math.min(
+        ...[
+          payment.proposal.expiresAt,
+          payment.proposal.approval?.expiresAt,
+          payment.proposal.mandateVersion.expiresAt,
+        ]
+          .filter((date): date is Date => date instanceof Date)
+          .map((date) => date.getTime()),
+      ),
+    ).toISOString(),
     product: {
       title: snapshot.title,
       brand: snapshot.brand ?? "Unknown",
@@ -162,6 +181,8 @@ export async function receiptForUser(
   const payment = await database.payment.findFirst({
     where: {
       userId,
+      isSample: false,
+      proposal: { isSample: false },
       OR: [{ id: paymentId }, { paypalOrderId: paymentId }],
     },
     include: receiptInclude,
@@ -172,10 +193,12 @@ export async function receiptForUser(
 
 async function proposalForUser(database: DatabaseClient, userId: string, proposalId: string) {
   const proposal = await database.purchaseProposal.findFirst({
-    where: { id: proposalId, userId },
-    include: { productSnapshot: true },
+    where: { id: proposalId, userId, isSample: false },
+    include: { productSnapshot: true, payment: true },
   });
   if (!proposal) throw new DatabaseError("NOT_FOUND", "Purchase proposal was not found.");
+  if (proposal.payment?.isSample)
+    throw new DatabaseError("NOT_FOUND", "Purchase proposal was not found.");
   return proposal;
 }
 
@@ -306,10 +329,11 @@ function validateProviderCaptureFacts(capture: PayPalCapture, payment: PaymentRe
 }
 
 function providerCaptureTimestamp(capture: PayPalCapture): Date {
-  if (!capture.create_time || !/Z$/u.test(capture.create_time)) {
+  const timestamp = z.iso.datetime({ offset: true }).safeParse(capture.create_time);
+  if (!timestamp.success) {
     throw new PaymentServiceError("PAYPAL_RESPONSE_INVALID");
   }
-  const parsed = new Date(capture.create_time);
+  const parsed = new Date(timestamp.data);
   if (Number.isNaN(parsed.getTime())) throw new PaymentServiceError("PAYPAL_RESPONSE_INVALID");
   return parsed;
 }
@@ -356,7 +380,7 @@ async function lockPaymentInOrder(
 ): Promise<PaymentReceipt> {
   await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', userId);
   const unlocked = await tx.payment.findFirst({
-    where: { id: paymentId, userId },
+    where: { id: paymentId, userId, isSample: false, proposal: { isSample: false } },
     select: { id: true, mandateId: true, proposalId: true },
   });
   if (!unlocked) throw new DatabaseError("NOT_FOUND", "Payment was not found for this user.");
@@ -424,12 +448,24 @@ export async function createPaypalOrder(
 ) {
   if (!context.paypal) throw new PaymentServiceError("PAYPAL_UNAVAILABLE");
   const proposal = await proposalForUser(context.database, user.id, proposalId);
+  if (
+    proposal.payment &&
+    (settledPaymentStatuses.includes(proposal.payment.status) ||
+      proposal.payment.status === PaymentStatus.DENIED ||
+      proposal.payment.status === PaymentStatus.FAILED)
+  ) {
+    return {
+      payment: paymentDTO(await receiptForUser(context.database, user.id, proposal.payment.id)),
+      approvalUrl: null,
+      pending: false,
+    };
+  }
   const authoritative = await authoritativeDemoProduct(context, proposal.productSnapshot);
 
   const claimed = await context.database.$transaction(async (tx) => {
     await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id);
     const existing = await tx.payment.findFirst({
-      where: { proposalId, userId: user.id },
+      where: { proposalId, userId: user.id, isSample: false },
       include: receiptInclude,
     });
     if (existing) {
@@ -479,7 +515,7 @@ export async function createPaypalOrder(
   if ("existing" in claimed && claimed.existing) {
     const payment = claimed.existing;
     if (
-      payment.status === PaymentStatus.COMPLETED ||
+      settledPaymentStatuses.includes(payment.status) ||
       payment.status === PaymentStatus.FAILED ||
       payment.status === PaymentStatus.DENIED
     ) {
@@ -558,7 +594,7 @@ async function markCapturePending(
     // below takes the already-held parent locks in that same order, so a
     // concurrent capture can return an already-completed receipt idempotently.
     const current = await lockPaymentInOrder(tx, user.id, payment.id);
-    if (current.status === PaymentStatus.COMPLETED) {
+    if (settledPaymentStatuses.includes(current.status)) {
       return { completed: current as PaymentReceipt } as const;
     }
     if (!current.paypalOrderId || current.paypalOrderId !== payment.paypalOrderId) {
@@ -632,7 +668,7 @@ async function finalizeCapture(
 ) {
   return context.database.$transaction(async (tx) => {
     const current = await lockPaymentInOrder(tx, user.id, paymentId);
-    if (current.status === PaymentStatus.COMPLETED) {
+    if (settledPaymentStatuses.includes(current.status)) {
       if (current.paypalCaptureId === capture.id) return current;
       throw new DatabaseError("CONFLICT", "Payment is already completed with another capture.");
     }
@@ -708,6 +744,7 @@ async function finalizeDeclinedCapture(
 ) {
   return context.database.$transaction(async (tx) => {
     const current = await lockPaymentInOrder(tx, user.id, paymentId);
+    if (settledPaymentStatuses.includes(current.status)) return current;
     if (current.status === PaymentStatus.DENIED || current.status === PaymentStatus.FAILED) {
       return current;
     }
@@ -759,7 +796,7 @@ export async function capturePaypalOrder(
 ) {
   if (!context.paypal) throw new PaymentServiceError("PAYPAL_UNAVAILABLE");
   let payment = await receiptForUser(context.database, user.id, paymentOrOrderId);
-  if (payment.status === PaymentStatus.COMPLETED) {
+  if (settledPaymentStatuses.includes(payment.status)) {
     return { payment: paymentDTO(payment), pending: false };
   }
   if (payment.status === PaymentStatus.DENIED || payment.status === PaymentStatus.FAILED) {
@@ -768,8 +805,6 @@ export async function capturePaypalOrder(
   if (!payment.paypalOrderId || !payment.paypalCaptureRequestId) {
     throw new DatabaseError("INVALID_STATE", "A PayPal order must be created before capture.");
   }
-  const proposal = await proposalForUser(context.database, user.id, payment.proposalId);
-  const authoritative = await authoritativeDemoProduct(context, proposal.productSnapshot);
   let order: PayPalOrder;
   try {
     order = await context.paypal.getOrder(payment.paypalOrderId);
@@ -797,6 +832,9 @@ export async function capturePaypalOrder(
   if (order.status !== "APPROVED") {
     throw new PaymentServiceError("PAYER_APPROVAL_REQUIRED", 409);
   }
+
+  const proposal = await proposalForUser(context.database, user.id, payment.proposalId);
+  const authoritative = await authoritativeDemoProduct(context, proposal.productSnapshot);
 
   const claimed = await markCapturePending(context, user, payment, authoritative);
   if ("authorization" in claimed) {
@@ -840,12 +878,86 @@ export async function capturePaypalOrder(
 
 export async function listPayments(context: PaymentServiceContext, user: Owner) {
   const payments = await context.database.payment.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, isSample: false, proposal: { isSample: false } },
     include: receiptInclude,
     orderBy: { createdAt: "desc" },
     take: 100,
   });
   return { orders: payments.map(paymentDTO) };
+}
+
+/** Checks existing provider records only; never creates or captures an order. */
+export async function reconcilePaypalOrder(
+  context: PaymentServiceContext,
+  user: Owner,
+  paymentId: string,
+) {
+  if (!context.paypal) throw new PaymentServiceError("PAYPAL_UNAVAILABLE");
+  const payment = await receiptForUser(context.database, user.id, paymentId);
+  if (
+    settledPaymentStatuses.includes(payment.status) ||
+    payment.status === PaymentStatus.DENIED ||
+    payment.status === PaymentStatus.FAILED
+  ) {
+    return { payment: paymentDTO(payment), pending: false };
+  }
+  if (!payment.paypalOrderId) return { payment: paymentDTO(payment), pending: true };
+  try {
+    const order = await context.paypal.getOrder(payment.paypalOrderId);
+    validateProviderOrder(order, payment, payment.paypalOrderId);
+    if (order.status === "COMPLETED" && payment.status === PaymentStatus.CAPTURE_PENDING) {
+      let capture = completedCaptureFromOrder(order, payment);
+      if (capture && !capture.create_time && context.paypal.getCapture) {
+        const hydrated = await context.paypal.getCapture(capture.id);
+        if (hydrated.id !== capture.id) throw new PaymentServiceError("PAYPAL_RESPONSE_INVALID");
+        validateProviderCapture(hydrated, payment);
+        capture = hydrated;
+      }
+      if (capture) {
+        const completed = await finalizeCapture(
+          context,
+          user,
+          payment.id,
+          capture,
+          providerCaptureTimestamp(capture),
+        );
+        return { payment: paymentDTO(completed), pending: false };
+      }
+    }
+    if (order.status === "APPROVED" && payment.status === PaymentStatus.CREATED) {
+      const approved = await context.database.$transaction(async (tx) => {
+        const current = await lockPaymentInOrder(tx, user.id, payment.id);
+        if (current.status !== PaymentStatus.CREATED) return current;
+        validateProviderOrder(order, current, current.paypalOrderId);
+        await tx.auditEvent.create({
+          data: {
+            userId: user.id,
+            eventType: AuditEventType.PAYPAL_ORDER_APPROVED,
+            entityType: AuditEntityType.PAYMENT,
+            entityId: current.id,
+            dedupeKey: `paypal-order-approved:${current.id}`,
+            payload: { paymentId: current.id, proposalId: current.proposalId },
+          },
+        });
+        return tx.payment.update({
+          where: { id: current.id },
+          data: { status: PaymentStatus.APPROVED },
+          include: receiptInclude,
+        });
+      });
+      return {
+        payment: paymentDTO(approved),
+        pending: approved.status === PaymentStatus.CAPTURE_PENDING,
+      };
+    }
+  } catch (error) {
+    if (!asPendingReceipt(error)) throw error;
+  }
+  const current = await currentReceipt(context, payment.id, user.id);
+  return {
+    payment: paymentDTO(current),
+    pending: !settledPaymentStatuses.includes(current.status),
+  };
 }
 
 export async function getPayment(

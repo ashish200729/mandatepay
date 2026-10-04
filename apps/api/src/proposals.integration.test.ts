@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPrismaClient, MandateRepository, ProposalRepository } from "@mandatepay/database";
 import { ProductCondition } from "@mandatepay/database";
+import { CanonicalMandateSchema } from "@mandatepay/shared";
 import { registerProposalRoutes } from "./routes/proposals.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -239,6 +240,117 @@ describe("AgentGuard proposal service", () => {
     expect(blockedDecision.json().decision.reasonCodes).toContain("TRANSACTION_LIMIT_EXCEEDED");
   });
 
+  it.each(["unpaid", "unknown", "sample"])(
+    "accounts for %s historical reservations safely",
+    async (kind) => {
+      await database.user.update({
+        where: { id: userA },
+        data: { globalAutonomousPurchasingEnabled: true },
+      });
+      const base = await database.mandateVersion.findUniqueOrThrow({ where: { id: versionA } });
+      const now = Date.now();
+      const rules = {
+        ...CanonicalMandateSchema.parse(base.canonicalRules),
+        title: `Accounting ${kind}`,
+        autoSpendLimit: 20000,
+        transactionLimit: 20000,
+        dailyLimit: 20000,
+        weeklyLimit: 50000,
+        monthlyLimit: 100000,
+        newMerchantRequiresApproval: false,
+        startsAt: new Date(now - 60000).toISOString(),
+        expiresAt: new Date(now + 86400000).toISOString(),
+      };
+      const mandate = await new MandateRepository(database).create({
+        userId: userA,
+        title: rules.title,
+        originalPrompt: "Accounting review",
+        status: "ACTIVE",
+        currency: "USD",
+        autoSpendLimit: 20000n,
+        transactionLimit: 20000n,
+        dailyLimit: 20000n,
+        weeklyLimit: 50000n,
+        monthlyLimit: 100000n,
+        startsAt: new Date(rules.startsAt),
+        expiresAt: new Date(rules.expiresAt),
+        canonicalRules: rules,
+      });
+      const first = await createProposal(
+        userA,
+        mandate.id,
+        mandate.activeVersionId!,
+        products.get("15000")!,
+      );
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/proposals/${first.id}/evaluate`,
+            headers: headers(userA),
+            payload: {},
+          })
+        ).json().decision.decision,
+      ).toBe("ALLOW");
+      await database.payment.create({
+        data: {
+          userId: userA,
+          mandateId: mandate.id,
+          proposalId: first.id,
+          status:
+            kind === "unknown" ? "CAPTURE_PENDING" : kind === "sample" ? "COMPLETED" : "APPROVED",
+          amount: 15000n,
+          currency: "USD",
+          isSample: kind === "sample",
+          capturedAt: kind === "sample" ? new Date() : null,
+          paypalOrderId: "accounting-" + first.id,
+          idempotencyKey: "accounting-" + first.id,
+        },
+      });
+      await database.purchaseProposal.update({
+        where: { id: first.id },
+        data: {
+          status:
+            kind === "unknown"
+              ? "PAYMENT_PENDING"
+              : kind === "sample"
+                ? "COMPLETED"
+                : "PAYPAL_ORDER_CREATED",
+          isSample: kind === "sample",
+          expiresAt: new Date(now - 1000),
+        },
+      });
+      await database.spendReservation.update({
+        where: { proposalId: first.id },
+        data: {
+          isSample: kind === "sample",
+          status: kind === "sample" ? "CONSUMED" : "ACTIVE",
+          expiresAt: new Date(now - 1000),
+        },
+      });
+      const next = await createProposal(
+        userA,
+        mandate.id,
+        mandate.activeVersionId!,
+        products.get("15000")!,
+      );
+      const result = await app.inject({
+        method: "POST",
+        url: `/api/proposals/${next.id}/evaluate`,
+        headers: headers(userA),
+        payload: {},
+      });
+      expect(result.statusCode).toBe(200);
+      expect(result.json().decision.decision).toBe(kind === "unknown" ? "BLOCK" : "ALLOW");
+      const held = await database.spendReservation.findUniqueOrThrow({
+        where: { proposalId: first.id },
+      });
+      expect(held.status).toBe(
+        kind === "unknown" ? "ACTIVE" : kind === "sample" ? "CONSUMED" : "EXPIRED",
+      );
+    },
+  );
+
   it("enforces ownership and lets one of two concurrent 150 dollar proposals reserve the daily cap", async () => {
     await expect(
       createProposal(userA, mandateB, versionB, products.get("15000")!),
@@ -309,5 +421,45 @@ describe("AgentGuard proposal service", () => {
           decision.decision === "BLOCK" && decision.reasonCodes.includes("WEEKLY_LIMIT_EXCEEDED"),
       ),
     ).toBe(true);
+  });
+
+  it("checks expiry after waiting for the user serialization lock", async () => {
+    const proposal = await createProposal(userA, mandateA, versionA, products.get("13900")!);
+    await database.purchaseProposal.update({
+      where: { id: proposal.id },
+      data: { expiresAt: new Date(Date.now() + 700) },
+    });
+    let release!: () => void;
+    let locked!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const acquired = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const holder = database.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userA} FOR UPDATE`;
+      locked();
+      await gate;
+    });
+    await acquired;
+    const waiting = Promise.resolve(
+      app.inject({
+        method: "POST",
+        url: `/api/proposals/${proposal.id}/evaluate`,
+        headers: headers(userA),
+        payload: {},
+      }),
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 850));
+    } finally {
+      release();
+    }
+    await holder;
+    expect((await waiting).statusCode).toBe(409);
+    expect(
+      await database.spendReservation.findUnique({ where: { proposalId: proposal.id } }),
+    ).toBeNull();
   });
 });

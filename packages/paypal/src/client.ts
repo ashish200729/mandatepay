@@ -41,7 +41,13 @@ export interface PayPalClientOptions {
 }
 
 function validateIdempotencyKey(value: string): string {
-  const parsed = z.string().trim().min(1).max(100).safeParse(value);
+  const parsed = z
+    .string()
+    .trim()
+    .min(1)
+    .max(38)
+    .regex(/^[\x21-\x7E]+$/u)
+    .safeParse(value);
   if (!parsed.success) throw new PayPalInputError("INVALID_IDEMPOTENCY_KEY");
   return parsed.data;
 }
@@ -242,6 +248,7 @@ export class PayPalClient {
         signal: controller.signal,
       });
       if (!response.ok) {
+        if (response.status === 401) this.invalidateAccessToken();
         const uncertain =
           options.mutation === true &&
           (response.status === 408 ||
@@ -350,6 +357,15 @@ export class PayPalClient {
         preferRepresentation: true,
       },
     );
+    // Hydrate a minimal successful response without submitting another refund.
+    const candidate = PayPalRefundSchema.safeParse(response);
+    if (!candidate.success || !candidate.data.create_time) {
+      const identity = z
+        .object({ id: z.string().regex(/^[A-Za-z0-9-]{1,50}$/u) })
+        .safeParse(response);
+      if (!identity.success) throw new PayPalResponseError("INVALID_REFUND_RESPONSE");
+      return this.getRefund(identity.data.id);
+    }
     return parseRefundResponse(response);
   }
 

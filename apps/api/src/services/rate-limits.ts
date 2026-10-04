@@ -25,7 +25,7 @@ export function createMutationRateLimiter({
 export function isFinancialMutation(method: string, url: string): boolean {
   return (
     method === "POST" &&
-    /^\/api\/(?:proposals(?:\/|$)|paypal\/orders(?:\/|$)|payments\/[^/]+\/refund(?:\?|$))/u.test(
+    /^\/api\/(?:proposals(?:\/|$)|paypal\/orders(?:\/|$)|payments\/[^/]+\/(?:refund|refund-status)(?:\?|$))/u.test(
       url,
     )
   );

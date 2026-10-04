@@ -203,6 +203,62 @@ describe("PayPal webhook service", () => {
     },
   );
 
+  it("resolves refund capture and order links from authoritative PayPal responses", async () => {
+    const paypal = fakePayPal();
+    (paypal.getRefund as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "REFUND-123",
+      status: "COMPLETED",
+      amount: { currency_code: "USD", value: "5.00" },
+      create_time: "2026-10-03T23:00:06-07:00",
+      links: [
+        { rel: "up", href: "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123" },
+      ],
+    });
+    (paypal.getCapture as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "CAPTURE-123",
+      status: "REFUNDED",
+      amount: { currency_code: "USD", value: "5.00" },
+      supplementary_data: { related_ids: { order_id: "ORDER-123" } },
+    });
+    const context = service(paypal);
+    const result = await context.service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-REFUND",
+        event_type: "PAYMENT.CAPTURE.REFUNDED",
+        resource: { id: "REFUND-123" },
+      }),
+    });
+    expect(result.statusCode).toBe(200);
+    expect(paypal.getCapture).toHaveBeenCalledWith("CAPTURE-123");
+    expect(paypal.getOrder).toHaveBeenCalledWith("ORDER-123");
+  });
+
+  it.each([
+    "https://attacker.example/v2/payments/captures/CAPTURE-123",
+    "https://api-m.sandbox.paypal.com.attacker.example/v2/payments/captures/CAPTURE-123",
+    "http://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123",
+    "https://user:password@api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123",
+    "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123?token=private",
+  ])("does not resolve refund bindings from unsafe link %s", async (href) => {
+    const paypal = fakePayPal();
+    (paypal.getRefund as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "REFUND-123",
+      links: [{ rel: "up", href }],
+    });
+    const context = service(paypal);
+    await context.service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-BAD-LINK",
+        event_type: "PAYMENT.CAPTURE.REFUNDED",
+        resource: { id: "REFUND-123" },
+      }),
+    });
+    expect(paypal.getCapture).not.toHaveBeenCalled();
+    expect(paypal.getOrder).not.toHaveBeenCalled();
+  });
+
   it("ignores unsupported events after durable claim without provider writes", async () => {
     const context = service();
     const event = JSON.stringify({ id: "WH-UNKNOWN", event_type: "SOME.NEW.EVENT", resource: {} });

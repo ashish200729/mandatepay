@@ -31,7 +31,9 @@ describe("financial mutation rate limits", () => {
       "/api/proposals/a/evaluate",
       "/api/paypal/orders",
       "/api/paypal/orders/a/capture",
+      "/api/paypal/orders/a/reconcile",
       "/api/payments/a/refund",
+      "/api/payments/a/refund-status",
     ]) {
       expect(isFinancialMutation("POST", path)).toBe(true);
       expect(isFinancialMutation("GET", path)).toBe(false);

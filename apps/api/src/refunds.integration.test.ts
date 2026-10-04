@@ -282,6 +282,59 @@ describe("PayPal refund boundary", () => {
     expect(refundCapture.mock.calls.at(-1)?.[0]).toMatchObject({ amountMinor: 7_500 });
   });
 
+  it("records timezone-offset refund timestamps as their UTC instant", async () => {
+    const { payment } = await createRefundablePayment("offset-time");
+    refundCapture.mockImplementationOnce(async (input) => {
+      const value = input as { amountMinor: number; invoiceId: string };
+      return {
+        ...providerRefund(`REFUND-OFFSET-${runId}`, value.amountMinor, value.invoiceId),
+        create_time: "2026-10-03T23:00:06-07:00",
+      };
+    });
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: null,
+        reason: "Return",
+        requestKey: requestKey("offset-time"),
+        confirmed: true,
+      },
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().payment.status).toBe("REFUNDED");
+    const refund = await database.refund.findUniqueOrThrow({
+      where: { id: result.json().refund.id },
+    });
+    expect(refund.settledAt?.toISOString()).toBe("2026-10-04T06:00:06.000Z");
+  });
+
+  it("keeps a completed provider response with an invalid timestamp pending", async () => {
+    const { payment } = await createRefundablePayment("invalid-time");
+    refundCapture.mockImplementationOnce(async (input) => {
+      const value = input as { amountMinor: number; invoiceId: string };
+      return {
+        ...providerRefund(`REFUND-INVALID-TIME-${runId}`, value.amountMinor, value.invoiceId),
+        create_time: "2026-10-03T23:00:06",
+      };
+    });
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: 2500,
+        reason: "Return",
+        requestKey: requestKey("invalid-time"),
+        confirmed: true,
+      },
+    });
+    expect(result.statusCode).toBe(202);
+    expect(result.json().payment.status).toBe("COMPLETED");
+    expect(result.json().refund.status).toBe("SUBMITTED");
+  });
+
   it("serializes concurrent refunds against the same captured payment", async () => {
     const { payment } = await createRefundablePayment("concurrent");
     const responses = await Promise.all(
@@ -406,7 +459,9 @@ describe("PayPal refund boundary", () => {
         confirmed: true,
       },
     });
-    expect(mismatch.statusCode).toBe(503);
+    expect(mismatch.statusCode).toBe(202);
+    expect(mismatch.json().pending).toBe(true);
+    expect(mismatch.json().payment.status).toBe("COMPLETED");
     expect(
       (
         await database.refund.findFirst({
@@ -414,5 +469,162 @@ describe("PayPal refund boundary", () => {
         })
       )?.status,
     ).toBe("SUBMITTED");
+  });
+
+  it("only reads the status of an already bound pending refund on retry", async () => {
+    const { payment } = await createRefundablePayment("known-pending");
+    refundCapture.mockImplementationOnce(async (input) => {
+      const value = input as { amountMinor: number; invoiceId: string };
+      return providerRefund(`REFUND-KNOWN-${runId}`, value.amountMinor, value.invoiceId, "PENDING");
+    });
+    const payload = {
+      amountMinor: 2500,
+      reason: "Return",
+      requestKey: requestKey("known-pending"),
+      confirmed: true,
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload,
+    });
+    expect(first.statusCode).toBe(202);
+    expect(first.json().refund.paypalRefundId).toBe(`REFUND-KNOWN-${runId}`);
+    const mutations = refundCapture.mock.calls.length;
+    getRefund.mockRejectedValueOnce(new PayPalProviderError("UPSTREAM_UNAVAILABLE", 503));
+    const retry = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload,
+    });
+    expect(retry.statusCode).toBe(202);
+    expect(refundCapture.mock.calls.length).toBe(mutations);
+    expect(getRefund).toHaveBeenCalledWith(`REFUND-KNOWN-${runId}`);
+  });
+
+  it("reconciles a known pending refund without repeating its mutation", async () => {
+    const { payment } = await createRefundablePayment("review-read-status");
+    refundCapture.mockImplementationOnce(async (input) => {
+      const value = input as { amountMinor: number; invoiceId: string };
+      return providerRefund(
+        `REFUND-STATUS-${runId}`,
+        value.amountMinor,
+        value.invoiceId,
+        "PENDING",
+      );
+    });
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: 2500,
+        reason: "Review",
+        requestKey: requestKey("review-status"),
+        confirmed: true,
+      },
+    });
+    const mutations = refundCapture.mock.calls.length;
+    getRefund.mockResolvedValueOnce(
+      providerRefund(first.json().refund.paypalRefundId, 2500, first.json().refund.id),
+    );
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/payments/${payment.id}/refund-status`,
+          headers: headers(userB),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/payments/${payment.id}/refund-status`,
+          headers: headers(userA, "https://attacker.example"),
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(403);
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund-status`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().payment.status).toBe("PARTIALLY_REFUNDED");
+    expect(refundCapture.mock.calls.length).toBe(mutations);
+  });
+
+  it.each([0, -1, 1.25])(
+    "rejects invalid partial amount %s before contacting PayPal",
+    async (amountMinor) => {
+      const { payment } = await createRefundablePayment("review-invalid-" + amountMinor);
+      const mutations = refundCapture.mock.calls.length;
+      const result = await app.inject({
+        method: "POST",
+        url: `/api/payments/${payment.id}/refund`,
+        headers: headers(userA),
+        payload: {
+          amountMinor,
+          reason: "Invalid",
+          requestKey: requestKey("invalid-" + amountMinor),
+          confirmed: true,
+        },
+      });
+      expect(result.statusCode).toBe(400);
+      expect(refundCapture.mock.calls.length).toBe(mutations);
+    },
+  );
+
+  it("rejects sample payments and excludes sample refunds from the available amount", async () => {
+    const sample = await createRefundablePayment("review-sample");
+    await database.payment.update({ where: { id: sample.payment.id }, data: { isSample: true } });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/payments/${sample.payment.id}/refund`,
+          headers: headers(userA),
+          payload: {
+            amountMinor: null,
+            reason: "Sample",
+            requestKey: requestKey("sample"),
+            confirmed: true,
+          },
+        })
+      ).statusCode,
+    ).toBe(404);
+    const { payment } = await createRefundablePayment("review-sample-refund");
+    await database.refund.create({
+      data: {
+        paymentId: payment.id,
+        userId: userA,
+        isSample: true,
+        status: "COMPLETED",
+        amount: 5000n,
+        currency: "USD",
+        idempotencyKey: requestKey("sample-illustration"),
+      },
+    });
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: null,
+        reason: "Real remaining amount",
+        requestKey: requestKey("real-remaining"),
+        confirmed: true,
+      },
+    });
+    expect(result.statusCode).toBe(200);
+    expect(result.json().refund.amount).toBe(10000);
+    expect(result.json().payment.refunds).toHaveLength(1);
   });
 });

@@ -123,12 +123,46 @@ function relatedId(resource: Record<string, unknown>, key: string): string | nul
   return stringAt(related, key);
 }
 
+function linkedId(resource: Record<string, unknown>, path: string): string | null {
+  if (!Array.isArray(resource.links)) return null;
+  for (const link of resource.links) {
+    const entry = record(link);
+    if (entry?.rel !== "up" || typeof entry.href !== "string") continue;
+    try {
+      const url = new URL(entry.href);
+      if (
+        url.protocol !== "https:" ||
+        !["api-m.sandbox.paypal.com", "api.sandbox.paypal.com"].includes(url.hostname) ||
+        url.username ||
+        url.password ||
+        url.port ||
+        url.search ||
+        url.hash
+      )
+        continue;
+      const match = url.pathname.match(new RegExp(`^${path}/([A-Za-z0-9-]{1,50})$`, "u"));
+      if (match?.[1]) return match[1];
+    } catch {
+      // Extract a bounded ID only; never request the supplied link URL.
+    }
+  }
+  return null;
+}
+
 function relatedOrderId(resource: Record<string, unknown>): string | null {
-  return relatedId(resource, "order_id") ?? stringAt(resource, "order_id");
+  return (
+    relatedId(resource, "order_id") ??
+    stringAt(resource, "order_id") ??
+    linkedId(resource, "/v2/checkout/orders")
+  );
 }
 
 function relatedCaptureId(resource: Record<string, unknown>): string | null {
-  return relatedId(resource, "capture_id") ?? stringAt(resource, "capture_id");
+  return (
+    relatedId(resource, "capture_id") ??
+    stringAt(resource, "capture_id") ??
+    linkedId(resource, "/v2/payments/captures")
+  );
 }
 
 function providerErrorResponse(error: unknown): WebhookServiceResponse {
@@ -247,10 +281,11 @@ export class PayPalWebhookService {
     if (eventType === "PAYMENT.CAPTURE.COMPLETED" || eventType === "PAYMENT.CAPTURE.DENIED") {
       const captureId = stringAt(resource, "id");
       if (!captureId) return null;
-      const orderId = relatedOrderId(resource);
+      const capture = await this.paypal.getCapture(captureId);
+      const orderId = relatedOrderId(capture) ?? relatedOrderId(resource);
       return {
         kind: "capture",
-        capture: await this.paypal.getCapture(captureId),
+        capture,
         order: orderId ? await this.paypal.getOrder(orderId) : null,
       };
     }
@@ -258,12 +293,14 @@ export class PayPalWebhookService {
     if (eventType === "PAYMENT.CAPTURE.REFUNDED") {
       const refundId = stringAt(resource, "id");
       if (!refundId) return null;
-      const captureId = relatedCaptureId(resource);
-      const orderId = relatedOrderId(resource);
+      const refund = await this.paypal.getRefund(refundId);
+      const captureId = relatedCaptureId(refund) ?? relatedCaptureId(resource);
+      const capture = captureId ? await this.paypal.getCapture(captureId) : null;
+      const orderId = (capture ? relatedOrderId(capture) : null) ?? relatedOrderId(resource);
       return {
         kind: "refund",
-        refund: await this.paypal.getRefund(refundId),
-        capture: captureId ? await this.paypal.getCapture(captureId) : null,
+        refund,
+        capture,
         order: orderId ? await this.paypal.getOrder(orderId) : null,
       };
     }

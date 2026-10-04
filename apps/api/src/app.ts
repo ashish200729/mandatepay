@@ -47,6 +47,8 @@ export interface CreateAppOptions {
   database?: DatabaseClient;
   /** Programmatic test dependency. HTTP clients cannot configure this. */
   paypalClient?: PayPalClient | null;
+  /** Isolated test servers can provision many fixture accounts from loopback. */
+  testAuthPostMaximum?: number;
 }
 
 type RateLimitEntry = {
@@ -206,6 +208,16 @@ function buildAuthRequest(request: FastifyRequest, config: RuntimeConfig): Reque
 
 export async function createApp(options: CreateAppOptions = {}) {
   const config = options.config ?? env;
+  if (
+    options.testAuthPostMaximum !== undefined &&
+    (config.NODE_ENV !== "test" ||
+      !Number.isSafeInteger(options.testAuthPostMaximum) ||
+      options.testAuthPostMaximum < 1 ||
+      options.testAuthPostMaximum > 500)
+  ) {
+    throw new Error("Authentication fixture limits are supported only by isolated test servers.");
+  }
+  const maximumAuthRequests = options.testAuthPostMaximum ?? authPostMaxRequests;
   const runtime = resolveAuthRuntime(options, config);
   const authPostRateLimits = new Map<string, RateLimitEntry>();
   const app = Fastify({
@@ -273,7 +285,7 @@ export async function createApp(options: CreateAppOptions = {}) {
         authPostRateLimits.set(key, { count: 1, resetAt: now + authPostWindowMs });
         return;
       }
-      if (current.count >= authPostMaxRequests) {
+      if (current.count >= maximumAuthRequests) {
         reply.header("retry-after", Math.ceil((current.resetAt - now) / 1000).toString());
         return reply.status(429).send({
           error: "Too many authentication attempts. Try again shortly.",

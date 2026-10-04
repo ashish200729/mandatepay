@@ -296,6 +296,8 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
         : null;
     const payments = await this.db.payment.findMany({
       where: {
+        isSample: false,
+        proposal: { isSample: false },
         OR: [
           ...(orderId ? [{ paypalOrderId: orderId }] : []),
           ...(captureId ? [{ paypalCaptureId: captureId }] : []),
@@ -303,7 +305,7 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
       },
       include: {
         proposal: { include: { productSnapshot: true, reservation: true } },
-        refunds: true,
+        refunds: { where: { isSample: false } },
       },
     });
     return payments.length === 1 ? payments[0] : null;
@@ -325,7 +327,7 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
         where: { id: candidate.id },
         include: {
           proposal: { include: { productSnapshot: true, reservation: true } },
-          refunds: true,
+          refunds: { where: { isSample: false } },
         },
       });
       if (!payment) return "ignored";
@@ -516,6 +518,8 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
     if (order && payment.paypalOrderId !== order.id) return "ignored";
     if (
       !capture ||
+      capture.id !== payment.paypalCaptureId ||
+      (order !== null && !orderBindingMatches(payment, order)) ||
       !customIdMatches(payment, [
         ...captureCustomIds(capture),
         ...(order ? orderCustomIds(order) : []),
@@ -554,7 +558,7 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
       data: { paypalRefundId: refund.id, status: RefundStatus.COMPLETED, settledAt: providerTime },
     });
     const aggregate = await tx.refund.aggregate({
-      where: { paymentId: payment.id, status: RefundStatus.COMPLETED },
+      where: { paymentId: payment.id, isSample: false, status: RefundStatus.COMPLETED },
       _sum: { amount: true },
     });
     await tx.payment.update({

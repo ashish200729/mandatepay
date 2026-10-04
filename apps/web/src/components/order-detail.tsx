@@ -17,6 +17,8 @@ import {
   createRefund,
   createRefundRequestKey,
   getOrder,
+  checkPaymentStatus,
+  checkRefundStatus,
   PaymentApiError,
 } from "@/lib/payments/client";
 import { calculateRemainingRefundableMinor } from "@/lib/payments/refunds";
@@ -31,13 +33,18 @@ import {
 } from "@/components/workspace-ui";
 
 function isCaptured(payment: PaymentRecord) {
-  return (
-    Boolean(payment.paypalCaptureId) ||
-    ["COMPLETED", "CAPTURED", "PAYMENT_CAPTURED"].includes(payment.status)
+  return ["COMPLETED", "CAPTURED", "PAYMENT_CAPTURED", "PARTIALLY_REFUNDED", "REFUNDED"].includes(
+    payment.status,
   );
 }
 
-type RefundIntent = { amountMinor: number | null; reason: string; requestKey: string };
+type RefundIntent = {
+  amountMinor: number | null;
+  reason: string;
+  requestKey: string;
+  displayAmountMinor: number;
+  refundId?: string;
+};
 
 export function OrderDetail({
   paymentId,
@@ -49,12 +56,19 @@ export function OrderDetail({
   const [payment, setPayment] = useState<PaymentRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [capturing, setCapturing] = useState(false);
+  const [paymentChecking, setPaymentChecking] = useState(false);
+  const [paymentChecked, setPaymentChecked] = useState(false);
+  const [captureAwaitingConfirmation, setCaptureAwaitingConfirmation] = useState(false);
+  const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const [refundMode, setRefundMode] = useState<"full" | "partial">("full");
   const [refundAmount, setRefundAmount] = useState("");
   const [refundReason, setRefundReason] = useState("");
   const [refundIntent, setRefundIntent] = useState<RefundIntent | null>(null);
   const [refundConfirm, setRefundConfirm] = useState(false);
   const [refundPending, setRefundPending] = useState(false);
+  const [refundRefreshing, setRefundRefreshing] = useState(false);
+  const [refundAwaitingConfirmation, setRefundAwaitingConfirmation] = useState(false);
   const [refundNotice, setRefundNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refundError, setRefundError] = useState<string | null>(null);
@@ -100,16 +114,65 @@ export function OrderDetail({
     void load();
   }, [load]);
 
-  async function capture() {
-    if (!payment || capturing || isCaptured(payment)) return;
-    setCapturing(true);
+  useEffect(() => {
+    if (!payment?.authorizationExpiresAt) return;
+    const deadline = Date.parse(payment.authorizationExpiresAt);
+    if (deadline <= clockNow) return;
+    const remaining = deadline - Date.now();
+    const timer = setTimeout(
+      () => setClockNow(Date.now()),
+      Math.max(0, Math.min(remaining + 1, 2_147_483_647)),
+    );
+    return () => clearTimeout(timer);
+  }, [payment?.authorizationExpiresAt, clockNow]);
+
+  async function refreshPaymentStatus() {
+    if (!payment || paymentChecking || capturing) return;
+    setPaymentChecking(true);
     setError(null);
     try {
-      setPayment(await capturePaypalOrder(payment.id));
+      const current = await checkPaymentStatus(payment.id);
+      setPayment(current);
+      setPaymentChecked(true);
+      setCaptureAwaitingConfirmation(current.status === "CAPTURE_PENDING");
+      setPaymentNotice(
+        current.status === "CAPTURE_PENDING"
+          ? "The capture is still awaiting confirmation. You can check its status again."
+          : "The latest payment status is shown below.",
+      );
+    } catch {
+      setError(
+        "The payment status could not be checked. Check again before submitting another payment request.",
+      );
+    } finally {
+      setPaymentChecking(false);
+    }
+  }
+
+  async function capture() {
+    if (!payment || capturing || paymentChecking || isCaptured(payment)) return;
+    if (
+      payment.authorizationExpiresAt &&
+      Date.parse(payment.authorizationExpiresAt) <= Date.now()
+    ) {
+      setClockNow(Date.now());
+      setError(
+        "This payment authorization expired. Prepare and approve a new proposal before paying.",
+      );
+      return;
+    }
+    setCapturing(true);
+    setCaptureAwaitingConfirmation(true);
+    setError(null);
+    try {
+      const current = await capturePaypalOrder(payment.id);
+      setPayment(current);
+      setCaptureAwaitingConfirmation(current.status === "CAPTURE_PENDING");
     } catch (cause) {
+      setCaptureAwaitingConfirmation(!(cause instanceof PaymentApiError) || cause.status >= 500);
       setError(
         cause instanceof PaymentApiError && cause.status >= 500
-          ? "PayPal Sandbox is temporarily unavailable. The server payment record was not marked complete."
+          ? "The payment outcome has not been confirmed. Refresh this order before retrying."
           : cause instanceof Error
             ? cause.message
             : "Capture could not be confirmed.",
@@ -124,10 +187,48 @@ export function OrderDetail({
     setRefundConfirm(false);
     setRefundNotice(null);
     setRefundError(null);
+    setRefundAwaitingConfirmation(false);
+  }
+
+  async function refreshRefundStatus() {
+    if (!payment || refundPending || refundRefreshing) return;
+    setRefundRefreshing(true);
+    setRefundError(null);
+    try {
+      const current = await checkRefundStatus(payment.id);
+      setPayment(current);
+      setRefundConfirm(false);
+      const pending = current.refunds.some((refund) =>
+        ["REQUESTED", "APPROVED", "SUBMITTED"].includes(refund.status),
+      );
+      if (
+        current.status === "REFUNDED" ||
+        (refundIntent?.refundId &&
+          current.refunds.some(
+            (refund) => refund.id === refundIntent.refundId && refund.status === "COMPLETED",
+          ))
+      ) {
+        setRefundIntent(null);
+        setRefundAwaitingConfirmation(false);
+        setRefundNotice("The server updated this order’s refund status.");
+      } else {
+        setRefundNotice(
+          pending
+            ? "A refund is awaiting confirmation. Check its status again before retrying."
+            : "The latest refund status is shown below.",
+        );
+      }
+    } catch {
+      setRefundError(
+        "The refund status could not be checked. Try checking again before submitting another refund.",
+      );
+    } finally {
+      setRefundRefreshing(false);
+    }
   }
 
   async function submitRefund(forceRetry = false) {
-    if (!payment || !isCaptured(payment) || refundPending) return;
+    if (!payment || !isCaptured(payment) || refundPending || refundRefreshing) return;
     const remaining = calculateRemainingRefundableMinor(payment.amount, payment.refunds);
     let intent = refundIntent;
     if (!intent) {
@@ -138,7 +239,12 @@ export function OrderDetail({
         }
         const reason = refundReason.trim();
         if (!reason) throw new Error("Add a reason for the refund.");
-        intent = { amountMinor, reason, requestKey: createRefundRequestKey() };
+        intent = {
+          amountMinor,
+          reason,
+          requestKey: createRefundRequestKey(),
+          displayAmountMinor: amountMinor ?? remaining,
+        };
         setRefundIntent(intent);
       } catch (cause) {
         setRefundError(cause instanceof Error ? cause.message : "Review the refund details.");
@@ -154,13 +260,21 @@ export function OrderDetail({
     setRefundPending(true);
     setRefundError(null);
     try {
-      const result = await createRefund(payment.id, intent);
+      const result = await createRefund(payment.id, {
+        amountMinor: intent.amountMinor,
+        reason: intent.reason,
+        requestKey: intent.requestKey,
+      });
       setPayment(result.payment);
       setRefundConfirm(false);
+      setRefundAwaitingConfirmation(result.pending);
+      if (result.pending) setRefundIntent({ ...intent, refundId: result.refund.id });
       setRefundNotice(
         result.pending
           ? "The server accepted this refund request and marked it pending. Retry with the same details if the provider needs reconciliation."
-          : "The server confirmed this refund request.",
+          : result.refund.status === "FAILED" || result.refund.status === "CANCELLED"
+            ? "PayPal did not complete this refund. Review its status below."
+            : "The server confirmed this refund request.",
       );
       if (!result.pending) {
         setRefundIntent(null);
@@ -168,6 +282,8 @@ export function OrderDetail({
         setRefundReason("");
       }
     } catch (cause) {
+      setRefundConfirm(false);
+      setRefundAwaitingConfirmation(!(cause instanceof PaymentApiError) || cause.status >= 500);
       setRefundError(
         cause instanceof Error
           ? cause.message
@@ -193,8 +309,24 @@ export function OrderDetail({
     );
 
   const captured = isCaptured(payment);
+  const approved = payment.status === "APPROVED";
+  const expired = Boolean(
+    payment.authorizationExpiresAt && Date.parse(payment.authorizationExpiresAt) <= clockNow,
+  );
+  const capturePending = payment.status === "CAPTURE_PENDING";
+  const captureUncertain = capturePending || capturing || captureAwaitingConfirmation;
+  const canConfirmPayment =
+    !captured &&
+    !expired &&
+    Boolean(payment.paypalOrderId) &&
+    ["CREATED", "APPROVED", "CAPTURE_PENDING"].includes(payment.status) &&
+    (approved || (capturePending ? paymentChecked : paypalState === "return"));
   const remaining = calculateRemainingRefundableMinor(payment.amount, payment.refunds);
-  const retryPending = Boolean(refundIntent && refundNotice?.includes("pending"));
+  const retryPending = Boolean(refundIntent && refundAwaitingConfirmation);
+  const refundBusy = refundPending || refundRefreshing;
+  const pendingRefunds = payment.refunds.some((refund) =>
+    ["REQUESTED", "APPROVED", "SUBMITTED"].includes(refund.status),
+  );
 
   return (
     <div className="space-y-7">
@@ -220,6 +352,7 @@ export function OrderDetail({
         <WorkspaceStatus value={payment.status} />
       </div>
       {error ? <WorkspaceNotice error>{error}</WorkspaceNotice> : null}
+      {paymentNotice ? <WorkspaceNotice>{paymentNotice}</WorkspaceNotice> : null}
       <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
         <div className="grid gap-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
@@ -244,22 +377,71 @@ export function OrderDetail({
           </div>
         </div>
       </section>
+      {!captured &&
+      payment.paypalOrderId &&
+      ["CREATED", "APPROVED", "CAPTURE_PENDING"].includes(payment.status) ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void refreshPaymentStatus()}
+            disabled={paymentChecking || capturing}
+            className={buttonVariants({ variant: "outline" })}
+          >
+            {paymentChecking ? "Checking payment status…" : "Check payment status"}
+          </button>
+          {payment.authorizationExpiresAt ? (
+            <p className="text-sm text-muted-foreground">
+              Authorization expires {formatUtcDate(payment.authorizationExpiresAt)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {expired && !captured ? (
+        <WorkspaceNotice>
+          {captureUncertain
+            ? "The authorization expired while capture confirmation is pending. Check the existing payment status before starting another purchase."
+            : "This payment authorization expired. Prepare and approve a new proposal before paying."}
+          {!captureUncertain ? (
+            <Link
+              href="/discover"
+              className="ml-2 font-medium underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              Start a new proposal
+            </Link>
+          ) : null}
+        </WorkspaceNotice>
+      ) : null}
+      {!captured && !payment.paypalOrderId && payment.status === "CREATED" && !expired ? (
+        <WorkspaceNotice>
+          PayPal order creation has not been confirmed. Return to checkout to retry the existing
+          request.
+          <Link
+            href={`/orders/new?proposalId=${encodeURIComponent(payment.proposalId)}`}
+            className="ml-2 font-medium underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            Return to checkout
+          </Link>
+        </WorkspaceNotice>
+      ) : null}
       {paypalState === "cancel" ? (
         <div className="rounded-xl border border-border bg-secondary p-4 text-sm">
           PayPal approval was canceled. The server record above remains authoritative.
         </div>
       ) : null}
-      {paypalState === "return" && !captured ? (
+      {canConfirmPayment ? (
         <div className="rounded-2xl border border-sand-border bg-sand p-6">
-          <p className="font-medium">PayPal returned you to MandatePay.</p>
+          <p className="font-medium">
+            {approved ? "PayPal approved this order." : "PayPal returned you to MandatePay."}
+          </p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            The server has not confirmed a capture yet. Complete Sandbox payment only after you have
-            approved the order in PayPal.
+            {approved
+              ? "Complete Sandbox payment to capture the approved amount. Your payment is not complete yet."
+              : "The server has not confirmed a capture yet. Complete Sandbox payment only after you have approved the order in PayPal."}
           </p>
           <button
             type="button"
             onClick={() => void capture()}
-            disabled={capturing}
+            disabled={capturing || paymentChecking}
             className={cn(buttonVariants({ size: "lg" }), "mt-5")}
           >
             {capturing ? (
@@ -267,7 +449,11 @@ export function OrderDetail({
             ) : (
               <ReceiptText size={16} aria-hidden="true" />
             )}{" "}
-            {capturing ? "Confirming capture…" : "Complete Sandbox payment"}
+            {capturing
+              ? "Confirming capture…"
+              : capturePending
+                ? "Retry same capture"
+                : "Complete Sandbox payment"}
           </button>
         </div>
       ) : null}
@@ -305,6 +491,35 @@ export function OrderDetail({
                 Remaining {formatUsdLabel(remaining)}
               </span>
             </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void refreshRefundStatus()}
+                disabled={refundBusy}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+              >
+                {refundRefreshing ? "Checking refund status…" : "Check refund status"}
+              </button>
+              {pendingRefunds ? (
+                <p className="text-sm text-muted-foreground">A refund is awaiting confirmation.</p>
+              ) : null}
+            </div>
+            {refundNotice ? (
+              <p
+                className="mt-4 rounded-xl border border-border bg-secondary px-4 py-3 text-sm"
+                role="status"
+              >
+                {refundNotice}
+              </p>
+            ) : null}
+            {refundError ? (
+              <p
+                className="mt-4 rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm"
+                role="alert"
+              >
+                {refundError}
+              </p>
+            ) : null}
             {remaining > 0 || retryPending ? (
               <div className="mt-7 space-y-5">
                 <div className="flex flex-wrap gap-3 text-sm">
@@ -312,7 +527,7 @@ export function OrderDetail({
                     <input
                       type="radio"
                       name="refund-mode"
-                      disabled={refundPending || retryPending}
+                      disabled={refundBusy || retryPending}
                       checked={refundMode === "full"}
                       onChange={() => {
                         setRefundMode("full");
@@ -326,7 +541,7 @@ export function OrderDetail({
                     <input
                       type="radio"
                       name="refund-mode"
-                      disabled={refundPending || retryPending}
+                      disabled={refundBusy || retryPending}
                       checked={refundMode === "partial"}
                       onChange={() => {
                         setRefundMode("partial");
@@ -346,7 +561,7 @@ export function OrderDetail({
                         setRefundAmount(event.currentTarget.value);
                         resetRefundIntent();
                       }}
-                      disabled={refundPending || retryPending}
+                      disabled={refundBusy || retryPending}
                       inputMode="decimal"
                       placeholder={formatUsdMinor(remaining)}
                       className={cn(workspaceField, "mt-2")}
@@ -356,7 +571,7 @@ export function OrderDetail({
                   <p className="text-sm text-muted-foreground">
                     Full refund amount:{" "}
                     <strong className="font-medium text-foreground">
-                      {formatUsdLabel(remaining)}
+                      {formatUsdLabel(refundIntent?.displayAmountMinor ?? remaining)}
                     </strong>
                   </p>
                 )}
@@ -371,27 +586,12 @@ export function OrderDetail({
                       setRefundReason(event.currentTarget.value);
                       resetRefundIntent();
                     }}
-                    disabled={refundPending || retryPending}
+                    disabled={refundBusy || retryPending}
+                    maxLength={255}
                     placeholder="Tell us why this payment should be refunded."
                     className="mt-2 min-h-24 w-full resize-y rounded-lg border border-border bg-background px-3 py-3 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
-                {refundNotice ? (
-                  <p
-                    className="rounded-xl border border-border bg-secondary px-4 py-3 text-sm"
-                    role="status"
-                  >
-                    {refundNotice}
-                  </p>
-                ) : null}
-                {refundError ? (
-                  <p
-                    className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm"
-                    role="alert"
-                  >
-                    {refundError}
-                  </p>
-                ) : null}
                 {refundConfirm ? (
                   <div
                     className="rounded-xl border border-foreground/15 bg-secondary p-4"
@@ -401,7 +601,7 @@ export function OrderDetail({
                     <h3 id="refund-confirm-heading" className="font-medium">
                       Confirm{" "}
                       {refundMode === "full"
-                        ? `a full refund of ${formatUsdLabel(remaining)}`
+                        ? `a full refund of ${formatUsdLabel(refundIntent?.displayAmountMinor ?? remaining)}`
                         : `a refund of ${refundAmount || "the entered amount"}`}
                       ?
                     </h3>
@@ -413,7 +613,7 @@ export function OrderDetail({
                       <button
                         type="button"
                         onClick={() => void submitRefund()}
-                        disabled={refundPending}
+                        disabled={refundBusy}
                         className={cn(buttonVariants({ size: "sm" }))}
                       >
                         {refundPending ? (
@@ -426,7 +626,7 @@ export function OrderDetail({
                       <button
                         type="button"
                         onClick={() => setRefundConfirm(false)}
-                        disabled={refundPending}
+                        disabled={refundBusy}
                         className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                       >
                         Keep reviewing
@@ -434,25 +634,29 @@ export function OrderDetail({
                     </div>
                   </div>
                 ) : null}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => void submitRefund(retryPending)}
-                    disabled={refundPending || (!retryPending && !refundReason.trim())}
-                    className={cn(buttonVariants({ variant: "outline" }))}
-                  >
-                    {refundPending ? (
-                      <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
-                    ) : (
-                      <RotateCcw size={15} aria-hidden="true" />
-                    )}{" "}
-                    {retryPending ? "Retry pending refund" : "Request refund"}
-                  </button>
-                </div>
+                {!refundConfirm ? (
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void submitRefund(retryPending)}
+                      disabled={refundBusy || (!retryPending && !refundReason.trim())}
+                      className={cn(buttonVariants({ variant: "outline" }))}
+                    >
+                      {refundPending ? (
+                        <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+                      ) : (
+                        <RotateCcw size={15} aria-hidden="true" />
+                      )}{" "}
+                      {retryPending ? "Retry same refund" : "Request refund"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="mt-7 rounded-xl border border-border bg-secondary px-4 py-3 text-sm">
-                No refundable amount remains according to the server refund history.
+                {pendingRefunds
+                  ? "The remaining amount is reserved by a pending refund. Check its status before requesting another refund."
+                  : "No refundable amount remains according to the server refund history."}
               </p>
             )}
             <div className="mt-8 border-t border-border pt-6">

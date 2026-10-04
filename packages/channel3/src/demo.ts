@@ -73,12 +73,40 @@ function normalizeSearchText(value: string): string {
     .trim();
 }
 
-export function searchDemoCatalog(query: string, limit = 20): readonly NormalizedProduct[] {
-  const terms = normalizeSearchText(query).split(/\s+/u).filter(Boolean);
+export function searchDemoCatalog(
+  query: string,
+  limit = 20,
+  brandHints: readonly string[] = [],
+): readonly NormalizedProduct[] {
+  let text = normalizeSearchText(query);
+  const brands = [
+    ...new Set(
+      [...brandHints, ...DEMO_CATALOG.map((product) => product.brand ?? "")]
+        .map(normalizeSearchText)
+        .filter(Boolean),
+    ),
+  ].sort((a, b) => b.length - a.length);
+  const brandPattern = brands.join("|");
+  const alternatives = brandPattern
+    ? text.match(
+        new RegExp(
+          `\\b(?:${brandPattern}) or (?:${brandPattern})(?: or (?:${brandPattern}))*\\b`,
+          "u",
+        ),
+      )?.[0]
+    : undefined;
+  const allowedBrands = alternatives ? new Set(alternatives.split(" or ")) : null;
+  if (alternatives) text = text.replace(alternatives, " ");
+  const terms = text.split(/\s+/u).filter(Boolean);
   const matches =
     terms.length === 0
-      ? DEMO_CATALOG
+      ? DEMO_CATALOG.filter(
+          (product) =>
+            !allowedBrands || allowedBrands.has(normalizeSearchText(product.brand ?? "")),
+        )
       : DEMO_CATALOG.filter((product) => {
+          if (allowedBrands && !allowedBrands.has(normalizeSearchText(product.brand ?? "")))
+            return false;
           const haystack = normalizeSearchText(
             [product.title, product.brand, product.category, product.merchant]
               .filter((value): value is string => value !== null)

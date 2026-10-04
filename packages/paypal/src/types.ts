@@ -2,7 +2,12 @@ import { CurrencyCodeSchema, minorUnitsSchema, type MinorUnits } from "@mandatep
 import { z } from "zod";
 import { PayPalInputError, PayPalResponseError, PayPalWebhookError } from "./errors.js";
 
-const idempotencyKeySchema = z.string().trim().min(1).max(100);
+const idempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(38)
+  .regex(/^[\x21-\x7E]+$/u);
 const sandboxRedirectUrlSchema = z
   .string()
   .url()

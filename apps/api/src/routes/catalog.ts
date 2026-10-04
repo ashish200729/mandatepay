@@ -145,7 +145,7 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
       const query = parsed.data.query ?? rules.productIntent;
       const products =
         context.mode === "demo"
-          ? searchDemoCatalog(query)
+          ? searchDemoCatalog(query, 20, rules.allowedBrands)
           : await context.channel3!.searchProducts({ query, limit: 20 });
       const mode =
         products.some((product) => product.source === "demo") || context.mode === "demo"

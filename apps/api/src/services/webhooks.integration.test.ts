@@ -77,7 +77,7 @@ describe("PayPal webhook durable integration", () => {
     database = createPrismaClient(databaseUrl);
     const suffix = randomUUID();
     orderId = "ORDER-INTEGRATION-" + suffix;
-    captureId = "CAPTURE-INTEGRATION-" + suffix;
+    captureId = "CAPTURE-" + suffix;
     webhookEventId = "WEBHOOK-INTEGRATION-" + suffix;
     const user = await database.user.create({
       data: { email: `webhook-${suffix}@mandatepay.local`, name: "Webhook integration" },
@@ -280,6 +280,62 @@ describe("PayPal webhook durable integration", () => {
     expect(active.statusCode).toBe(503);
   });
 
+  it("settles a refund whose PayPal response supplies a capture link and offset timestamp", async () => {
+    const local = await database.refund.create({
+      data: {
+        paymentId,
+        userId,
+        amount: 500n,
+        currency: "USD",
+        status: "SUBMITTED",
+        idempotencyKey: "linked-refund-" + randomUUID(),
+      },
+    });
+    const paypal = fakePayPal();
+    const refundId = "REFUND-" + randomUUID();
+    paypal.getRefund = async () => ({
+      id: refundId,
+      status: "COMPLETED",
+      amount: { currency_code: "USD", value: "5.00" },
+      invoice_id: local.id,
+      create_time: "2026-10-03T23:00:06-07:00",
+      links: [
+        { rel: "up", href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${captureId}` },
+      ],
+    });
+    paypal.getCapture = async () => ({
+      id: captureId,
+      status: "PARTIALLY_REFUNDED",
+      amount: { currency_code: "USD", value: "12.34" },
+      custom_id: proposalId,
+      supplementary_data: { related_ids: { order_id: orderId } },
+    });
+    const refundService = createPayPalWebhookService(database, paypal);
+    const event = {
+      id: "WH-LINKED-REFUND-" + randomUUID(),
+      event_type: "PAYMENT.CAPTURE.REFUNDED",
+      resource: { id: refundId },
+    };
+    expect(
+      (await refundService.handle({ headers, rawBody: JSON.stringify(event) })).statusCode,
+    ).toBe(200);
+    expect(
+      (await refundService.handle({ headers, rawBody: JSON.stringify(event) })).statusCode,
+    ).toBe(200);
+    const result = await database.refund.findUniqueOrThrow({ where: { id: local.id } });
+    expect(result.status).toBe("COMPLETED");
+    expect(result.paypalRefundId).toBe(refundId);
+    expect(result.settledAt?.toISOString()).toBe("2026-10-04T06:00:06.000Z");
+    expect((await database.payment.findUniqueOrThrow({ where: { id: paymentId } })).status).toBe(
+      "PARTIALLY_REFUNDED",
+    );
+    expect(
+      await database.auditEvent.count({
+        where: { entityId: paymentId, eventType: "REFUND_COMPLETED" },
+      }),
+    ).toBe(1);
+  });
+
   it("serializes concurrent duplicate claims through the database event lock", async () => {
     const eventId = "WEBHOOK-CONCURRENT-" + randomUUID();
     const rawBody = JSON.stringify({ id: eventId, event_type: "UNKNOWN.EVENT", resource: {} });
@@ -287,7 +343,11 @@ describe("PayPal webhook durable integration", () => {
       service.handle({ rawBody, headers }),
       service.handle({ rawBody, headers }),
     ]);
-    expect(results.map((result) => result.statusCode).sort()).toEqual([200, 200]);
+    expect(results.some((result) => result.statusCode === 200)).toBe(true);
+    expect(results.every((result) => [200, 503].includes(result.statusCode))).toBe(true);
+    // A concurrently processing lease asks PayPal to retry rather than
+    // acknowledging work before it has committed.
+    expect((await service.handle({ rawBody, headers })).statusCode).toBe(200);
     expect(await database.webhookInbox.count({ where: { providerEventId: eventId } })).toBe(1);
   });
 });

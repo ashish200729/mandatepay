@@ -25,6 +25,7 @@ export type PaymentRecord = {
   paypalCaptureId: string | null;
   capturedAt: string | null;
   createdAt: string;
+  authorizationExpiresAt?: string | null;
   product: PaymentProduct;
   mandate: PaymentMandate;
   refunds: readonly PaymentRefund[];

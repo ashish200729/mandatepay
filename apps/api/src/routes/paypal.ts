@@ -6,6 +6,7 @@ import {
   createPaypalOrder,
   getPayment,
   listPayments,
+  reconcilePaypalOrder,
   payPalStatusFromEnvironment,
   PaymentServiceError,
   type DemoProductFacts,
@@ -133,6 +134,22 @@ export function registerPayPalRoutes(app: FastifyInstance, context: PayPalRouteC
     if (!user) return;
     try {
       return reply.send(await listPayments(serviceContext, user));
+    } catch (cause) {
+      return error(reply, cause);
+    }
+  });
+
+  app.post("/api/paypal/orders/:id/reconcile", async (request, reply) => {
+    if (!context.isTrustedOrigin(originOf(request)))
+      return reply.status(403).send({ error: "Request origin is not trusted." });
+    const user = await context.requireUser(request, reply);
+    if (!user) return;
+    const id = paymentId(request);
+    if (!id || !emptyBodySchema.safeParse(request.body ?? {}).success)
+      return reply.status(400).send({ error: "Status check request is invalid." });
+    try {
+      const result = await reconcilePaypalOrder(serviceContext, user, id);
+      return reply.status(result.pending ? 202 : 200).send(result);
     } catch (cause) {
       return error(reply, cause);
     }

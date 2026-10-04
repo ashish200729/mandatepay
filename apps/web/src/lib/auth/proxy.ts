@@ -15,13 +15,13 @@ const ALLOWED_PATHS = [
   /^orders(?:\/[A-Za-z0-9_-]+)?$/,
   /^settings$/,
   /^paypal\/(?:status|orders)$/,
-  /^paypal\/orders\/[A-Za-z0-9_-]+\/capture$/,
+  /^paypal\/orders\/[A-Za-z0-9_-]+\/(?:capture|reconcile)$/,
   /^dashboard\/(?:summary|transactions|policy-events|query)$/,
   /^audit$/,
   /^agent\/(?:chat|recommend)$/,
   /^products\/(?:search|compare)$/,
   /^proposals(?:\/[A-Za-z0-9_-]+)?(?:\/evaluate|\/approve|\/reject)?$/,
-  /^payments(?:\/[A-Za-z0-9_-]+)?(?:\/refund)?$/,
+  /^payments(?:\/[A-Za-z0-9_-]+)?(?:\/(?:refund|refund-status))?$/,
 ] as const;
 
 const FORWARDED_HEADERS = [
@@ -116,8 +116,31 @@ export async function proxyToApi(request: Request, params: { path?: string[] }) 
 
   let upstream: Response;
   const shoppingChat = pathname === "agent/chat";
+  const financialMutation =
+    request.method === "POST" &&
+    (/^paypal\/orders(?:\/[A-Za-z0-9_-]+\/(?:capture|reconcile))?$/.test(pathname) ||
+      /^payments\/[A-Za-z0-9_-]+\/(?:refund|refund-status)$/.test(pathname));
+  const refundMutation = financialMutation && /^payments\//.test(pathname);
+  const financialFailure = (code: string, status: number) => {
+    const operation = refundMutation ? "refund" : "payment";
+    const messages: Record<string, string> = {
+      PAYPAL_UNAVAILABLE: "PayPal Sandbox is not configured.",
+      PAYPAL_OUTCOME_UNKNOWN: `The ${operation} outcome has not been confirmed. Refresh this order to check its status before retrying.`,
+      PAYPAL_RESPONSE_INVALID: `The ${operation} confirmation could not be read. Refresh this order to check its status before retrying.`,
+    };
+    const safeCode = Object.hasOwn(messages, code) ? code : "PAYPAL_OUTCOME_UNKNOWN";
+    return NextResponse.json({ code: safeCode, error: messages[safeCode] }, { status });
+  };
   // Chat has a 120-second server deadline covering multiple AI/tool rounds.
-  const timeoutMs = shoppingChat ? 130_000 : pathname === "mandates/parse" ? 60_000 : 10_000;
+  // Financial operations can perform OAuth plus several bounded 15s PayPal
+  // requests. A 10s cutoff can hide a refund that PayPal already completed.
+  const timeoutMs = shoppingChat
+    ? 130_000
+    : financialMutation
+      ? 70_000
+      : pathname === "mandates/parse"
+        ? 60_000
+        : 10_000;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   try {
     upstream = await fetch(target, {
@@ -128,6 +151,9 @@ export async function proxyToApi(request: Request, params: { path?: string[] }) 
       signal: AbortSignal.any([request.signal, timeoutSignal]),
     });
   } catch {
+    if (financialMutation) {
+      return financialFailure("PAYPAL_OUTCOME_UNKNOWN", timeoutSignal.aborted ? 504 : 503);
+    }
     if (shoppingChat) {
       return NextResponse.json(
         timeoutSignal.aborted
@@ -151,6 +177,13 @@ export async function proxyToApi(request: Request, params: { path?: string[] }) 
   }
 
   if (upstream.status >= 500) {
+    if (financialMutation) {
+      const payload = (await upstream.json().catch(() => null)) as { code?: unknown } | null;
+      return financialFailure(
+        typeof payload?.code === "string" ? payload.code : "",
+        upstream.status === 504 ? 504 : 503,
+      );
+    }
     if (shoppingChat) {
       const payload = (await upstream.json().catch(() => null)) as { code?: unknown } | null;
       const messages: Record<string, string> = {
