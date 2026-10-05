@@ -1,12 +1,15 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { parseAdminMe } from "./session";
+import { AdminAuditQuerySchema, AdminTraceIdSchema } from "@mandatepay/shared";
+import { parseAdminAuditResponse } from "./audit";
 
 const METHODS: Record<string, readonly string[]> = {
   session: ["POST"],
   me: ["GET", "HEAD"],
   reauth: ["POST"],
   "sign-out": ["POST"],
+  audit: ["GET", "HEAD"],
 };
 const MAX_BODY = 4096;
 const MESSAGES: Record<string, string> = {
@@ -17,6 +20,7 @@ const MESSAGES: Record<string, string> = {
   ADMIN_INVALID_REQUEST: "Check your request and try again.",
   ADMIN_RATE_LIMITED: "Too many requests. Try again shortly.",
   ADMIN_UNAVAILABLE: "Administration is temporarily unavailable. Try again shortly.",
+  ADMIN_TARGET_NOT_FOUND: "Audit event not found.",
 };
 function failure(code: string, status: number, requestId?: string) {
   return NextResponse.json(
@@ -30,14 +34,36 @@ function failure(code: string, status: number, requestId?: string) {
     { status, headers: { "cache-control": "private, no-store" } },
   );
 }
+function withTrace(result: NextResponse, upstream: Response) {
+  for (const name of ["x-request-id", "x-correlation-id"]) {
+    const value = upstream.headers.get(name);
+    if (AdminTraceIdSchema.safeParse(value).success) result.headers.set(name, value!);
+  }
+  return result;
+}
 
 export async function proxyAdmin(request: Request, params: { path?: string[] }) {
-  if (params.path?.length !== 1 || !Object.hasOwn(METHODS, params.path[0]!))
+  const audit = params.path?.[0] === "audit";
+  const detail = audit && params.path?.length === 2;
+  if (
+    !params.path ||
+    !Object.hasOwn(METHODS, params.path[0]!) ||
+    (detail ? !AdminTraceIdSchema.safeParse(params.path[1]).success : params.path.length !== 1)
+  )
     return failure("ADMIN_INVALID_REQUEST", 404);
   const pathname = params.path[0]!;
   if (!METHODS[pathname]!.includes(request.method)) return failure("ADMIN_INVALID_REQUEST", 405);
   const incoming = new URL(request.url);
-  if (incoming.search) return failure("ADMIN_INVALID_REQUEST", 400);
+  if (incoming.search && (!audit || detail)) return failure("ADMIN_INVALID_REQUEST", 400);
+  if (audit && !detail) {
+    if (
+      Array.from(incoming.searchParams.keys()).some(
+        (key) => incoming.searchParams.getAll(key).length !== 1,
+      ) ||
+      !AdminAuditQuerySchema.safeParse(Object.fromEntries(incoming.searchParams)).success
+    )
+      return failure("ADMIN_INVALID_REQUEST", 400);
+  }
   if (request.method === "POST") {
     const origin = request.headers.get("origin");
     const configured =
@@ -64,6 +90,10 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
       return failure("ADMIN_INVALID_REQUEST", 400);
   }
   const headers = new Headers({ accept: "application/json" });
+  const correlation = request.headers.get("x-correlation-id");
+  if (correlation !== null && !AdminTraceIdSchema.safeParse(correlation).success)
+    return failure("ADMIN_INVALID_REQUEST", 400);
+  headers.set("x-correlation-id", correlation ?? crypto.randomUUID());
   for (const name of ["cookie", "origin", "content-type", "user-agent"] as const) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
@@ -92,7 +122,10 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
   }
   try {
     const response = await fetch(
-      new URL(`/api/admin/${pathname}`, process.env.API_URL ?? "http://127.0.0.1:4000"),
+      new URL(
+        `/api/admin/${detail ? "audit/" + params.path![1] : pathname}${incoming.search}`,
+        process.env.API_URL ?? "http://127.0.0.1:4000",
+      ),
       {
         method: request.method,
         headers,
@@ -103,10 +136,13 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
       },
     );
     if (request.method === "HEAD") {
-      return new NextResponse(null, {
-        status: [200, 401, 403, 429, 503].includes(response.status) ? response.status : 503,
-        headers: { "cache-control": "private, no-store" },
-      });
+      return withTrace(
+        new NextResponse(null, {
+          status: [200, 401, 403, 404, 429, 503].includes(response.status) ? response.status : 503,
+          headers: { "cache-control": "private, no-store" },
+        }),
+        response,
+      );
     }
     if (response.status === 204 && pathname === "sign-out") {
       const result = new NextResponse(null, {
@@ -115,7 +151,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
       });
       for (const cookie of response.headers.getSetCookie())
         result.headers.append("set-cookie", cookie);
-      return result;
+      return withTrace(result, response);
     }
     const json = (await response.json().catch(() => null)) as {
       error?: { code?: string; requestId?: string };
@@ -134,25 +170,46 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
           : (fallback[response.status] ?? "ADMIN_UNAVAILABLE");
       const result = failure(
         code,
-        [400, 401, 403, 429, 503].includes(response.status) ? response.status : 503,
-        json?.error?.requestId,
+        [400, 401, 403, 404, 429, 503].includes(response.status) ? response.status : 503,
+        AdminTraceIdSchema.safeParse(json?.error?.requestId).success
+          ? json?.error?.requestId
+          : undefined,
       );
       const retryAfter = response.headers.get("retry-after");
       if (retryAfter && /^\d{1,5}$/u.test(retryAfter))
         result.headers.set("retry-after", retryAfter);
-      return result;
+      return withTrace(result, response);
+    }
+    const auditData = audit ? parseAdminAuditResponse(json, detail) : null;
+    if (audit) {
+      if (!auditData) return failure("ADMIN_UNAVAILABLE", 503);
+      const result = NextResponse.json(
+        {
+          ...auditData,
+          requestId: AdminTraceIdSchema.safeParse(json?.requestId).success
+            ? json!.requestId
+            : undefined,
+        },
+        { headers: { "cache-control": "private, no-store" } },
+      );
+      return withTrace(result, response);
     }
     const admin = parseAdminMe(json);
     if (!admin) return failure("ADMIN_UNAVAILABLE", 503);
     const result = NextResponse.json(
-      { data: admin, requestId: json?.requestId },
+      {
+        data: admin,
+        requestId: AdminTraceIdSchema.safeParse(json?.requestId).success
+          ? json?.requestId
+          : undefined,
+      },
       { headers: { "cache-control": "private, no-store" } },
     );
     if (pathname === "session" || pathname === "reauth") {
       for (const cookie of response.headers.getSetCookie())
         result.headers.append("set-cookie", cookie);
     }
-    return result;
+    return withTrace(result, response);
   } catch {
     return failure("ADMIN_UNAVAILABLE", 503);
   }

@@ -1,5 +1,6 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
+import { randomUUID } from "node:crypto";
 import { fromNodeHeaders } from "better-auth/node";
 import type { DatabaseClient } from "@mandatepay/database";
 import { z } from "zod";
@@ -215,6 +216,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   const authPostRateLimits = new Map<string, RateLimitEntry>();
   const app = Fastify({
     logger: safeLoggerConfig(config),
+    genReqId: () => randomUUID(),
   });
 
   await app.register(cors, {
@@ -226,7 +228,16 @@ export async function createApp(options: CreateAppOptions = {}) {
     ],
     credentials: true,
     methods: ["GET", "POST", "PATCH", "OPTIONS"],
-    allowedHeaders: ["accept", "content-type", "origin", "cookie", "authorization", "x-request-id"],
+    allowedHeaders: [
+      "accept",
+      "content-type",
+      "origin",
+      "cookie",
+      "authorization",
+      "x-request-id",
+      "x-correlation-id",
+    ],
+    exposedHeaders: ["x-request-id", "x-correlation-id"],
   });
 
   registerAdminRoutes(app, {

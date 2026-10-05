@@ -6,6 +6,7 @@ export {
   minorDigitsForCurrency,
   type CurrencyCode,
 } from "./currency.js";
+export * from "./admin-audit.js";
 export { DOMAIN_ERROR_CODES, DomainError, isDomainError, type DomainErrorCode } from "./errors.js";
 export {
   addMinorUnits,

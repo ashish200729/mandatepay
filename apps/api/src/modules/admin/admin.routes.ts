@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { fromNodeHeaders } from "better-auth/node";
 import { z } from "zod";
+import {
+  AdminAuditRepository,
+  AdminAuditQuerySchema,
+  isDatabaseError,
+  type AppendAdminAuditEventInput,
+} from "@mandatepay/database";
+import { AdminTraceIdSchema } from "@mandatepay/shared";
 import type { AuthRuntime } from "../../auth.js";
 import { originsFor, trustedOrigin } from "../../origins.js";
 import { createMutationRateLimiter } from "../../services/rate-limits.js";
@@ -28,8 +35,43 @@ export function registerAdminRoutes(
   void app.register(
     async (scope) => {
       const identities = new WeakMap<FastifyRequest, AdminIdentity>();
+      const correlations = new WeakMap<FastifyRequest, string>();
+      const trace = (request: FastifyRequest) => ({
+        requestId: request.id,
+        correlationId: correlations.get(request) ?? request.id,
+      });
+      const actor = (identity: AdminIdentity) => ({
+        principalId: identity.principalId,
+        userId: identity.user.id,
+        role: identity.role,
+      });
+      async function failedCredentials(
+        request: FastifyRequest,
+        expected: AdminIdentity | undefined,
+        code: AppendAdminAuditEventInput["errorCode"],
+      ) {
+        await new AdminAuditRepository(options.runtime!.database).append({
+          actor: expected ? actor(expected) : null,
+          action: expected ? "ADMIN_REAUTH_FAILED" : "ADMIN_LOGIN_FAILED",
+          targetType: "ADMIN_AUTH",
+          targetId: "main",
+          reason: expected
+            ? "Administrator password confirmation rejected."
+            : "Administrator credential sign-in rejected.",
+          ...trace(request),
+          result: "FAILURE",
+          errorCode: code,
+        });
+      }
       scope.addHook("onRequest", async (request, reply) => {
         reply.header("cache-control", "private, no-store");
+        const correlation = request.headers["x-correlation-id"];
+        if (correlation !== undefined && !AdminTraceIdSchema.safeParse(correlation).success)
+          return sendError(reply, request, "ADMIN_INVALID_REQUEST", 400, "Invalid correlation ID.");
+        correlations.set(request, typeof correlation === "string" ? correlation : request.id);
+        reply
+          .header("x-request-id", request.id)
+          .header("x-correlation-id", correlations.get(request)!);
         if (!options.runtime || !origins.length) {
           return sendError(
             reply,
@@ -79,6 +121,39 @@ export function registerAdminRoutes(
         requestId: request.id,
       }));
 
+      scope.get("/audit", async (request, reply) => {
+        const parsed = AdminAuditQuerySchema.safeParse(request.query);
+        if (!parsed.success)
+          return sendError(reply, request, "ADMIN_INVALID_REQUEST", 400, "Invalid audit filters.");
+        try {
+          const repository = new AdminAuditRepository(
+            options.runtime!.database,
+            options.runtime!.auth.options.secret,
+          );
+          return { ...(await repository.list(parsed.data)), ...trace(request) };
+        } catch (error) {
+          if (isDatabaseError(error) && error.code === "INVALID_DOMAIN_INPUT")
+            return sendError(
+              reply,
+              request,
+              "ADMIN_INVALID_REQUEST",
+              400,
+              "Invalid audit filters or cursor.",
+            );
+          return authError(reply, request, error);
+        }
+      });
+      scope.get<{ Params: { id: string } }>("/audit/:id", async (request, reply) => {
+        if (!z.uuid().safeParse(request.params.id).success)
+          return sendError(reply, request, "ADMIN_INVALID_REQUEST", 400, "Invalid audit ID.");
+        const event = await new AdminAuditRepository(options.runtime!.database).findById(
+          request.params.id,
+        );
+        if (!event)
+          return sendError(reply, request, "ADMIN_TARGET_NOT_FOUND", 404, "Audit event not found.");
+        return { data: event, ...trace(request) };
+      });
+
       async function credentialSignIn(
         request: FastifyRequest,
         reply: FastifyReply,
@@ -87,7 +162,8 @@ export function registerAdminRoutes(
         const parsed = expected
           ? reauthSchema.safeParse(request.body)
           : signInSchema.safeParse(request.body);
-        if (!parsed.success)
+        if (!parsed.success) {
+          await failedCredentials(request, expected, "ADMIN_INVALID_REQUEST");
           return sendError(
             reply,
             request,
@@ -95,6 +171,7 @@ export function registerAdminRoutes(
             400,
             "Check your sign-in details.",
           );
+        }
         const email = expected
           ? expected.user.email
           : (parsed.data as z.infer<typeof signInSchema>).email;
@@ -118,6 +195,15 @@ export function registerAdminRoutes(
             request.log.warn(
               { event: "admin_sign_in_rejected", status: response.status },
               "Admin sign-in rejected",
+            );
+            await failedCredentials(
+              request,
+              expected,
+              response.status === 429
+                ? "ADMIN_RATE_LIMITED"
+                : response.status >= 500
+                  ? "ADMIN_UNAVAILABLE"
+                  : "ADMIN_SIGN_IN_REJECTED",
             );
             if (response.status === 429) return rateLimited(reply, request, 60);
             if (response.status >= 500)
@@ -145,6 +231,8 @@ export function registerAdminRoutes(
           });
           if (!session) throw new Error("Missing auth session");
           newSessionId = session.id;
+          const cookies = response.headers.getSetCookie();
+          if (!cookies.length) throw new Error("Missing session cookie");
           const identity = await runtime.database.$transaction(async (tx) => {
             // Serialize login against principal changes and reauthentication against sign-out.
             await tx.$queryRaw`SELECT id FROM "AdminPrincipal" WHERE "singletonKey" = 'main' FOR UPDATE`;
@@ -195,6 +283,22 @@ export function registerAdminRoutes(
                 reauthenticatedAt: now,
               },
             });
+            await new AdminAuditRepository(tx).append({
+              actor: { principalId: principal.id, userId: current.userId, role: principal.role },
+              action: expected ? "ADMIN_REAUTH_SUCCEEDED" : "ADMIN_LOGIN_SUCCEEDED",
+              targetType: "ADMIN_SESSION",
+              targetId: current.id,
+              reason: expected
+                ? "Administrator password confirmed."
+                : "Administrator credentials verified.",
+              ...trace(request),
+              result: "SUCCESS",
+              afterSummaryJson: {
+                expiresAt: current.expiresAt.toISOString(),
+                freshAuthUntil: new Date(now.getTime() + 10 * 60_000).toISOString(),
+                revoked: false,
+              },
+            });
             return {
               sessionId: current.id,
               principalId: principal.id,
@@ -210,8 +314,6 @@ export function registerAdminRoutes(
               reauthenticatedAt: now,
             } satisfies AdminIdentity;
           });
-          const cookies = response.headers.getSetCookie();
-          if (!cookies.length) throw new Error("Missing session cookie");
           reply.header("set-cookie", cookies);
           request.log.info(
             {
@@ -224,6 +326,15 @@ export function registerAdminRoutes(
         } catch (error) {
           if (newSessionId)
             await runtime.database.session.deleteMany({ where: { id: newSessionId } });
+          await failedCredentials(
+            request,
+            expected,
+            error instanceof AdminAuthError && error.code === "ADMIN_SIGN_IN_REJECTED"
+              ? "ADMIN_SIGN_IN_REJECTED"
+              : error instanceof AdminAuthError && error.code === "ADMIN_UNAUTHORIZED"
+                ? "ADMIN_UNAUTHORIZED"
+                : "ADMIN_UNAVAILABLE",
+          );
           request.log.warn(
             {
               event: "admin_sign_in_failed",
@@ -246,8 +357,21 @@ export function registerAdminRoutes(
         try {
           const identity = identities.get(request)!;
           // Explicit database revocation fails closed even if Better Auth sign-out fails internally.
-          await options.runtime!.database.session.deleteMany({
-            where: { id: identity.sessionId, userId: identity.user.id },
+          await options.runtime!.database.$transaction(async (tx) => {
+            await tx.session.deleteMany({
+              where: { id: identity.sessionId, userId: identity.user.id },
+            });
+            await new AdminAuditRepository(tx).append({
+              actor: actor(identity),
+              action: "ADMIN_LOGOUT_SUCCEEDED",
+              targetType: "ADMIN_SESSION",
+              targetId: identity.sessionId,
+              reason: "Administrator session revoked.",
+              ...trace(request),
+              result: "SUCCESS",
+              beforeSummaryJson: { revoked: false },
+              afterSummaryJson: { revoked: true },
+            });
           });
           const response = await options.runtime!.auth.api.signOut({
             headers: fromNodeHeaders(request.headers),

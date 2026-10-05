@@ -1,5 +1,11 @@
 # Phase progress and handoff
 
+## Admin Phase 2 complete — 2026-10-05
+
+Implemented separate immutable admin audit storage, additive migration, closed action/target/result/error contracts, safe scalar summaries and required reasons, UUID request/correlation tracing, credential login/reauth/logout audit, authorized audit search/detail and allowlisted BFF reads. Durable action intent/outcome repositories support atomic audit integration and concurrent idempotent claims for future controls without enabling them. All 14 tasks and three exit criteria are checked; [ADMIN_PHASE_2.md](./ADMIN_PHASE_2.md) records the implementation and verified boundaries.
+
+Verification: 332 unit, 13 environment/boundary, 87 API integration, eight database integration and two desktop/mobile browser tests pass. Affected lint/types/build/format, migration status, lockfile and admin bundle boundary checks pass. Migration 15 is applied locally to development and isolated test databases. Immutable test audit events remain while owned mutable fixtures are cleaned up. No real account was granted admin access. Phases 3–10 remain unchecked; no operational control or audit UI was enabled. The known unrelated formatting baseline and WebhookInbox index drift remain unchanged.
+
 ## Admin Phase 1 complete — 2026-10-05
 
 Implemented the singleton admin identity, additive migration, safe verified-account bootstrap, database-backed authorization/idle/fresh-auth proof, credential sign-in and rotation, safe session endpoints, exact origins/CORS and dedicated rate limits. Added the aligned Next admin scaffold with guarded rendering, responsive sign-in/denial/expiry and own-session controls. All 16 tasks and four exit criteria in the admin plan are checked; [ADMIN_PHASE_1.md](./ADMIN_PHASE_1.md) records implementation, setup and evidence.

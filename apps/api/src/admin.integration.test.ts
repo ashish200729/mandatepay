@@ -1,5 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createPrismaClient, AdminRepository } from "@mandatepay/database";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import {
+  createPrismaClient,
+  AdminRepository,
+  AdminAuditRepository,
+  AdminActionRepository,
+} from "@mandatepay/database";
 import { createAuthRuntime } from "./auth.js";
 import { createApp } from "./app.js";
 import {
@@ -119,6 +125,9 @@ describe("admin security with persisted Better Auth sessions", () => {
   });
   afterAll(async () => {
     await app?.close();
+    await database.adminActionRequest.deleteMany({
+      where: { principalId: principalId || "missing" },
+    });
     await database.adminPrincipal.deleteMany({ where: { userId: adminId || "missing" } });
     await database.user.deleteMany({
       where: { id: { in: [adminId, normalId, unverifiedId].filter(Boolean) } },
@@ -340,6 +349,314 @@ describe("admin security with persisted Better Auth sessions", () => {
     expect(
       (await app.inject({ method: "GET", url: "/api/admin/me", headers: { cookie } })).statusCode,
     ).toBe(200);
+  });
+
+  it("searches safe session events while denying anonymous/non-admin audit access", async () => {
+    const url = `/api/admin/audit?actorAdminId=${principalId}&action=ADMIN_LOGIN_SUCCEEDED&result=SUCCESS`;
+    expect((await app.inject({ method: "GET", url })).statusCode).toBe(401);
+    expect(
+      (await app.inject({ method: "GET", url, headers: { cookie: normalCookie } })).statusCode,
+    ).toBe(403);
+    const correlationId = randomUUID();
+    const response = await app.inject({
+      method: "GET",
+      url,
+      headers: { cookie, "x-correlation-id": correlationId, "x-request-id": "untrusted" },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers["x-correlation-id"]).toBe(correlationId);
+    expect(response.headers["x-request-id"]).toBe(response.json().requestId);
+    expect(response.json().requestId).not.toBe("untrusted");
+    const row = response.json().data[0];
+    expect(row.actorAdminId).toBe(principalId);
+    expect(row.actorUserId).toBe(adminId);
+    expect(row.action).toBe("ADMIN_LOGIN_SUCCEEDED");
+    expect(row.result).toBe("SUCCESS");
+    expect(response.body).not.toContain(password);
+    expect(response.body).not.toContain(adminEmail);
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit/${row.id}`,
+      headers: { cookie },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data).toEqual(row);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/admin/audit/${randomUUID()}`,
+          headers: { cookie },
+        })
+      ).statusCode,
+    ).toBe(404);
+    const failed = await app.inject({
+      method: "GET",
+      url: "/api/admin/audit?action=ADMIN_LOGIN_FAILED&result=FAILURE",
+      headers: { cookie },
+    });
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json().data.length).toBeGreaterThan(0);
+    for (const failure of failed.json().data)
+      expect(failure).toMatchObject({
+        actorAdminId: null,
+        actorUserId: null,
+        role: null,
+        targetId: "main",
+      });
+    expect(failed.body).not.toContain(normalEmail);
+    expect(failed.headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("paginates without duplicates, binds cursors to filters and uses half-open UTC dates", async () => {
+    const correlationId = randomUUID();
+    const actor = { principalId, userId: adminId, role: "ADMIN_SUPER" as const };
+    const rows = await database.$transaction(async (tx) =>
+      Promise.all(
+        [0, 1, 2].map(() =>
+          new AdminAuditRepository(tx).append({
+            actor,
+            action: "ADMIN_NOTE_ADDED",
+            targetType: "USER",
+            targetId: normalId,
+            reason: "Reviewing fixture case.",
+            requestId: randomUUID(),
+            correlationId,
+            result: "SUCCESS",
+            beforeSummaryJson: { password: "never-stored" },
+            afterSummaryJson: { emailVerified: true, token: "never-stored" },
+          }),
+        ),
+      ),
+    );
+    const base = `/api/admin/audit?correlationId=${correlationId}&targetType=USER&targetId=${normalId}&action=ADMIN_NOTE_ADDED&result=SUCCESS&limit=2`;
+    const first = await app.inject({ method: "GET", url: base, headers: { cookie } });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data).toHaveLength(2);
+    const cursor = first.json().page.nextCursor;
+    expect(typeof cursor).toBe("string");
+    const second = await app.inject({
+      method: "GET",
+      url: base + "&cursor=" + encodeURIComponent(cursor),
+      headers: { cookie },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().page.nextCursor).toBeNull();
+    expect(
+      new Set([...first.json().data, ...second.json().data].map((row: { id: string }) => row.id))
+        .size,
+    ).toBe(3);
+    expect(first.body + second.body).not.toMatch(/never-stored|"password"|"token"/u);
+    for (const badUrl of [
+      base + "&cursor=" + cursor.slice(0, -4),
+      base.replace("limit=2", "limit=1") + "&cursor=" + encodeURIComponent(cursor),
+      "/api/admin/audit?limit=101",
+      "/api/admin/audit?action=INVALID",
+      "/api/admin/audit?secret=private",
+      "/api/admin/audit?from=2026-10-05T00:00:00Z",
+    ])
+      expect(
+        (await app.inject({ method: "GET", url: badUrl, headers: { cookie } })).statusCode,
+      ).toBe(400);
+    const cutoff = rows[0]!.createdAt;
+    const range = `/api/admin/audit?correlationId=${correlationId}&from=${encodeURIComponent(cutoff)}&to=${encodeURIComponent(new Date(Date.parse(cutoff) + 1).toISOString())}`;
+    const ranged = await app.inject({ method: "GET", url: range, headers: { cookie } });
+    expect(ranged.statusCode).toBe(200);
+    expect(ranged.json().data.some((row: { id: string }) => row.id === rows[0]!.id)).toBe(true);
+    const excluded = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?correlationId=${correlationId}&from=${encodeURIComponent(new Date(Date.parse(cutoff) - 86400_000).toISOString())}&to=${encodeURIComponent(cutoff)}`,
+      headers: { cookie },
+    });
+    expect(excluded.json().data.some((row: { id: string }) => row.id === rows[0]!.id)).toBe(false);
+  });
+
+  it("rejects audit updates/deletes/truncation and has no public write API", async () => {
+    const repository = new AdminAuditRepository(database);
+    expect("update" in repository || "delete" in repository).toBe(false);
+    const row = await repository.append({
+      actor: { principalId, userId: adminId, role: "ADMIN_SUPER" },
+      action: "ADMIN_NOTE_ADDED",
+      targetType: "USER",
+      targetId: normalId,
+      reason: "Immutable fixture event.",
+      requestId: randomUUID(),
+      correlationId: randomUUID(),
+      result: "SUCCESS",
+    });
+    await expect(
+      database.adminAuditEvent.update({ where: { id: row.id }, data: { reason: "Changed" } }),
+    ).rejects.toBeDefined();
+    await expect(database.adminAuditEvent.delete({ where: { id: row.id } })).rejects.toBeDefined();
+    await expect(
+      database.$executeRaw`UPDATE "AdminAuditEvent" SET reason = 'Changed' WHERE id = ${row.id}`,
+    ).rejects.toBeDefined();
+    await expect(database.$executeRaw`TRUNCATE TABLE "AdminAuditEvent"`).rejects.toBeDefined();
+    expect(await repository.findById(row.id)).toEqual(row);
+    for (const method of ["POST", "PATCH", "DELETE"] as const)
+      expect(
+        (
+          await app.inject({
+            method,
+            url: `/api/admin/audit/${row.id}`,
+            headers: { origin, cookie, "content-type": "application/json" },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(404);
+  });
+
+  it("commits local state and audit atomically, rejecting unsafe reasons and rolling back both on failure", async () => {
+    const before = (await database.user.findUniqueOrThrow({ where: { id: normalId } }))
+      .globalAutonomousPurchasingEnabled;
+    const event = {
+      actor: { principalId, userId: adminId, role: "ADMIN_SUPER" as const },
+      action: "ADMIN_AUTONOMY_DISABLED" as const,
+      targetType: "USER" as const,
+      targetId: normalId,
+      reason: "Investigating fixture case.",
+      requestId: randomUUID(),
+      correlationId: randomUUID(),
+      result: "SUCCESS" as const,
+      afterSummaryJson: { autonomousPurchasingEnabled: false },
+    };
+    await expect(
+      database.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: normalId },
+          data: { globalAutonomousPurchasingEnabled: !before },
+        });
+        await new AdminAuditRepository(tx).append({ ...event, reason: "password=do-not-store" });
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_DOMAIN_INPUT" });
+    expect(
+      (await database.user.findUniqueOrThrow({ where: { id: normalId } }))
+        .globalAutonomousPurchasingEnabled,
+    ).toBe(before);
+    await expect(
+      database.$transaction(async (tx) => {
+        await new AdminAuditRepository(tx).append(event);
+        throw new Error("Rollback fixture");
+      }),
+    ).rejects.toThrow("Rollback fixture");
+    expect(
+      await database.adminAuditEvent.count({ where: { correlationId: event.correlationId } }),
+    ).toBe(0);
+    await database.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: normalId },
+        data: { globalAutonomousPurchasingEnabled: false },
+      });
+      await new AdminAuditRepository(tx).append(event);
+    });
+    expect(
+      await database.adminAuditEvent.count({ where: { correlationId: event.correlationId } }),
+    ).toBe(1);
+  });
+
+  it("claims one durable action concurrently and correlates idempotent pending/terminal outcomes", async () => {
+    const repository = new AdminActionRepository(database);
+    const actor = { principalId, userId: adminId, role: "ADMIN_SUPER" as const };
+    const input = {
+      actor,
+      action: "ADMIN_PAYMENT_RECONCILE_REQUESTED" as const,
+      targetType: "PAYMENT" as const,
+      targetId: "fixture-payment",
+      reason: "Reconcile fixture state.",
+      requestId: randomUUID(),
+      correlationId: randomUUID(),
+      requestKey: randomUUID(),
+      beforeSummaryJson: { status: "CAPTURE_PENDING" },
+      requestSummaryJson: { status: "CAPTURE_PENDING" },
+    };
+    const claims = await Promise.all([repository.claim(input), repository.claim(input)]);
+    expect(claims.filter((claim) => claim.created)).toHaveLength(1);
+    expect(claims[0]!.actionId).toBe(claims[1]!.actionId);
+    await expect(repository.claim({ ...input, reason: "Different reason." })).rejects.toMatchObject(
+      { code: "CONFLICT" },
+    );
+    await expect(
+      repository.claim({ ...input, targetId: "different-target" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(
+      repository.claim({ ...input, requestSummaryJson: { status: "COMPLETED" } }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const actionId = claims[0]!.actionId;
+    await expect(
+      repository.recordOutcome(actionId, {
+        actor,
+        requestId: randomUUID(),
+        correlationId: randomUUID(),
+        result: "PENDING",
+        errorCode: "PROVIDER_PENDING",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const pending = await repository.recordOutcome(actionId, {
+      actor,
+      requestId: randomUUID(),
+      correlationId: input.correlationId,
+      result: "PENDING",
+      errorCode: "PROVIDER_PENDING",
+    });
+    expect(pending.status).toBe("PENDING");
+    const outcome = {
+      actor,
+      requestId: randomUUID(),
+      correlationId: input.correlationId,
+      result: "SUCCESS" as const,
+      afterSummaryJson: { status: "COMPLETED", amountMinor: 100, currency: "USD" },
+    };
+    expect((await repository.recordOutcome(actionId, outcome)).changed).toBe(true);
+    expect((await repository.recordOutcome(actionId, outcome)).changed).toBe(false);
+    await expect(
+      repository.recordOutcome(actionId, {
+        ...outcome,
+        result: "FAILURE",
+        errorCode: "PROVIDER_UNAVAILABLE",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const events = await database.adminAuditEvent.findMany({ where: { actionId } });
+    expect(events).toHaveLength(3);
+    expect(events.filter((event) => event.result === "SUCCESS")).toHaveLength(1);
+    expect(
+      (await database.adminActionRequest.findUniqueOrThrow({ where: { id: actionId } })).status,
+    ).toBe("COMPLETED");
+  });
+
+  it("fails closed on audit persistence failure without granting/rotating/revoking a session", async () => {
+    const originalCookie = cookie;
+    for (const path of ["session", "reauth", "sign-out"]) {
+      const spy = vi
+        .spyOn(AdminAuditRepository.prototype, "append")
+        .mockRejectedValueOnce(new Error("private-audit-provider-detail"));
+      try {
+        const count = await database.session.count({ where: { userId: adminId } });
+        const response = await post(
+          `/api/admin/${path}`,
+          path === "session"
+            ? { email: adminEmail, password }
+            : path === "reauth"
+              ? { password }
+              : {},
+          originalCookie,
+        );
+        expect(response.statusCode, response.body).toBe(503);
+        expect(response.headers["set-cookie"]).toBeUndefined();
+        expect(response.body).not.toContain("private-audit-provider-detail");
+        expect(await database.session.count({ where: { userId: adminId } })).toBe(count);
+        expect(
+          (
+            await app.inject({
+              method: "GET",
+              url: "/api/admin/me",
+              headers: { cookie: originalCookie },
+            })
+          ).statusCode,
+        ).toBe(200);
+      } finally {
+        spy.mockRestore();
+      }
+    }
   });
 
   it("enforces principal-scoped read limits and keeps sign-out available through a separate bucket", async () => {

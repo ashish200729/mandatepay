@@ -20,6 +20,69 @@ enum AdminRole {
   ADMIN_SUPER
 }
 
+enum AdminAuditAction {
+  ADMIN_LOGIN_SUCCEEDED
+  ADMIN_LOGIN_FAILED
+  ADMIN_REAUTH_SUCCEEDED
+  ADMIN_REAUTH_FAILED
+  ADMIN_LOGOUT_SUCCEEDED
+  ADMIN_USER_DISABLED
+  ADMIN_USER_ENABLED
+  ADMIN_SESSIONS_REVOKED
+  ADMIN_AUTONOMY_DISABLED
+  ADMIN_NOTE_ADDED
+  ADMIN_MANDATE_PAUSED
+  ADMIN_MANDATE_REVOKED
+  ADMIN_PAYMENT_RECONCILE_REQUESTED
+  ADMIN_REFUND_REQUESTED
+  ADMIN_WEBHOOK_RETRY_REQUESTED
+  ADMIN_WEBHOOK_RECONCILE_REQUESTED
+  ADMIN_FEATURE_FLAG_CHANGED
+  ADMIN_MAINTENANCE_MODE_CHANGED
+}
+
+enum AdminAuditTargetType {
+  ADMIN_AUTH
+  ADMIN_SESSION
+  USER
+  MANDATE
+  PROPOSAL
+  APPROVAL
+  PAYMENT
+  REFUND
+  WEBHOOK
+  PLATFORM_SETTING
+  SYSTEM
+}
+
+enum AdminAuditResult {
+  PENDING
+  SUCCESS
+  FAILURE
+}
+
+enum AdminAuditErrorCode {
+  ADMIN_SIGN_IN_REJECTED
+  ADMIN_UNAUTHORIZED
+  ADMIN_FORBIDDEN
+  ADMIN_REAUTH_REQUIRED
+  ADMIN_INVALID_REQUEST
+  ADMIN_RATE_LIMITED
+  ADMIN_UNAVAILABLE
+  INVALID_STATE
+  CONFLICT
+  TARGET_NOT_FOUND
+  PROVIDER_PENDING
+  PROVIDER_UNAVAILABLE
+  DOMAIN_REJECTED
+}
+
+enum AdminActionRequestStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
 enum MandateStatus {
   DRAFT
   ACTIVE
@@ -232,15 +295,66 @@ model Session {
 }
 
 model AdminPrincipal {
-  id           String                 @id @default(uuid())
-  userId       String                 @unique
-  singletonKey String                 @unique @default("main") @db.VarChar(4)
-  role         AdminRole              @default(ADMIN_SUPER)
-  active       Boolean                @default(true)
-  createdAt    DateTime               @default(now())
-  updatedAt    DateTime               @updatedAt
-  user         User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
-  sessions     AdminSessionSecurity[]
+  id             String                 @id @default(uuid())
+  userId         String                 @unique
+  singletonKey   String                 @unique @default("main") @db.VarChar(4)
+  role           AdminRole              @default(ADMIN_SUPER)
+  active         Boolean                @default(true)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  user           User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions       AdminSessionSecurity[]
+  actionRequests AdminActionRequest[]
+}
+
+// Immutable actor/target identifiers are historical snapshots rather than
+// cascading FKs. Removing a live identity must never rewrite its audit history.
+model AdminAuditEvent {
+  id                String              @id @default(uuid())
+  actorAdminId      String?
+  actorUserId       String?
+  role              AdminRole?
+  action            AdminAuditAction
+  targetType        AdminAuditTargetType
+  targetId          String              @db.VarChar(255)
+  reason            String              @db.VarChar(255)
+  requestId         String              @db.VarChar(36)
+  correlationId     String              @db.VarChar(36)
+  actionId          String?
+  beforeSummaryJson Json?
+  afterSummaryJson  Json?
+  result            AdminAuditResult
+  errorCode         AdminAuditErrorCode?
+  createdAt         DateTime            @default(now())
+
+  @@index([createdAt, id])
+  @@index([actorAdminId, createdAt, id])
+  @@index([targetType, targetId, createdAt, id])
+  @@index([action, result, createdAt, id])
+  @@index([correlationId, createdAt, id])
+  @@index([actionId, createdAt, id])
+}
+
+model AdminActionRequest {
+  id                   String                   @id @default(uuid())
+  principalId          String
+  actorUserId          String
+  requestKey           String                   @db.VarChar(36)
+  action               AdminAuditAction
+  targetType           AdminAuditTargetType
+  targetId             String                   @db.VarChar(255)
+  reason               String                   @db.VarChar(255)
+  requestFingerprint   String                   @db.VarChar(64)
+  requestSummaryJson   Json?
+  status               AdminActionRequestStatus @default(PENDING)
+  resultSummaryJson    Json?
+  errorCode            AdminAuditErrorCode?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  principal            AdminPrincipal           @relation(fields: [principalId], references: [id], onDelete: Restrict)
+
+  @@unique([principalId, requestKey])
+  @@index([status, updatedAt])
 }
 
 model AdminSessionSecurity {

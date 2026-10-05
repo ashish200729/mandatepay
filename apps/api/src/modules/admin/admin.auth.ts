@@ -130,6 +130,6 @@ export function adminMe(identity: AdminIdentity) {
         ),
       ).toISOString(),
     },
-    capabilities: ["session:read", "session:reauthenticate", "session:sign-out"],
+    capabilities: ["session:read", "session:reauthenticate", "session:sign-out", "audit:read"],
   };
 }

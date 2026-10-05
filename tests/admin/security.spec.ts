@@ -41,6 +41,18 @@ test("admin identity, BFF, expiry and responsive session flows", async ({
   expect(me.status()).toBe(200);
   expect(me.headers()["cache-control"]).toContain("no-store");
   expect(await me.text()).not.toMatch(/"token"|password|sessionId/u);
+  const audit = await page.request.get("/api/admin/audit?action=ADMIN_LOGIN_SUCCEEDED&limit=2");
+  expect(audit.status()).toBe(200);
+  const auditData = await audit.json();
+  const signedInUserId = (await me.json()).data.user.id;
+  expect(
+    auditData.data.some((event: { actorUserId: string }) => event.actorUserId === signedInUserId),
+  ).toBe(true);
+  expect(audit.headers()["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(await audit.text()).not.toContain(fixture.password);
+  const auditDetail = await page.request.get(`/api/admin/audit/${auditData.data[0].id}`);
+  expect(auditDetail.status()).toBe(200);
+  expect((await auditDetail.json()).data.id).toBe(auditData.data[0].id);
   const oldCookies = await page.context().cookies();
   expect(oldCookies.some((cookie) => cookie.httpOnly && cookie.sameSite === "Lax")).toBe(true);
   expect((await page.request.post("/api/admin/session", { data: {} })).status()).toBe(403);

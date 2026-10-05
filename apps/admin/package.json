@@ -11,6 +11,7 @@
     "test": "vitest run --config ../../vitest.config.ts apps/admin"
   },
   "dependencies": {
+    "@mandatepay/shared": "workspace:*",
     "@mandatepay/ui": "workspace:*",
     "next": "16.3.8",
     "react": "19.3.0",

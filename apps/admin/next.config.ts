@@ -12,7 +12,7 @@ loadWorkspaceEnvironment({
 });
 
 const config: NextConfig = {
-  transpilePackages: ["@mandatepay/ui"],
+  transpilePackages: ["@mandatepay/ui", "@mandatepay/shared"],
   poweredByHeader: false,
   async headers() {
     return [

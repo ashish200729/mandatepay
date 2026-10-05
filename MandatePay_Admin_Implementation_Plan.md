@@ -1495,26 +1495,28 @@ The phases below are intentionally dependency-linked. Do not start sensitive ope
 
 ### TODO
 
-- [ ] **P2-01** Decide whether to extend current audit model or add `AdminAuditEvent`.
-- [ ] **P2-02** Add migration if required.
-- [ ] **P2-03** Implement append-only admin audit repository.
-- [ ] **P2-04** Implement normalized action enum.
-- [ ] **P2-05** Implement target types.
-- [ ] **P2-06** Implement safe before/after summaries.
-- [ ] **P2-07** Add reason requirement helper.
-- [ ] **P2-08** Add request/correlation IDs.
-- [ ] **P2-09** Record admin login success/failure where safe.
-- [ ] **P2-10** Add `GET /api/admin/audit`.
-- [ ] **P2-11** Add `GET /api/admin/audit/:id`.
-- [ ] **P2-12** Add filtering by action, target, result, date.
-- [ ] **P2-13** Test immutability at repository/service level.
-- [ ] **P2-14** Verify redaction rules.
+- [x] **P2-01** Decide whether to extend current audit model or add `AdminAuditEvent`.
+- [x] **P2-02** Add migration if required.
+- [x] **P2-03** Implement append-only admin audit repository.
+- [x] **P2-04** Implement normalized action enum.
+- [x] **P2-05** Implement target types.
+- [x] **P2-06** Implement safe before/after summaries.
+- [x] **P2-07** Add reason requirement helper.
+- [x] **P2-08** Add request/correlation IDs.
+- [x] **P2-09** Record admin login success/failure where safe.
+- [x] **P2-10** Add `GET /api/admin/audit`.
+- [x] **P2-11** Add `GET /api/admin/audit/:id`.
+- [x] **P2-12** Add filtering by action, target, result, date.
+- [x] **P2-13** Test immutability at repository/service level.
+- [x] **P2-14** Verify redaction rules.
 
 ### Exit criteria
 
-- [ ] Every privileged admin mutation can write an audit record.
-- [ ] Audit data contains no credentials/secrets.
-- [ ] Audit events are searchable and immutable through app APIs.
+- [x] Every privileged admin mutation can write an audit record.
+- [x] Audit data contains no credentials/secrets.
+- [x] Audit events are searchable and immutable through app APIs.
+
+Verified locally on 2026-10-05. Implementation, safe collection rules, transaction integration and test evidence: [docs/implementation/ADMIN_PHASE_2.md](docs/implementation/ADMIN_PHASE_2.md).
 
 **Feeds into:** All mutation phases.
 
