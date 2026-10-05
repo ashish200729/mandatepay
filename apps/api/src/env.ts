@@ -15,6 +15,23 @@ export const environmentSchema = z
       .default("info"),
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
     APP_URL: z.url().default("http://localhost:3000"),
+    ADMIN_ORIGIN: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .url()
+        .refine((value) => {
+          const url = new URL(value);
+          return (
+            ["http:", "https:"].includes(url.protocol) &&
+            !url.username &&
+            !url.password &&
+            !url.search &&
+            !url.hash &&
+            url.pathname === "/"
+          );
+        }, "Use an HTTP(S) origin without credentials, path, query or fragment.")
+        .optional(),
+    ),
     API_URL: z.url().default("http://localhost:4000"),
     DATABASE_URL: optionalText,
     AUTH_SECRET: z.preprocess(
@@ -58,6 +75,12 @@ export const environmentSchema = z
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === "production") {
+      if (value.ADMIN_ORIGIN && !value.ADMIN_ORIGIN.startsWith("https://"))
+        context.addIssue({
+          code: "custom",
+          path: ["ADMIN_ORIGIN"],
+          message: "Production admin requires HTTPS.",
+        });
       if (value.AUTH_REQUIRE_EMAIL_VERIFICATION === false)
         context.addIssue({
           code: "custom",

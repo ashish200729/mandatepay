@@ -16,6 +16,10 @@ enum PaymentProfileStatus {
   REVOKED
 }
 
+enum AdminRole {
+  ADMIN_SUPER
+}
+
 enum MandateStatus {
   DRAFT
   ACTIVE
@@ -203,6 +207,7 @@ model User {
   payments                          Payment[]
   refunds                           Refund[]
   auditEvents                       AuditEvent[]
+  adminPrincipal                    AdminPrincipal?
 
   @@index([createdAt])
 }
@@ -211,18 +216,43 @@ model User {
 // Phase 2 can add server-owned sessions without changing financial ownership
 // relations or introducing a second user table.
 model Session {
-  id        String   @id @default(uuid())
-  expiresAt DateTime
-  token     String   @unique @db.VarChar(255)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  ipAddress String?  @db.VarChar(64)
-  userAgent String?  @db.Text
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String                @id @default(uuid())
+  expiresAt     DateTime
+  token         String                @unique @db.VarChar(255)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  ipAddress     String?               @db.VarChar(64)
+  userAgent     String?               @db.Text
+  userId        String
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  adminSecurity AdminSessionSecurity?
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model AdminPrincipal {
+  id           String                 @id @default(uuid())
+  userId       String                 @unique
+  singletonKey String                 @unique @default("main") @db.VarChar(4)
+  role         AdminRole              @default(ADMIN_SUPER)
+  active       Boolean                @default(true)
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions     AdminSessionSecurity[]
+}
+
+model AdminSessionSecurity {
+  sessionId         String         @id
+  principalId       String
+  createdAt         DateTime       @default(now())
+  lastSeenAt        DateTime
+  reauthenticatedAt DateTime
+  session           Session        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  principal         AdminPrincipal @relation(fields: [principalId], references: [id], onDelete: Cascade)
+
+  @@index([principalId])
 }
 
 model Account {

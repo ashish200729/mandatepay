@@ -41,7 +41,8 @@ suite("Better Auth verification and recovery with PostgreSQL", () => {
         headers: {
           origin: appUrl,
           "content-type": "application/json",
-          "x-forwarded-for": `192.0.2.${++sequence}`,
+          // Direct handler fixtures emulate the trusted Fastify bridge header.
+          "x-mandatepay-client-ip": `192.0.2.${++sequence}`,
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       }),

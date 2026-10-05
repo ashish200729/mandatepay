@@ -12,6 +12,6 @@
     "rewriteRelativeImportExtensions": true,
     "noEmit": false
   },
-  "include": ["src/**/*.ts", "prisma/seed.ts", "prisma7.config.ts"],
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "prisma/seed.ts", "prisma7.config.ts"],
   "exclude": ["node_modules", "dist", "src/generated"]
 }

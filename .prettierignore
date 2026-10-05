@@ -7,6 +7,7 @@ next-env.d.ts
 .impeccable
 # Preserve the supplied implementation plan verbatim.
 MandatePay_AgentGuard_End_to_End_Implementation_Plan.md
+MandatePay_Admin_Implementation_Plan.md
 .local
 playwright-report
 test-results

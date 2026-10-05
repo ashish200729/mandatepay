@@ -4,14 +4,27 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 import {
   API_ENV_KEYS,
   DATABASE_ENV_KEYS,
   WEB_ENV_KEYS,
+  ADMIN_ENV_KEYS,
   loadWorkspaceEnvironment,
   readWorkspaceEnvironment,
 } from "./environment.mjs";
+
+test("admin imports safe server URLs without provider, auth, bootstrap or database secrets", (t) => {
+  const f = fixture(t);
+  f.root(
+    ".env",
+    "API_URL=http://localhost:4000\nADMIN_ORIGIN=http://localhost:3001\nAUTH_SECRET=private\nDATABASE_URL=private\nPAYPAL_CLIENT_SECRET=private\nMANDATEPAY_ADMIN_USER_ID=private",
+  );
+  const result = readWorkspaceEnvironment({ ...f, keys: ADMIN_ENV_KEYS });
+  assert.deepEqual(
+    { ...result },
+    { API_URL: "http://localhost:4000", ADMIN_ORIGIN: "http://localhost:3001" },
+  );
+});
 
 function fixture(t) {
   const rootDirectory = mkdtempSync(join(tmpdir(), "mandatepay-env-"));
@@ -163,7 +176,7 @@ test("invalid mode is rejected instead of forming arbitrary paths", (t) => {
 test("native API startup preload loads overrides before application imports", (t) => {
   const f = fixture(t);
   f.workspace(".env", "PORT=4567\nOPENAI_MAX_OUTPUT_TOKENS=1024\nNODE_OPTIONS=unsafe");
-  const preload = fileURLToPath(new URL("./register-api-environment.mjs", import.meta.url));
+  const preload = new URL("./register-api-environment.mjs", import.meta.url).href;
   const output = execFileSync(
     process.execPath,
     [

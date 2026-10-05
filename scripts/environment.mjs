@@ -6,10 +6,12 @@ import { parseEnv } from "node:util";
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const DATABASE_ENV_KEYS = ["DATABASE_URL", "TEST_DATABASE_URL"];
 export const WEB_ENV_KEYS = ["API_URL", "APP_URL"];
+export const ADMIN_ENV_KEYS = ["API_URL", "APP_URL", "ADMIN_ORIGIN"];
 export const API_ENV_KEYS = [
   "HOST",
   "PORT",
   "WEB_ORIGIN",
+  "ADMIN_ORIGIN",
   "LOG_LEVEL",
   "NODE_ENV",
   "APP_URL",

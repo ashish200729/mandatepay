@@ -1,4 +1,5 @@
 export { AuditRepository } from "./audit-repository.js";
+export { AdminRepository } from "./admin-repository.js";
 export type { AppendAuditEventInput } from "./audit-repository.js";
 export { MandateRepository } from "./mandate-repository.js";
 export type {

@@ -10,10 +10,12 @@
   "scripts": {
     "dev": "turbo run build --filter=\"./packages/*\" --ui=stream && turbo run dev --filter=\"./apps/*\"",
     "dev:web": "turbo run dev --filter=@mandatepay/web",
+    "dev:admin": "turbo run dev --filter=@mandatepay/admin",
     "dev:api": "turbo run build --filter=\"./packages/*\" --ui=stream && turbo run dev --filter=@mandatepay/api",
     "test": "pnpm test:env && turbo run test",
-    "test:env": "node --test scripts/environment.test.mjs",
+    "test:env": "node --test scripts/environment.test.mjs scripts/check-admin-boundaries.test.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:admin": "pnpm --filter @mandatepay/api... build && pnpm --filter @mandatepay/admin build && playwright test --config playwright.admin.config.ts",
     "test:integration": "pnpm --filter @mandatepay/database test:integration && pnpm --filter @mandatepay/api test:integration",
     "build": "turbo run build",
     "lint": "turbo run lint",

@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { createPrismaClient, type DatabaseClient } from "@mandatepay/database";
 import { createResendAuthEmailSender, type AuthEmailSender } from "./auth-email.js";
+import { originsFor } from "./origins.js";
 
 export type AuthNodeEnvironment = "development" | "test" | "production";
 
@@ -10,12 +11,15 @@ export interface AuthRuntimeOptions {
   databaseUrl: string;
   authSecret: string;
   appUrl: string;
+  adminOrigin?: string;
   nodeEnv: AuthNodeEnvironment;
   requireEmailVerification?: boolean;
   resendApiKey?: string;
   authEmailFrom?: string;
   emailSender?: AuthEmailSender;
   onEmailDeliveryError?: () => void;
+  /** Programmatic provisioning only; rejected outside an isolated test database. */
+  testRateLimitMaximum?: number;
 }
 
 export class AuthConfigurationError extends Error {
@@ -25,20 +29,12 @@ export class AuthConfigurationError extends Error {
   }
 }
 
-export function trustedOriginsFor(appUrl: string, nodeEnv: AuthNodeEnvironment): string[] {
-  const configured = new URL(appUrl);
-  const origins = new Set<string>([configured.origin]);
-
-  if (
-    nodeEnv !== "production" &&
-    (configured.hostname === "localhost" || configured.hostname === "127.0.0.1")
-  ) {
-    const alias = configured.hostname === "localhost" ? "127.0.0.1" : "localhost";
-    const port = configured.port ? ":" + configured.port : "";
-    origins.add(new URL(configured.protocol + "//" + alias + port).origin);
-  }
-
-  return [...origins];
+export function trustedOriginsFor(
+  appUrl: string,
+  nodeEnv: AuthNodeEnvironment,
+  adminOrigin?: string,
+): string[] {
+  return [...new Set([...originsFor(appUrl, nodeEnv), ...originsFor(adminOrigin, nodeEnv)])];
 }
 
 export function createAuthRuntime(options: AuthRuntimeOptions) {
@@ -48,6 +44,15 @@ export function createAuthRuntime(options: AuthRuntimeOptions) {
   if (!options.authSecret || options.authSecret.length < 32) {
     throw new AuthConfigurationError("AUTH_SECRET must be at least 32 characters.");
   }
+  if (
+    options.testRateLimitMaximum !== undefined &&
+    (options.nodeEnv !== "test" ||
+      !decodeURIComponent(new URL(options.databaseUrl).pathname).endsWith("_test") ||
+      !Number.isSafeInteger(options.testRateLimitMaximum) ||
+      options.testRateLimitMaximum < 1 ||
+      options.testRateLimitMaximum > 500)
+  )
+    throw new AuthConfigurationError("Fixture rate limits require an isolated test database.");
 
   const isProduction = options.nodeEnv === "production";
   const requireEmailVerification = options.requireEmailVerification ?? isProduction;
@@ -92,7 +97,7 @@ export function createAuthRuntime(options: AuthRuntimeOptions) {
     appName: "MandatePay",
     baseURL: options.appUrl,
     secret: options.authSecret,
-    trustedOrigins: trustedOriginsFor(options.appUrl, options.nodeEnv),
+    trustedOrigins: trustedOriginsFor(options.appUrl, options.nodeEnv, options.adminOrigin),
     database: prismaAdapter(database, {
       provider: "postgresql",
     }),
@@ -160,8 +165,15 @@ export function createAuthRuntime(options: AuthRuntimeOptions) {
     },
     rateLimit: {
       enabled: true,
+      ...(options.testRateLimitMaximum === undefined
+        ? {}
+        : {
+            customRules: { "/**": { window: 60, max: options.testRateLimitMaximum } },
+          }),
     },
     advanced: {
+      // Only the Fastify bridge writes this header from its socket-derived IP.
+      ipAddress: { ipAddressHeaders: ["x-mandatepay-client-ip"] },
       useSecureCookies: isProduction,
       disableCSRFCheck: false,
       disableOriginCheck: false,

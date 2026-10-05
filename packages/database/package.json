@@ -20,13 +20,14 @@
   "scripts": {
     "build": "pnpm generate && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src prisma tests",
+    "lint": "eslint src prisma scripts tests",
     "format": "prettier --write . --ignore-path ../../.prettierignore",
     "format:check": "prettier --check . --ignore-path ../../.prettierignore",
     "generate": "prisma generate --config prisma7.config.ts",
     "migrate:deploy": "prisma migrate deploy --config prisma7.config.ts",
     "migrate:status": "prisma migrate status --config prisma7.config.ts",
     "seed": "node --import ../../scripts/register-database-environment.mjs --import=tsx prisma/seed.ts",
+    "admin:bootstrap": "node --import ../../scripts/register-database-environment.mjs --import=tsx scripts/bootstrap-admin.ts",
     "test": "pnpm generate && vitest run --config vitest.config.ts",
     "test:integration": "pnpm generate && vitest run --config vitest.integration.config.ts"
   },

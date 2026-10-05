@@ -5,6 +5,8 @@ import type { DatabaseClient } from "@mandatepay/database";
 import { z } from "zod";
 import { createAuthRuntime, type AuthRuntime } from "./auth.js";
 import { env } from "./env.js";
+import { originsFor, trustedOrigin } from "./origins.js";
+import { registerAdminRoutes } from "./modules/admin/admin.routes.js";
 import {
   loadOpenAIConfig,
   parseMandate,
@@ -57,22 +59,10 @@ type RateLimitEntry = {
 };
 
 function isTrustedOrigin(origin: string | undefined, config: RuntimeConfig): boolean {
-  if (!origin) return false;
-  try {
-    const requestOrigin = new URL(origin).origin;
-    const configuredOrigin = new URL(config.APP_URL).origin;
-    if (requestOrigin === configuredOrigin) return true;
-    if (config.NODE_ENV === "production") return false;
-    const configured = new URL(config.APP_URL);
-    if (configured.hostname !== "localhost" && configured.hostname !== "127.0.0.1") {
-      return false;
-    }
-    const alias = configured.hostname === "localhost" ? "127.0.0.1" : "localhost";
-    const port = configured.port ? ":" + configured.port : "";
-    return requestOrigin === configured.protocol + "//" + alias + port;
-  } catch {
-    return false;
-  }
+  return trustedOrigin(origin, [
+    ...originsFor(config.APP_URL, config.NODE_ENV),
+    ...originsFor(config.ADMIN_ORIGIN, config.NODE_ENV),
+  ]);
 }
 
 function safeLoggerConfig(config: RuntimeConfig) {
@@ -110,7 +100,9 @@ function resolveAuthRuntime(options: CreateAppOptions, config: RuntimeConfig): A
       databaseUrl: config.DATABASE_URL,
       authSecret: config.AUTH_SECRET,
       appUrl: config.APP_URL,
+      adminOrigin: config.ADMIN_ORIGIN,
       nodeEnv: config.NODE_ENV,
+      testRateLimitMaximum: options.testAuthPostMaximum,
       requireEmailVerification: config.AUTH_REQUIRE_EMAIL_VERIFICATION,
       resendApiKey: config.RESEND_API_KEY,
       authEmailFrom: config.AUTH_EMAIL_FROM,
@@ -191,6 +183,7 @@ function buildAuthRequest(request: FastifyRequest, config: RuntimeConfig): Reque
   const headers = fromNodeHeaders(request.headers);
   headers.delete("content-length");
   headers.delete("host");
+  headers.set("x-mandatepay-client-ip", request.ip);
   const rawBody = request.body;
   const body =
     rawBody === undefined
@@ -225,10 +218,22 @@ export async function createApp(options: CreateAppOptions = {}) {
   });
 
   await app.register(cors, {
-    origin: config.WEB_ORIGIN,
+    origin: [
+      ...new Set([
+        ...originsFor(config.WEB_ORIGIN, config.NODE_ENV),
+        ...originsFor(config.ADMIN_ORIGIN, config.NODE_ENV),
+      ]),
+    ],
     credentials: true,
     methods: ["GET", "POST", "PATCH", "OPTIONS"],
     allowedHeaders: ["accept", "content-type", "origin", "cookie", "authorization", "x-request-id"],
+  });
+
+  registerAdminRoutes(app, {
+    runtime,
+    appUrl: config.APP_URL,
+    adminOrigin: config.ADMIN_ORIGIN,
+    nodeEnv: config.NODE_ENV,
   });
 
   app.get("/health", async () => ({

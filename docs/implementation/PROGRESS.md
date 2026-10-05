@@ -1,5 +1,19 @@
 # Phase progress and handoff
 
+## Admin Phase 1 complete — 2026-10-05
+
+Implemented the singleton admin identity, additive migration, safe verified-account bootstrap, database-backed authorization/idle/fresh-auth proof, credential sign-in and rotation, safe session endpoints, exact origins/CORS and dedicated rate limits. Added the aligned Next admin scaffold with guarded rendering, responsive sign-in/denial/expiry and own-session controls. All 16 tasks and four exit criteria in the admin plan are checked; [ADMIN_PHASE_1.md](./ADMIN_PHASE_1.md) records implementation, setup and evidence.
+
+Verification: 326 unit, 13 environment/boundary, 81 API integration, eight database integration and two desktop/mobile browser tests pass; affected lint/types/build/format and migration/lockfile/bundle checks pass. Test principals were cleaned up. No real administrator identity was selected or granted; the operator must supply an existing verified user ID to the documented bootstrap command. Phase 2–10 remain unchecked; immutable admin audit and operational controls are not implemented. Local qualification only, with the existing unrelated repository formatting baseline and pre-existing web next-env edits preserved.
+
+Additional schema drift inspection found the pre-existing webhook recovery index from migration 20261002001200 missing from the Prisma schema declaration. It reports no admin model discrepancy; the index remains in the database. Evidence and the later-migration follow-up are recorded in ADMIN_PHASE_1.md.
+
+## Admin Phase 0 complete — 2026-10-05
+
+Completed the authorized repository verification/admin contract phase. [ADMIN_PHASE_0.md](./ADMIN_PHASE_0.md) inventories the absent admin scaffold, frontend alignment, Better Auth/session/BFF/origin boundaries, all 17 Prisma models and six repository classes, runtime state machines, audit limitations, rate limits and recovery claims. [admin-api.md](../architecture/admin-api.md) fixes the singleton admin auth topology, Phase 1 schema additions, safe endpoints/DTOs, action gates, metric definitions and later missing-model dependencies. All 14 Phase 0 tasks and four exit criteria are checked in the admin implementation plan; later phases remain open.
+
+Verified **69 existing unit tests** and **54 isolated PostgreSQL integration tests** for the consumption boundaries and reusable domain services; financial providers were mocked. Affected documentation formatting, source-link/checklist consistency and whitespace passed. Repository-wide formatting reported 281 existing files outside these documents; those unrelated files were not reformatted. Windows pnpm could not resolve the Vitest executable shim, so the installed runner was invoked directly with Node. This phase changes documentation and the supplied-plan formatting exclusion only, creates no admin app/migration/API route, and makes no new live-provider, UI or hosting qualification claim. Existing unrelated `apps/web/next-env.d.ts` work was preserved.
+
 Checkpoint: 2026-10-03. The user resumed implementation. Hosted deployment and live Sandbox buyer verification were subsequently deferred explicitly; local implementation and verification continued. TypeScript/Node only. New sub-agent build tasks use GPT-6.1-sol with high reasoning; the parent performs reviews.
 
 ## Current implementation

@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@import "@mandatepay/ui/styles/globals.css";
+@source "../../../../packages/ui/src";
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--foreground);
+    outline-offset: 4px;
+  }
+}

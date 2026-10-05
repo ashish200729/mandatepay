@@ -1,0 +1,157 @@
+# Admin Phase 0 verification
+
+Verified on 2026-10-05 against local source at base commit `4875061`. This completes repository discovery and the design contract, not an implemented admin application. The binding endpoint/security contract is [admin-api.md](../architecture/admin-api.md). Phase 1 and later checkboxes remain open.
+
+## Checklist evidence
+
+| Item  | Finding and evidence                                                                                                                                                                                                                                                                                                                                     |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0-01 | `apps/admin` does **not** exist. There is no admin package, scaffold, route, session guard or API module. `pnpm-workspace.yaml` already includes `apps/*`. Create the minimum auth scaffold in Phase 1, then the operational shell in Phase 3.                                                                                                           |
+| P0-02 | [web package](../../apps/web/package.json): Next.js **16.3.8**, React/React DOM **19.3.0**. App Router lives in `apps/web/src/app`; [Next config](../../apps/web/next.config.ts) loads server environment defaults, transpiles UI, disables the powered-by header and supplies security headers. No static export or browser API URL is configured.      |
+| P0-03 | Alignment decisions are fixed below. No absent admin config is claimed implemented; P1/P3 own its creation.                                                                                                                                                                                                                                              |
+| P0-04 | [auth.ts](../../apps/api/src/auth.ts), [app.ts](../../apps/api/src/app.ts), [Prisma schema](../../packages/database/prisma/schema.prisma), and web auth helpers inspected. Better Auth **1.7.7**, Prisma adapter, persisted sessions, no cookie cache; email/password auth with optional development verification and mandatory production verification. |
+| P0-05 | All **17** Prisma models and all **6** repository classes inventoried below; there are **13** migration directories. No order, admin, setting, note, agent-run or heartbeat model exists.                                                                                                                                                                |
+| P0-06 | Both shared transitions and actual mandate repository transitions mapped below; they differ for revocation.                                                                                                                                                                                                                                              |
+| P0-07 | Proposal/approval/payment/refund runtime services mapped below, including the Prisma/shared refund enum difference.                                                                                                                                                                                                                                      |
+| P0-08 | Verified inbox and worker claims, retry eligibility, backoff and exhaustion mapped below.                                                                                                                                                                                                                                                                |
+| P0-09 | Domain audit has an owner `userId`, no actor-type/admin-actor field, and closed event/entity enums. Choose a separate `AdminAuditEvent` in Phase 2; preserve immutable domain audit.                                                                                                                                                                     |
+| P0-10 | Existing per-process auth, financial, AI and catalog limits inventoried below. `/api/admin/*` has no limiter or routes today.                                                                                                                                                                                                                            |
+| P0-11 | Current API CORS accepts `WEB_ORIGIN`; Better Auth and business mutation origin checks accept `APP_URL` plus its same-port loopback alias outside production. Admin port/origin is currently unsupported. Exact additions are fixed in the contract for Phase 1.                                                                                         |
+| P0-12 | Browser → relative `/api/*` → fixed Next BFF → Fastify. Server components forward cookies to `/api/me` with `no-store`. Neither helper grants admin access.                                                                                                                                                                                              |
+| P0-13 | Metrics, source tables, time semantics, sample exclusions and unavailable telemetry are defined in the contract.                                                                                                                                                                                                                                         |
+| P0-14 | [Admin endpoint/data contract](../architecture/admin-api.md) fixes auth, DTO projections, pagination, errors, service reuse, action gates and later model dependencies before pages.                                                                                                                                                                     |
+
+## Frontend and workspace alignment
+
+Use `@mandatepay/admin` with the same pinned Next/React/TypeScript/Tailwind versions as web. Use `src/app`, `@/* → ./src/*`, the shared strict `@mandatepay/typescript-config/nextjs.json`, `next typegen && tsc --noEmit`, and the web ESLint flat config (`core-web-vitals`, `typescript`, generated-file ignores). Use Next 16's `src/proxy.ts` convention instead of introducing the plan's illustrative `middleware.ts`. A proxy redirect is only UI routing; Fastify remains the authorization boundary.
+
+Reuse `@mandatepay/ui`, `@tailwindcss/postcss` **4.3.3**, Tailwind **4.3.3**, shared semantic CSS, and explicit Tailwind `@source` for shared components as in [web globals](../../apps/web/src/app/globals.css). Keep the ivory/sand palette and Hedvig/Satoshi pairing in [DESIGN.md](../../DESIGN.md); reuse the existing font bootstrap and do not redistribute the ignored Satoshi binary. Copy the web security headers and UI transpilation. No database, AgentGuard, PayPal or agent package belongs in an admin frontend bundle, including its Next BFF; it makes HTTP calls only.
+
+Reserve loopback port **3001** for admin development; web/API remain 3000/4000. Admin server environment loading must use its own workspace directory and only safe URL keys. Add the API's `ADMIN_ORIGIN` to the API loader/validation and Turbo runtime allowlist in Phase 1; bootstrap identity is server-only and must not use `NEXT_PUBLIC_*`. The main-admin user ID is deployment input for bootstrap, not an authorization shortcut.
+
+Existing root Turbo **2.11.6** tasks discover matching package scripts; `build` depends on `^build`, `typecheck` on `^build`/`^typecheck`, and `dev` is persistent/uncached. Reuse this graph and the Next outputs, including the cache exclusion; the future admin package needs its own scripts and dependencies to participate. Preserve `$TURBO_DEFAULT$` when specifying inputs. Consulted the installed package's `docs/README.md`, configuring-tasks and environment-variable docs. No Turbo task/configuration change is needed for this documentation phase. Add admin to real unit/browser checks when implementation starts; do not claim web-only checks cover it.
+
+## Identity and helper inventory
+
+- `User`: ID, unique email, optional name/image, verification, default-off `globalAutonomousPurchasingEnabled`, timestamps. There is **no** account-disabled flag or role.
+- `Session`: ID, unique secret token, user FK, creation/update/expiry, optional raw IP/user agent. Admin responses may expose only safe session metadata. Creation/update timestamps do not prove password reauthentication.
+- `Account`: provider/account identity, password hash and optional OAuth tokens/scopes/expiry. Exclude these credential columns from all admin DTOs.
+- `Verification`: hashed identifier, value and expiry for verification/recovery. No admin read endpoint.
+- `createAuthRuntime` configures credentials, reset revocation, CSRF/origin enforcement, secure production HTTP-only SameSite=Lax cookies, and email delivery. It does not configure admin role, idle timeout or fresh-auth tracking.
+- `readAuthenticatedUser` in `app.ts` calls `auth.api.getSession`, reloads a safe User projection, optionally enforces verified email and returns 401/403/503. It is private to that module; Phase 1 must refactor or layer a reusable session helper without relaxing customer checks. Admin verification must always be required, even in development.
+- [server-api.ts](../../apps/web/src/lib/auth/server-api.ts) forwards server cookies to `/api/me`, validates a safe principal and distinguishes unavailable service from absent session. [proxy.ts](../../apps/web/src/lib/auth/proxy.ts) has fixed route/header/content-type allowlists, manual redirects and bounded timeouts. It deliberately does not allow admin paths or webhook ingestion. The browser auth client uses the BFF.
+
+## Complete persistence inventory
+
+| Model            | Keys, relations and operational meaning                                                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User             | Owner for mandates, proposals, approvals, payments, refunds and domain audits; no admin/access status.                                                                                                                    |
+| Session          | Many per User; persisted Better Auth session. Token is secret.                                                                                                                                                            |
+| Account          | Many per User; unique `(providerId, accountId)`; credential storage, excluded from operational reads.                                                                                                                     |
+| Verification     | Independent authentication recovery records; excluded.                                                                                                                                                                    |
+| PaymentProfile   | One per User; `DISCONNECTED / CONNECTED / REVOKED`; optional encrypted vault reference. Table presence does not mean Vault is implemented; expose status only.                                                            |
+| Mandate          | User, current version/activeVersionId, limits, validity and status; unique owner/creation key. All money is BigInt minor units, timezone default UTC.                                                                     |
+| MandateVersion   | Immutable `(mandateId, version)` history with canonical JSON and exact limits/validity.                                                                                                                                   |
+| MandateRule      | Immutable rule rows per mandate/version. Canonical rules and row projections must remain consistent.                                                                                                                      |
+| ProductSnapshot  | Immutable source/external ID pair, product/merchant/price/currency and JSON metadata. No standalone admin product editor.                                                                                                 |
+| PurchaseProposal | User, mandate/version, snapshot, server totals, fingerprint, unique idempotency key, expiry, sample flag; at most one approval/payment/reservation.                                                                       |
+| PolicyDecision   | Immutable decision, reason/rules/spend snapshots bound to proposal/version. Latest decision is ordered by `(createdAt, id)`; history remains distinct.                                                                    |
+| Approval         | Unique proposal; owner/fingerprint/deadline/decision/decidedAt/sample flag. No separate approval-history model; use audit for transitions.                                                                                |
+| Payment          | Unique proposal, provider order/capture IDs and request IDs; owner/mandate, amount/status/capturedAt/failure/sample flag. This backs both order and payment views.                                                        |
+| Refund           | Payment/user, amount/currency/status/settledAt/failure/sample flag, provider ID/request ID/fingerprint; key uniqueness is `(userId, idempotencyKey)`. Invoice binding uses local refund ID, not a separate Invoice table. |
+| SpendReservation | Unique proposal; mandate/version, gross amount/currency, validity/window/status/sample flag and consumption/release times. Refunds do not restore gross allowance.                                                        |
+| WebhookInbox     | Unique `(provider, providerEventId)`; verified payload, status/attempts/schedule/error/timestamps. No payment FK, explicit lease owner or duplicate-delivery count.                                                       |
+| AuditEvent       | Immutable user-owned event/entity/id/payload/timestamp, optional unique dedupe key and sample flag. `userId` is not a distinct privileged actor.                                                                          |
+
+## Complete repository method inventory
+
+These are the public methods in [database repositories](../../packages/database/src/repositories/index.ts). API financial orchestration also uses transactional Prisma operations; the repository classes alone do not describe every runtime service.
+
+| Repository             | Public methods                                                                                                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| MandateRepository      | `create`, `getByIdForUser`, `listForUser`, `createVersion`, `activate`, `pause`, `resume`, `revoke`                                                                                                                      |
+| ProposalRepository     | `create`, `getByIdForUser`, `listForUser`, `recordPolicyDecision`, `requestApproval`, `grantApproval`, `rejectApproval`, `transition`                                                                                    |
+| PaymentRepository      | `create`, `getByIdForUser`, `listForUser`, `setPaypalOrder`, `markOrderApproved`, `markCapturePending`, `recordCapture`, `markFailed`, `requestRefund`, `markRefundSubmitted`, `markRefundCompleted`, `markRefundFailed` |
+| SpendRepository        | `reserve`, `getForUser`, `release`, `consume`                                                                                                                                                                            |
+| AuditRepository        | `append`, `listForUser`, `listForEntity`                                                                                                                                                                                 |
+| WebhookInboxRepository | `receive`, `find`, `markProcessing`, `markProcessed`, `markFailed`                                                                                                                                                       |
+
+Do not add `skipOwnerCheck` to these methods. Admin read repositories will be separate and explicit. For actions, resolve the target owner on the server after `requireAdmin`, then call existing services with that owner and record the real admin actor separately. Do not use the admin's user ID as the payment owner. The basic inbox repository's `markProcessing` is not the concurrent recovery claim API; use `PrismaWebhookInboxStore` instead.
+
+## Actual state machines
+
+Sources: [shared transitions](../../packages/shared/src/state-machine.ts), [mandate repository](../../packages/database/src/repositories/mandate-repository.ts), and API [proposals](../../apps/api/src/services/proposals.ts), [payments](../../apps/api/src/services/payments.ts), [refunds](../../apps/api/src/services/refunds.ts), [webhooks](../../apps/api/src/services/webhooks.ts).
+
+### Mandate
+
+Shared map: `DRAFT → ACTIVE`; `ACTIVE → PAUSED / EXPIRED / REVOKED`; `PAUSED → ACTIVE / EXPIRED / REVOKED`; expired/revoked terminal. **Runtime repository differs:** activation accepts DRAFT/PAUSED; pause accepts ACTIVE; resume accepts PAUSED; revoke accepts DRAFT/ACTIVE/PAUSED/EXPIRED. Same-target requests return current state idempotently. Activation requires the validity interval and optional expected-version check. There is no public expire command or periodic mandate-expiry worker; effective expiry must be derived at read time. Admin pause/revoke remain gated on the Phase 5 policy decision and use repository rules, not a reconstructed diagram.
+
+### Proposal and approval
+
+Shared enum/map includes intermediate DRAFT, POLICY_CHECKED and APPROVED states. Actual catalog creation persists **PROPOSED**. `evaluateProposal` accepts PROPOSED/POLICY_CHECKED/AWAITING_APPROVAL and writes directly to AUTHORIZED (ALLOW), AWAITING_APPROVAL (REQUIRE_APPROVAL), or BLOCKED. It appends an immutable PolicyDecision. ALLOW creates an active reservation; pending approval does **not** reserve spend in this runtime path.
+
+Approval is `PENDING → APPROVED / REJECTED / EXPIRED`. It binds owner, proposal fingerprint and deadline, normally capped at 15 minutes and the proposal/mandate deadline. `approveProposal` locks/revalidates; success writes APPROVED approval and AUTHORIZED proposal directly and reserves spend. A new hard block writes REJECTED/BLOCKED. An elapsed approval deadline can persist EXPIRED; pending rows may also be effectively overdue before an attempted action. Approved retries preserve identity; user rejection writes REJECTED/CANCELLED. Admin never calls approve/reject on behalf of a customer.
+
+Payment creation advances AUTHORIZED → PAYPAL_ORDER_CREATED; capture claim writes PAYMENT_PENDING; verified completion writes COMPLETED; confirmed denial writes FAILED and releases the reservation. Authorization revalidation checks the current owner setting, mandate/version/deadline, product, approval and aggregate spend under locks. No current generic admin cancel/expire service exists. Re-evaluation is limited to the three accepted evaluation states, never a force-allow or terminal reset.
+
+### Payment and reservation
+
+Prisma payment statuses: `CREATED, APPROVED, CAPTURE_PENDING, COMPLETED, DENIED, FAILED, PARTIALLY_REFUNDED, REFUNDED`. CREATED may exist before a provider order ID is known. Approval response/webhook/reconcile can advance CREATED → APPROVED. Capture claim moves CREATED/APPROVED → CAPTURE_PENDING only after validating provider approval and current authorization; success completes payment/proposal and consumes spend. Confirmed decline writes DENIED; failures are not inferred solely from a timeout. Completed/partially-refunded/refunded records are monotonic under duplicate/out-of-order reconciliation.
+
+Reservations: `ACTIVE → CONSUMED / RELEASED / EXPIRED` (FAILED also exists in the enum). Runtime reservation cleanup expires unpaid overdue holds under locks; uncertain CAPTURE_PENDING outcomes remain held. A consumed gross purchase remains spent after partial/full refund. `ReservationWindow` has TRANSACTION/DAILY/WEEKLY/MONTHLY; actual service creates a single TRANSACTION reservation and computes period spending from records, not three extra reservation rows.
+
+### Refund
+
+Prisma/runtime: `REQUESTED, APPROVED, SUBMITTED, COMPLETED, FAILED, CANCELLED`. The shared schema/map omits CANCELLED; it must not be used as the full admin enum. `refundPayment` validates confirmation, ownership, capture/currency, safe positive amount and remaining allowance atomically, creates REQUESTED and normally moves directly to SUBMITTED (APPROVED is supported but not a separate user approval step). Pending provider status stays SUBMITTED; verified completion → COMPLETED; provider failed/cancelled → FAILED/CANCELLED. Terminal retries return the original result.
+
+Active/complete refunds reserve the refundable amount, serialized against the payment. Stable owner-scoped request key/fingerprint, provider UUID and invoice=`Refund.id` prevent changing the amount or submitting a distinct retry after an uncertain outcome. A known provider refund uses status reads. `reconcileRefundStatus` checks at most two pending known refunds per payment; no unknown-ID recovery success is fabricated. Refund policy evaluation is transient: there is no persisted RefundPolicyDecision table or full guard-history DTO to invent.
+
+## Webhook and recovery semantics
+
+The HTTP service verifies the raw signed payload **before** durable claim. Invalid signatures produce no inbox row. Supported verified events obtain an advisory lock by provider/event ID and create/claim PROCESSING. PROCESSED/IGNORED deliveries deduplicate; active PROCESSING leases are not reclaimed. Stale PROCESSING leases (five minutes since `updatedAt`) can be reclaimed. Verified provider reads reconcile order/capture/refund facts with owner, invoice, amount, currency and IDs.
+
+Stored statuses are `RECEIVED / PROCESSING / PROCESSED / FAILED / IGNORED`. Runtime receipt starts at PROCESSING; RECEIVED is supported by the basic repository but is not selected by the recovery worker. Pending reconciliation maps to FAILED with safe retry handling. There is no RETRYING, DEAD or REJECTED enum. "Retry scheduled", "leased", "stale lease" and "exhausted" are derived diagnostics, not writable states.
+
+[Recovery worker](../../apps/api/src/services/webhook-recovery.ts): `runOnce` takes at most 50 verified PayPal FAILED rows due now (`nextAttemptAt` null or due) or stale PROCESSING rows, with attempts < 5. `claimVerifiedForReplay` row-locks and rechecks eligibility, increments attempts, and grants PROCESSING. Replay processes/ignores or schedules FAILED with exponential delay `min(15m, 5s × 2^(attempts−1))`. At five attempts it retains FAILED, clears the retry timestamp and records exhaustion; a null timestamp alone does not mean exhausted. The CLI runs one batch and exits; no persisted heartbeat or continuous in-process timer exists. Never reset attempts or release a live lease as an admin shortcut. New signed HTTP deliveries use their own claim path and are not capped by the worker's attempt limit; exhausted is a recovery classification, not permanent provider-event rejection.
+
+## Audit and rate limits
+
+[AuditRepository](../../packages/database/src/repositories/audit-repository.ts) rejects prohibited payload keys and validates dedupe owner/payload. Some services write audits directly inside financial transactions; serializers still need explicit safe projections. [Immutable-history migration](../../packages/database/prisma/migrations/20261002000400_add_immutable_history_triggers/migration.sql) rejects UPDATE/DELETE of AuditEvent, PolicyDecision, MandateVersion, MandateRule and ProductSnapshot at the database level. Neither enums nor fields currently support a separate admin actor, role, reason, result, request/correlation ID or before/after summaries. Phase 2 adds a separate append-only admin audit model and equivalent database protection, leaving customer events intact.
+
+| Current limiter           | Actual boundary                                                                                                                                                |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Better Auth               | Built-in rate limiting enabled; no custom storage configured in `auth.ts`.                                                                                     |
+| Auth POST in app.ts       | 30 requests/IP/60s, bounded 4096-entry process map; isolated test-only override.                                                                               |
+| Financial mutation helper | 30 requests/user/60s, capacity 2048, shared across proposal/approval/order/capture/reconcile/refund/refund-status POSTs. Reads and webhook ingestion excluded. |
+| Mandate parser            | 10 requests/user/60s, process map with bounded cleanup.                                                                                                        |
+| Catalog                   | 30 requests/user/route/60s; product comparison 5; map capacity 4096.                                                                                           |
+| Shopping chat             | 5 requests/user/60s; map capacity 2048.                                                                                                                        |
+| Analytics AI query        | 5 requests/user/60s; process map capacity 2048.                                                                                                                |
+
+Limits are not distributed and reset on process restart. The admin contract defines additional buckets rather than assuming `isFinancialMutation` covers admin URLs. Shared storage is a later scaling requirement.
+
+## Phase dependencies and exit review
+
+| Missing capability                            | Explicit implementation dependency                                                                                                                                          |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Admin identity, singleton, idle/fresh auth    | Phase 1: AdminRole, AdminPrincipal, AdminSessionSecurity and secure bootstrap; see contract fields/constraints.                                                             |
+| Privileged actor/history                      | Phase 2: AdminAuditEvent, action/result schemas, immutability trigger, transactional/outcome correlation.                                                                   |
+| Cross-owner lists                             | Phase 4: explicit admin read repositories and DTO schemas; do not weaken customer repositories.                                                                             |
+| Account disabled status, internal notes       | Phase 5: User access fields and AdminNote; enforce disabled status in authentication and business/agent execution, not just UI.                                             |
+| Admin mandate pause/revoke                    | Phase 5 policy decision; service/repository mapping is known, operational permission remains deliberately gated.                                                            |
+| Recovery and optional admin refund initiation | Phase 6: adapters and durable action correlation/idempotency with Phase 2 audit; initiation requires operational need decision.                                             |
+| Platform controls                             | Phase 7: typed/versioned PlatformSetting and server execution enforcement; no current settings table/global admin switch.                                                   |
+| Worker liveness                               | Phase 8: WorkerHeartbeat with worker/run ID, started/completed/heartbeat times and safe result.                                                                             |
+| Agent requests, latency, tool errors, drafts  | Phase 8: AgentRunMetric plus safe tool outcome records (run/user/model/timestamps/duration/outcome/error/proposal/refund linkage); no prompt or chain-of-thought retention. |
+| Rejected/duplicate webhook delivery metrics   | Phase 8 delivery counters/telemetry, since the inbox cannot reconstruct them.                                                                                               |
+| Analytics/reporting and exports               | Phase 4: justified bounded safe exports. Phases 9/10: extended aggregates and measured query/index work; no unbounded browser datasets.                                     |
+
+All proposed surfaces now map either to existing records/states or an identified later addition. Unavailable metrics are null with a reason, not zero. Admin-to-API design is fixed in the contract; existing services and Phase 1 migrations are identified. MVP hosting and sustained/live partial-refund qualification remain separate as recorded in PROGRESS.md; Phase 0 does not certify them.
+
+## Verification evidence
+
+- Source inspection: complete root implementation plan, admin plan, repository guidance, current ledger/review, product/design/foundation, schema/migrations, all public repository methods and relevant auth/BFF/business/recovery source.
+- **69 unit tests passed**: API app/environment/rate-limits/raw-webhook parser, web BFF/server-session and shared state/money/mandate suites. These test the existing consumption boundaries, not future admin routes.
+- **54 isolated PostgreSQL integration tests passed** across auth, mandate, proposal, payment, refund, verified webhook and recovery suites. Financial providers are mocked; no live PayPal operation or production account lookup occurred.
+- Windows `pnpm exec vitest` could not find its executable shim; tests were successfully invoked with `node node_modules/vitest/vitest.mjs` (API tests from `apps/api` using the relative path and its integration config). Dependencies/configuration were not changed to work around the shim.
+- Affected documentation formatting, source-link/checklist consistency and `git diff --check` passed. The broader repository formatting check reported **281 existing files** outside these maintained documents; those unrelated files were not reformatted. No frontend/source/schema changes, build or UI acceptance claim is part of this phase.
