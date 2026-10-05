@@ -17,12 +17,16 @@ test("admin imports safe server URLs without provider, auth, bootstrap or databa
   const f = fixture(t);
   f.root(
     ".env",
-    "API_URL=http://localhost:4000\nADMIN_ORIGIN=http://localhost:3001\nAUTH_SECRET=private\nDATABASE_URL=private\nPAYPAL_CLIENT_SECRET=private\nMANDATEPAY_ADMIN_USER_ID=private",
+    "API_URL=http://localhost:4000\nADMIN_ORIGIN=http://localhost:3001\nADMIN_ENVIRONMENT=staging\nADMIN_UI_FIXTURES=1\nAUTH_SECRET=private\nDATABASE_URL=private\nPAYPAL_CLIENT_SECRET=private\nMANDATEPAY_ADMIN_USER_ID=private",
   );
   const result = readWorkspaceEnvironment({ ...f, keys: ADMIN_ENV_KEYS });
   assert.deepEqual(
     { ...result },
-    { API_URL: "http://localhost:4000", ADMIN_ORIGIN: "http://localhost:3001" },
+    {
+      API_URL: "http://localhost:4000",
+      ADMIN_ORIGIN: "http://localhost:3001",
+      ADMIN_ENVIRONMENT: "staging",
+    },
   );
 });
 

@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation";
 import { getAdminSession } from "@/lib/server-session";
 import { AuthSurface } from "@/components/auth-surface";
+import { AdminShell } from "@/components/admin/admin-shell";
+import { adminEnvironment } from "@/lib/environment";
 export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const result = await getAdminSession();
   if (result.status === "expired") redirect("/login?state=expired");
   if (result.status === "denied") redirect("/access-denied");
-  if (result.status === "unavailable")
+  if (result.status !== "authenticated")
     return (
       <AuthSurface
         title="Administration unavailable"
@@ -21,5 +23,12 @@ export default async function ProtectedLayout({ children }: { children: React.Re
         </form>
       </AuthSurface>
     );
-  return children;
+  return (
+    <AdminShell
+      admin={result.admin}
+      environment={adminEnvironment(process.env.ADMIN_ENVIRONMENT, process.env.ADMIN_ORIGIN)}
+    >
+      {children}
+    </AdminShell>
+  );
 }

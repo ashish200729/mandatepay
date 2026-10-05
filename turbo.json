@@ -11,14 +11,21 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "env": ["DATABASE_URL", "API_URL", "APP_URL", "ADMIN_ORIGIN", "NODE_ENV"],
+      "env": [
+        "DATABASE_URL",
+        "API_URL",
+        "APP_URL",
+        "ADMIN_ORIGIN",
+        "ADMIN_ENVIRONMENT",
+        "NODE_ENV"
+      ],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "lint": { "dependsOn": ["^lint"] },
     "typecheck": {
       "dependsOn": ["^build", "^typecheck"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "env": ["API_URL", "APP_URL", "ADMIN_ORIGIN", "NODE_ENV"]
+      "env": ["API_URL", "APP_URL", "ADMIN_ORIGIN", "ADMIN_ENVIRONMENT", "NODE_ENV"]
     },
     "test": {
       "dependsOn": ["^build"],
@@ -36,6 +43,7 @@
         "NODE_ENV",
         "WEB_ORIGIN",
         "ADMIN_ORIGIN",
+        "ADMIN_ENVIRONMENT",
         "DATABASE_URL",
         "AUTH_SECRET",
         "AUTH_REQUIRE_EMAIL_VERIFICATION",

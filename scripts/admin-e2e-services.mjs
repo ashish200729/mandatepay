@@ -110,6 +110,21 @@ try {
   }
   principal = (await new AdminRepository(database).bootstrap(userIds[0])).principal;
   app.get("/__admin_fixture", async () => fixture);
+  let fixtureSessionSequence = 1;
+  app.post("/__admin_fixture/session", async (_request, reply) => {
+    // Authenticate the synthetic account through the real guard on an isolated
+    // fixture IP, without weakening production rate limits for browser tests.
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/admin/session",
+      remoteAddress: `10.43.0.${fixtureSessionSequence++}`,
+      headers: { origin: adminOrigin, "content-type": "application/json" },
+      payload: JSON.stringify({ email: fixture.adminEmail, password: fixture.password }),
+    });
+    if (response.statusCode !== 200) return reply.status(503).send({ ok: false });
+    reply.header("set-cookie", response.headers["set-cookie"]);
+    return { ok: true };
+  });
   app.post("/__admin_fixture/cleanup", async () => {
     await cleanup();
     stopping = true;
@@ -141,7 +156,12 @@ try {
     ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3121"],
     {
       cwd: fileURLToPath(new URL("../apps/admin/", import.meta.url)),
-      env: { ...process.env, NODE_ENV: "production" },
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        ADMIN_ENVIRONMENT: "test",
+        ADMIN_UI_FIXTURES: "1",
+      },
       stdio: "inherit",
       windowsHide: true,
     },

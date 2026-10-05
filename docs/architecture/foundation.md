@@ -3,6 +3,7 @@
 ## Implemented now
 
 - `apps/web`: approved landing, auth, mandate lifecycle, discovery/comparison, approvals, Sandbox checkout/order/refund UI, audit timeline and AG Grid Community analytics. Same-origin BFF forwards only allowed routes and cookies to the configured API.
+- `apps/admin`: singleton-authorized session/BFF, immutable audit reads and responsive shared admin shell/components. Operational pages/actions remain later-phase work. See [the UI contract](./admin-ui.md) and [Phase 3 evidence](../implementation/ADMIN_PHASE_3.md). The display-only `ADMIN_ENVIRONMENT` label is safely imported by root configuration; the loopback-test-only fixture flag is excluded.
 - `apps/api`: Fastify, Better Auth sessions, owned domain/payment/refund/audit/analytics routes, limited shopping-agent tools, scoped raw webhook verification, rate limits and graceful shutdown.
 - `packages/shared`: strict schemas, supported USD currency, branded safe integer minor units and checked arithmetic.
 - `packages/agent`: configurable OpenAI-compatible client, independently validated mandate parsing and redacted provider errors; no financial tool access.

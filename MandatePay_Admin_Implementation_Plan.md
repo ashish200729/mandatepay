@@ -1528,38 +1528,40 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 **Depends on:** Phase 1. Can run in parallel with late Phase 2 work.
 
+**Completed:** 2026-10-06. See [implementation and verification evidence](docs/implementation/ADMIN_PHASE_3.md) and [shared component contracts](docs/architecture/admin-ui.md). Operational destinations remain disabled until their later phases; fixture records/actions are restricted to the isolated loopback test host.
+
 ### TODO
 
-- [ ] **P3-01** Configure `apps/admin` workspace scripts.
-- [ ] **P3-02** Reuse `@mandatepay/ui` primitives.
-- [ ] **P3-03** Create admin theme tokens.
-- [ ] **P3-04** Build `AdminShell`.
-- [ ] **P3-05** Build responsive sidebar.
-- [ ] **P3-06** Build top bar with environment badge.
-- [ ] **P3-07** Build breadcrumbs.
-- [ ] **P3-08** Build reusable page header.
-- [ ] **P3-09** Build metric cards.
-- [ ] **P3-10** Build status badges.
-- [ ] **P3-11** Build server-driven table component.
-- [ ] **P3-12** Build search/filter/date controls.
-- [ ] **P3-13** Build pagination.
-- [ ] **P3-14** Build loading skeletons.
-- [ ] **P3-15** Build empty/error/retry states.
-- [ ] **P3-16** Build confirmation dialogs.
-- [ ] **P3-17** Build reason dialog.
-- [ ] **P3-18** Build high-risk typed-confirmation dialog.
-- [ ] **P3-19** Build reauthentication dialog.
-- [ ] **P3-20** Build audit/event timeline.
-- [ ] **P3-21** Add toast/notification system.
-- [ ] **P3-22** Make filters URL-synchronized.
-- [ ] **P3-23** Validate keyboard navigation and accessibility.
-- [ ] **P3-24** Validate tablet/mobile behavior.
+- [x] **P3-01** Configure `apps/admin` workspace scripts.
+- [x] **P3-02** Reuse `@mandatepay/ui` primitives.
+- [x] **P3-03** Create admin theme tokens.
+- [x] **P3-04** Build `AdminShell`.
+- [x] **P3-05** Build responsive sidebar.
+- [x] **P3-06** Build top bar with environment badge.
+- [x] **P3-07** Build breadcrumbs.
+- [x] **P3-08** Build reusable page header.
+- [x] **P3-09** Build metric cards.
+- [x] **P3-10** Build status badges.
+- [x] **P3-11** Build server-driven table component.
+- [x] **P3-12** Build search/filter/date controls.
+- [x] **P3-13** Build pagination.
+- [x] **P3-14** Build loading skeletons.
+- [x] **P3-15** Build empty/error/retry states.
+- [x] **P3-16** Build confirmation dialogs.
+- [x] **P3-17** Build reason dialog.
+- [x] **P3-18** Build high-risk typed-confirmation dialog.
+- [x] **P3-19** Build reauthentication dialog.
+- [x] **P3-20** Build audit/event timeline.
+- [x] **P3-21** Add toast/notification system.
+- [x] **P3-22** Make filters URL-synchronized.
+- [x] **P3-23** Validate keyboard navigation and accessibility.
+- [x] **P3-24** Validate tablet/mobile behavior.
 
 ### Exit criteria
 
-- [ ] All future modules can use shared admin components.
-- [ ] Sensitive actions have standard UX.
-- [ ] No page needs to invent a separate table/filter/dialog pattern.
+- [x] All future modules can use shared admin components.
+- [x] Sensitive actions have standard UX.
+- [x] No page needs to invent a separate table/filter/dialog pattern.
 
 **Feeds into:** Phases 4–9.
 

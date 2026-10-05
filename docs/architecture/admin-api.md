@@ -1,6 +1,6 @@
 # Admin endpoint and data contract
 
-Fixed by Admin Phase 0 on 2026-10-05. **Phase 1 identity/session and Phase 2 audit models/endpoints are implemented and locally verified; Phase 3–10 operational UI/endpoints remain design contracts.** Read [the Phase 0 inventory](../implementation/ADMIN_PHASE_0.md), [Phase 1 evidence/setup](../implementation/ADMIN_PHASE_1.md) and [Phase 2 audit evidence/integration rules](../implementation/ADMIN_PHASE_2.md). This contract specializes the illustrative routes/types in [the admin plan](../../MandatePay_Admin_Implementation_Plan.md); implement phase gates before enabling capabilities.
+Fixed by Admin Phase 0 on 2026-10-05. **Phase 1 identity/session, Phase 2 audit models/endpoints and Phase 3 shared UI are implemented and locally verified; Phase 4–10 operational modules/endpoints remain design contracts.** Read [the Phase 0 inventory](../implementation/ADMIN_PHASE_0.md), [Phase 1 evidence/setup](../implementation/ADMIN_PHASE_1.md), [Phase 2 audit evidence/integration rules](../implementation/ADMIN_PHASE_2.md) and [Phase 3 component contract](./admin-ui.md). Phase 3 adds the shell and reusable UX, with no new operational endpoint. This contract specializes the illustrative routes/types in [the admin plan](../../MandatePay_Admin_Implementation_Plan.md); implement phase gates before enabling capabilities.
 
 ## Authentication topology and Phase 1 schema
 

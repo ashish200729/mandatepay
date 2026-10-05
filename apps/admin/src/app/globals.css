@@ -2,6 +2,29 @@
 @import "@mandatepay/ui/styles/globals.css";
 @source "../../../../packages/ui/src";
 
+@theme inline {
+  --color-admin-sidebar: var(--secondary);
+  --color-admin-active: var(--sand);
+  --color-admin-success: var(--admin-success);
+  --color-admin-success-foreground: var(--admin-success-foreground);
+  --color-admin-warning: var(--admin-warning);
+  --color-admin-warning-foreground: var(--admin-warning-foreground);
+  --color-admin-danger: var(--admin-danger);
+  --color-admin-danger-foreground: var(--admin-danger-foreground);
+  --color-admin-info: var(--admin-info);
+  --color-admin-info-foreground: var(--admin-info-foreground);
+}
+:root {
+  --admin-success: #eaf2e8;
+  --admin-success-foreground: #27583c;
+  --admin-warning: #fbefcf;
+  --admin-warning-foreground: #745019;
+  --admin-danger: #fce9e6;
+  --admin-danger-foreground: #8b3029;
+  --admin-info: #e9f1f5;
+  --admin-info-foreground: #31596c;
+}
+
 @layer base {
   * {
     @apply border-border;

@@ -57,6 +57,10 @@ Every data surface needs an explicit state. Loading uses calm skeleton blocks an
 
 The mobile menu button exposes `aria-expanded` and `aria-controls`. When opened, focus moves to the active navigation link or first link; Escape closes the menu and restores focus to the trigger. Clicking the scrim or a navigation link closes the menu. Keep the skip-to-content link, visible focus rings, 44px touch targets, and reduced-motion behavior intact. No dashboard-specific raster assets were added.
 
+## Admin workspace
+
+The admin shell retains the warm ivory/sand palette, Hedvig page headings and Satoshi controls/data. It uses a 232px independently scrollable desktop sidebar, sticky utility bar with an explicit environment label, and a focus-trapped tablet/mobile drawer. Current session navigation is enabled; later modules show Soon until implemented. Shared collection tables become complete cards below the large breakpoint, preserving every field and exact detail link. Status tokens add restrained accessible success/warning/danger/info surfaces with text labels. Missing metrics display an em dash with an explanation. Shared dialogs show concrete targets, required reasons and fresh typed final review for sensitive actions. See [the admin UI contract](docs/architecture/admin-ui.md).
+
 ## Workspace task flows
 
 Chat occupies the available viewport beneath the utility bar. Keep its conversation independently scrollable and its composer visible. The mandate selector gets a full row on phones; budget facts follow it. Follow the latest reply across resizing when the reader is already at the end, and offer a jump action while reading history. Show the actual answer immediately with readable paragraphs, lists, emphasis and tables. Keep server steps in an optional disclosure. Discovery replies use server-owned catalog and mandate facts; proposal cards carry the recorded policy result and the exact next action. AI explanations remain explanatory and cannot replace recorded policy or payment facts.
