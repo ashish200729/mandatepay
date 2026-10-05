@@ -9,7 +9,7 @@ import { AuthClientError, sendVerificationEmail, signIn, signUp } from "@/lib/au
 import { getAuthLink, getSafeReturnTo } from "@/lib/auth/return-to";
 
 const inputClassName =
-  "h-12 w-full rounded-xl border border-border bg-background px-4 text-sm text-foreground outline-hidden transition-[border-color,box-shadow] placeholder:text-muted-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none";
+  "h-11 w-full rounded-xl border border-border/80 bg-background px-3.5 text-sm text-foreground outline-hidden transition-[border-color,box-shadow] placeholder:text-muted-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none";
 
 export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; returnTo: string }) {
   const [pending, setPending] = useState(false);
@@ -76,26 +76,26 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
 
   if (verificationEmail) {
     return (
-      <div className="space-y-5">
+      <div className="space-y-4">
         <p
           role="status"
-          className="rounded-xl border border-border bg-secondary/50 px-4 py-4 text-sm leading-relaxed"
+          className="rounded-xl border border-border bg-secondary/50 px-4 py-3.5 text-xs leading-relaxed sm:text-sm"
         >
           Check your email at <strong>{verificationEmail}</strong> for a verification link, then
           sign in. If you already have an account, you can sign in or reset your password.
         </p>
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-xs text-destructive sm:text-sm">
             {error}
           </p>
         ) : null}
         {resent ? (
-          <p role="status" className="text-sm text-muted-foreground">
+          <p role="status" className="text-xs text-muted-foreground sm:text-sm">
             If your account needs verification, a new link is on its way.
           </p>
         ) : null}
         <Button
-          className="w-full rounded-xl"
+          className="h-11 w-full rounded-xl"
           disabled={pending || resent}
           onClick={async () => {
             setPending(true);
@@ -114,13 +114,13 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
         </Button>
         <Link
           href={getAuthLink("/signin", safeReturnTo)}
-          className="block text-center text-sm underline underline-offset-4"
+          className="block text-center text-xs underline underline-offset-4 sm:text-sm"
         >
           Back to sign in
         </Link>
         <Link
           href="/forgot-password"
-          className="block text-center text-sm text-muted-foreground underline underline-offset-4"
+          className="block text-center text-xs text-muted-foreground underline underline-offset-4"
         >
           Reset your password
         </Link>
@@ -129,21 +129,21 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
   }
 
   return (
-    <form className="space-y-5" onSubmit={handleSubmit} noValidate={false}>
+    <form className="space-y-3.5" onSubmit={handleSubmit} noValidate={false}>
       {error ? (
         <div
           role="alert"
-          className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm leading-relaxed text-foreground"
+          className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-2.5 text-xs leading-relaxed text-foreground sm:text-sm"
         >
           {error}
         </div>
       ) : null}
 
       {isSignUp ? (
-        <label className="block text-sm font-medium">
+        <label className="block text-xs font-medium text-foreground">
           Name
           <input
-            className={`${inputClassName} mt-2`}
+            className={`${inputClassName} mt-1.5`}
             name="name"
             type="text"
             autoComplete="name"
@@ -155,10 +155,10 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
         </label>
       ) : null}
 
-      <label className="block text-sm font-medium">
+      <label className="block text-xs font-medium text-foreground">
         Email
         <input
-          className={`${inputClassName} mt-2`}
+          className={`${inputClassName} mt-1.5`}
           name="email"
           type="email"
           autoComplete="email"
@@ -168,36 +168,38 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
         />
       </label>
 
-      <label className="block text-sm font-medium">
-        Password
-        <input
-          className={`${inputClassName} mt-2`}
-          name="password"
-          type="password"
-          autoComplete={isSignUp ? "new-password" : "current-password"}
-          placeholder="At least 8 characters"
-          minLength={8}
-          maxLength={128}
-          required
-          disabled={pending}
-        />
-      </label>
-
-      {!isSignUp ? (
-        <Link
-          href="/forgot-password"
-          className="block text-right text-sm text-muted-foreground underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-        >
-          Forgot password?
-        </Link>
-      ) : null}
+      <div>
+        <label className="block text-xs font-medium text-foreground">
+          Password
+          <input
+            className={`${inputClassName} mt-1.5`}
+            name="password"
+            type="password"
+            autoComplete={isSignUp ? "new-password" : "current-password"}
+            placeholder="At least 8 characters"
+            minLength={8}
+            maxLength={128}
+            required
+            disabled={pending}
+          />
+        </label>
+        {!isSignUp ? (
+          <div className="mt-1.5 text-right">
+            <Link
+              href="/forgot-password"
+              className="text-xs text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+            >
+              Forgot password?
+            </Link>
+          </div>
+        ) : null}
+      </div>
 
       <Button
         type="submit"
         disabled={pending}
         aria-busy={pending}
-        size="lg"
-        className="w-full rounded-xl"
+        className="h-11 w-full rounded-xl text-sm font-medium tracking-tight"
       >
         {pending ? <LoaderCircle className="animate-spin" size={16} aria-hidden="true" /> : null}
         {pending
@@ -207,10 +209,10 @@ export function AuthForm({ mode, returnTo }: { mode: "sign-in" | "sign-up"; retu
           : isSignUp
             ? "Create account"
             : "Sign in"}
-        {!pending ? <ArrowRight size={16} aria-hidden="true" /> : null}
+        {!pending ? <ArrowRight size={15} aria-hidden="true" /> : null}
       </Button>
 
-      <p className="text-center text-sm text-muted-foreground">
+      <p className="pt-1 text-center text-xs text-muted-foreground">
         {isSignUp ? "Already have an account?" : "New to MandatePay?"}{" "}
         <Link
           href={getAuthLink(alternatePath, safeReturnTo)}

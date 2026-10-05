@@ -15,7 +15,8 @@ test.describe("anonymous landing page", () => {
     await expect(
       page.getByRole("main").getByRole("link", { name: "Explore MandatePay" }),
     ).toBeVisible();
-    await expect(page.locator('img[src*="mandatepay-meadow"]')).toHaveCount(2);
+    await expect(page.locator('main img[src*="mandatepay-meadow"]')).toBeVisible();
+    await expect(page.locator('footer img[src*="mandatepay-footer"]')).toBeVisible();
 
     const footer = page.locator("footer");
     await expect(footer).toBeVisible();

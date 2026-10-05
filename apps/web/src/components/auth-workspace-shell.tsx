@@ -41,7 +41,7 @@ function isActivePath(pathname: string, href: string) {
 
 function Navigation({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
-    <nav aria-label="Workspace navigation" className="space-y-1.5">
+    <nav aria-label="Workspace navigation" className="space-y-1">
       {navigation.map(({ href, label, icon: Icon }) => {
         const active = isActivePath(pathname, href);
 
@@ -51,15 +51,14 @@ function Navigation({ pathname, onNavigate }: { pathname: string; onNavigate?: (
             href={href}
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
-            className={`group flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm transition-[background-color,color] motion-reduce:transition-none ${
+            className={`group flex h-10 items-center gap-3 rounded-xl px-3 text-sm transition-[background-color,color] motion-reduce:transition-none ${
               active
                 ? "bg-sand font-medium text-foreground"
                 : "text-muted-foreground hover:bg-card hover:text-foreground"
             }`}
           >
             <Icon size={17} strokeWidth={active ? 2 : 1.7} aria-hidden="true" />
-            <span className="flex-1">{label}</span>
-            {active ? <ChevronRight size={15} aria-hidden="true" /> : null}
+            <span className="flex-1 tracking-tight">{label}</span>
           </Link>
         );
       })}
@@ -89,21 +88,21 @@ function AccountBlock({ principal }: { principal: WorkspacePrincipal }) {
   }
 
   return (
-    <div className="border-t border-border pt-5">
+    <div className="border-t border-border pt-4">
       {error ? (
         <p role="alert" className="mb-3 text-xs leading-relaxed text-foreground">
           {error}
         </p>
       ) : null}
-      <div className="flex items-center gap-3 px-1 py-2">
+      <div className="flex items-center gap-3 px-1 py-1.5">
         <span
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sand text-sm font-medium"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sand text-sm font-medium text-foreground"
           aria-hidden="true"
         >
           {initials}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{principal.name}</p>
+          <p className="truncate text-sm font-medium text-foreground">{principal.name}</p>
           <p className="truncate text-xs text-muted-foreground">{principal.email}</p>
         </div>
         <button
@@ -111,17 +110,19 @@ function AccountBlock({ principal }: { principal: WorkspacePrincipal }) {
           onClick={handleSignOut}
           disabled={pending}
           aria-label="Sign out"
-          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
         >
-          <LogOut size={16} aria-hidden="true" />
+          <LogOut size={15} aria-hidden="true" />
         </button>
       </div>
-      <p className="mt-3 flex items-center gap-2 px-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="mt-2.5 flex items-center gap-2 px-1 text-[11px] leading-relaxed text-muted-foreground">
         <span
           className={`size-1.5 rounded-full ${principal.autonomousPurchasingEnabled ? "bg-foreground" : "bg-muted-foreground/50"}`}
           aria-hidden="true"
         />
-        Autonomous purchasing {principal.autonomousPurchasingEnabled ? "enabled" : "off"}
+        <span>
+          Autonomous purchasing {principal.autonomousPurchasingEnabled ? "enabled" : "off"}
+        </span>
       </p>
     </div>
   );
@@ -174,9 +175,9 @@ export function AuthWorkspaceShell({
         Skip to content
       </a>
       <div className="mx-auto flex min-h-screen max-w-[1680px]">
-        <aside className="sticky top-0 hidden h-dvh w-[232px] shrink-0 flex-col overflow-y-auto border-r border-border bg-secondary/60 px-4 py-7 lg:flex">
+        <aside className="sticky top-0 hidden h-dvh w-[256px] shrink-0 flex-col overflow-y-auto border-r border-border bg-secondary/60 px-4 pb-6 pt-7 lg:flex">
           <Brand className="px-2" />
-          <div className="mt-10 flex-1">
+          <div className="mt-8 flex-1">
             <Navigation pathname={pathname} />
           </div>
           <AccountBlock principal={principal} />

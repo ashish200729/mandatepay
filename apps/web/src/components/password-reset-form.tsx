@@ -7,7 +7,7 @@ import { Button } from "@mandatepay/ui/components/button";
 import { AuthClientError, requestPasswordReset, resetPassword } from "@/lib/auth/client";
 
 const inputClassName =
-  "mt-2 h-12 w-full rounded-xl border border-border bg-background px-4 text-sm text-foreground outline-hidden placeholder:text-muted-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60";
+  "mt-1.5 h-11 w-full rounded-xl border border-border/80 bg-background px-3.5 text-sm text-foreground outline-hidden transition-[border-color,box-shadow] placeholder:text-muted-foreground focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60";
 
 export function PasswordResetForm({
   mode,
@@ -59,16 +59,19 @@ export function PasswordResetForm({
 
   if (complete)
     return (
-      <div className="space-y-5">
+      <div className="space-y-4">
         <p
           role="status"
-          className="rounded-xl border border-border bg-secondary/50 px-4 py-4 text-sm leading-relaxed"
+          className="rounded-xl border border-border bg-secondary/50 px-4 py-3.5 text-xs leading-relaxed sm:text-sm"
         >
           {isReset
             ? "Your password has been updated and existing sessions have been signed out. Sign in with your new password."
             : "If an account uses that email, you’ll receive a password reset link. Check your inbox and spam folder."}
         </p>
-        <Link href="/signin" className="block text-center text-sm underline underline-offset-4">
+        <Link
+          href="/signin"
+          className="block text-center text-xs underline underline-offset-4 sm:text-sm"
+        >
           Back to sign in
         </Link>
       </div>
@@ -76,16 +79,16 @@ export function PasswordResetForm({
 
   if (isReset && (!token || invalidToken))
     return (
-      <div className="space-y-5">
+      <div className="space-y-4">
         <p
           role="alert"
-          className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm leading-relaxed"
+          className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-2.5 text-xs leading-relaxed text-foreground sm:text-sm"
         >
           This reset link is invalid or has expired. Request a new link to continue.
         </p>
         <Link
           href="/forgot-password"
-          className="block text-center text-sm underline underline-offset-4"
+          className="block text-center text-xs underline underline-offset-4 sm:text-sm"
         >
           Request a new reset link
         </Link>
@@ -93,18 +96,18 @@ export function PasswordResetForm({
     );
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form onSubmit={handleSubmit} className="space-y-3.5">
       {error ? (
         <p
           role="alert"
-          className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-3 text-sm leading-relaxed"
+          className="rounded-xl border border-destructive/20 bg-destructive/8 px-4 py-2.5 text-xs leading-relaxed text-foreground sm:text-sm"
         >
           {error}
         </p>
       ) : null}
       {isReset ? (
         <>
-          <label className="block text-sm font-medium">
+          <label className="block text-xs font-medium text-foreground">
             New password
             <input
               className={inputClassName}
@@ -117,7 +120,7 @@ export function PasswordResetForm({
               disabled={pending}
             />
           </label>
-          <label className="block text-sm font-medium">
+          <label className="block text-xs font-medium text-foreground">
             Confirm password
             <input
               className={inputClassName}
@@ -132,7 +135,7 @@ export function PasswordResetForm({
           </label>
         </>
       ) : (
-        <label className="block text-sm font-medium">
+        <label className="block text-xs font-medium text-foreground">
           Email
           <input
             className={inputClassName}
@@ -147,8 +150,7 @@ export function PasswordResetForm({
       )}
       <Button
         type="submit"
-        size="lg"
-        className="w-full rounded-xl"
+        className="h-11 w-full rounded-xl text-sm font-medium tracking-tight"
         disabled={pending}
         aria-busy={pending}
       >
@@ -157,7 +159,7 @@ export function PasswordResetForm({
       </Button>
       <Link
         href="/signin"
-        className="block text-center text-sm text-muted-foreground underline underline-offset-4"
+        className="block text-center text-xs text-muted-foreground underline underline-offset-4"
       >
         Back to sign in
       </Link>
