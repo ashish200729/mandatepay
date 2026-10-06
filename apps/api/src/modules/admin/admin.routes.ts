@@ -12,6 +12,7 @@ import type { AuthRuntime } from "../../auth.js";
 import { originsFor, trustedOrigin } from "../../origins.js";
 import { createMutationRateLimiter } from "../../services/rate-limits.js";
 import { AdminAuthError, adminMe, requireSuperAdmin, type AdminIdentity } from "./admin.auth.js";
+import { registerAdminOperationRoutes } from "./admin.operations.js";
 
 const signInSchema = z
   .object({ email: z.email().max(320), password: z.string().min(1).max(128) })
@@ -26,11 +27,13 @@ export function registerAdminRoutes(
     appUrl: string;
     adminOrigin?: string;
     nodeEnv: "development" | "test" | "production";
+    discoveryMode?: string;
+    readMaximum?: number;
   },
 ) {
   const origins = originsFor(options.adminOrigin, options.nodeEnv);
   const authAttempts = createMutationRateLimiter({ maximum: 5 });
-  const reads = createMutationRateLimiter({ maximum: 120 });
+  const reads = createMutationRateLimiter({ maximum: options.readMaximum ?? 120 });
   const mutations = createMutationRateLimiter({ maximum: 20 });
   void app.register(
     async (scope) => {
@@ -111,6 +114,8 @@ export function registerAdminRoutes(
           );
           if (!rate.allowed) return rateLimited(reply, request, rate.retryAfter);
           identities.set(request, identity);
+          (request as FastifyRequest & { adminPrincipalId?: string }).adminPrincipalId =
+            identity.principalId;
         } catch (error) {
           return authError(reply, request, error);
         }
@@ -120,6 +125,14 @@ export function registerAdminRoutes(
         data: adminMe(identities.get(request)!),
         requestId: request.id,
       }));
+
+      registerAdminOperationRoutes(scope, {
+        getDatabase: () => options.runtime!.database,
+        getSecret: () => options.runtime!.auth.options.secret,
+        discoveryMode: options.discoveryMode,
+        sendError,
+        trace,
+      });
 
       scope.get("/audit", async (request, reply) => {
         const parsed = AdminAuditQuerySchema.safeParse(request.query);

@@ -6,6 +6,7 @@ export {
   AdminAuditQuerySchema,
   normalizeAdminAuditInput,
 } from "./admin-audit-repository.js";
+export { AdminOperationsRepository } from "./admin-operations-repository.js";
 export type {
   AppendAdminAuditEventInput,
   AdminAuditActor,

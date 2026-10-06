@@ -1,6 +1,6 @@
 {
   "extends": "@mandatepay/typescript-config/nextjs.json",
-  "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["./src/*"] } },
+  "compilerOptions": { "paths": { "@/*": ["./src/*"] } },
   "include": [
     "next-env.d.ts",
     "**/*.ts",

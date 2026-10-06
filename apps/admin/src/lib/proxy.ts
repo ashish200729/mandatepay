@@ -1,17 +1,10 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import { parseAdminMe } from "./session";
-import { AdminAuditQuerySchema, AdminTraceIdSchema } from "@mandatepay/shared";
-import { parseAdminAuditResponse } from "./audit";
+import { AdminTraceIdSchema, ADMIN_EXPORT_COLUMNS, parseAdminCsv } from "@mandatepay/shared";
+import { matchAdminProxy } from "./admin-routes";
 
-const METHODS: Record<string, readonly string[]> = {
-  session: ["POST"],
-  me: ["GET", "HEAD"],
-  reauth: ["POST"],
-  "sign-out": ["POST"],
-  audit: ["GET", "HEAD"],
-};
 const MAX_BODY = 4096;
+const MAX_CSV = 2_000_000;
 const MESSAGES: Record<string, string> = {
   ADMIN_UNAUTHORIZED: "Your admin session expired. Sign in again.",
   ADMIN_FORBIDDEN: "This account cannot access administration.",
@@ -20,7 +13,7 @@ const MESSAGES: Record<string, string> = {
   ADMIN_INVALID_REQUEST: "Check your request and try again.",
   ADMIN_RATE_LIMITED: "Too many requests. Try again shortly.",
   ADMIN_UNAVAILABLE: "Administration is temporarily unavailable. Try again shortly.",
-  ADMIN_TARGET_NOT_FOUND: "Audit event not found.",
+  ADMIN_TARGET_NOT_FOUND: "The requested record was not found.",
 };
 function failure(code: string, status: number, requestId?: string) {
   return NextResponse.json(
@@ -43,24 +36,17 @@ function withTrace(result: NextResponse, upstream: Response) {
 }
 
 export async function proxyAdmin(request: Request, params: { path?: string[] }) {
-  const audit = params.path?.[0] === "audit";
-  const detail = audit && params.path?.length === 2;
-  if (
-    !params.path ||
-    !Object.hasOwn(METHODS, params.path[0]!) ||
-    (detail ? !AdminTraceIdSchema.safeParse(params.path[1]).success : params.path.length !== 1)
-  )
-    return failure("ADMIN_INVALID_REQUEST", 404);
-  const pathname = params.path[0]!;
-  if (!METHODS[pathname]!.includes(request.method)) return failure("ADMIN_INVALID_REQUEST", 405);
+  const match = matchAdminProxy(params.path);
+  if (!match) return failure("ADMIN_INVALID_REQUEST", 404);
+  if (!match.methods.includes(request.method)) return failure("ADMIN_INVALID_REQUEST", 405);
   const incoming = new URL(request.url);
-  if (incoming.search && (!audit || detail)) return failure("ADMIN_INVALID_REQUEST", 400);
-  if (audit && !detail) {
+  if (incoming.search && !match.allowSearch) return failure("ADMIN_INVALID_REQUEST", 400);
+  if (match.allowSearch) {
     if (
       Array.from(incoming.searchParams.keys()).some(
         (key) => incoming.searchParams.getAll(key).length !== 1,
       ) ||
-      !AdminAuditQuerySchema.safeParse(Object.fromEntries(incoming.searchParams)).success
+      (match.query && !match.query.safeParse(Object.fromEntries(incoming.searchParams)).success)
     )
       return failure("ADMIN_INVALID_REQUEST", 400);
   }
@@ -78,8 +64,6 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         allowed.push(alias.origin);
       }
     }
-    // Next may reconstruct an internal HTTP URL behind a TLS proxy. The exact
-    // configured Origin remains authority; Host must identify that same origin.
     if (
       !origin ||
       !allowed.includes(origin) ||
@@ -89,7 +73,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
     if (request.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json")
       return failure("ADMIN_INVALID_REQUEST", 400);
   }
-  const headers = new Headers({ accept: "application/json" });
+  const headers = new Headers({ accept: match.kind === "csv" ? "text/csv" : "application/json" });
   const correlation = request.headers.get("x-correlation-id");
   if (correlation !== null && !AdminTraceIdSchema.safeParse(correlation).success)
     return failure("ADMIN_INVALID_REQUEST", 400);
@@ -123,7 +107,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
   try {
     const response = await fetch(
       new URL(
-        `/api/admin/${detail ? "audit/" + params.path![1] : pathname}${incoming.search}`,
+        `/api/admin/${match.upstreamPath}${incoming.search}`,
         process.env.API_URL ?? "http://127.0.0.1:4000",
       ),
       {
@@ -132,7 +116,10 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         body: body as BodyInit | undefined,
         cache: "no-store",
         redirect: "manual",
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]),
+        signal: AbortSignal.any([
+          request.signal,
+          AbortSignal.timeout(match.kind === "csv" ? 30_000 : 15_000),
+        ]),
       },
     );
     if (request.method === "HEAD") {
@@ -144,7 +131,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         response,
       );
     }
-    if (response.status === 204 && pathname === "sign-out") {
+    if (response.status === 204 && match.upstreamPath === "sign-out") {
       const result = new NextResponse(null, {
         status: 204,
         headers: { "cache-control": "private, no-store" },
@@ -153,11 +140,10 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         result.headers.append("set-cookie", cookie);
       return withTrace(result, response);
     }
-    const json = (await response.json().catch(() => null)) as {
-      error?: { code?: string; requestId?: string };
-      requestId?: string;
-    } | null;
     if (!response.ok) {
+      const json = (await response.json().catch(() => null)) as {
+        error?: { code?: string; requestId?: string };
+      } | null;
       const fallback: Record<number, string> = {
         400: "ADMIN_INVALID_REQUEST",
         401: "ADMIN_UNAUTHORIZED",
@@ -180,32 +166,42 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         result.headers.set("retry-after", retryAfter);
       return withTrace(result, response);
     }
-    const auditData = audit ? parseAdminAuditResponse(json, detail) : null;
-    if (audit) {
-      if (!auditData) return failure("ADMIN_UNAVAILABLE", 503);
-      const result = NextResponse.json(
-        {
-          ...auditData,
-          requestId: AdminTraceIdSchema.safeParse(json?.requestId).success
-            ? json!.requestId
-            : undefined,
+    if (match.kind === "csv") {
+      const text = await response.text();
+      if (
+        text.length > MAX_CSV ||
+        !match.csvResource ||
+        !parseAdminCsv(text, ADMIN_EXPORT_COLUMNS[match.csvResource])
+      )
+        return failure("ADMIN_UNAVAILABLE", 503);
+      const result = new NextResponse(text, {
+        headers: {
+          "cache-control": "private, no-store",
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="${match.csvResource}.csv"`,
         },
-        { headers: { "cache-control": "private, no-store" } },
-      );
+      });
+      for (const name of ["x-export-truncated", "x-export-row-count"] as const) {
+        const value = response.headers.get(name);
+        if (value) result.headers.set(name, value);
+      }
       return withTrace(result, response);
     }
-    const admin = parseAdminMe(json);
-    if (!admin) return failure("ADMIN_UNAVAILABLE", 503);
+    const json = (await response.json().catch(() => null)) as {
+      requestId?: string;
+    } | null;
+    const parsed = match.parseJson ? match.parseJson(json) : null;
+    if (!parsed || typeof parsed !== "object") return failure("ADMIN_UNAVAILABLE", 503);
     const result = NextResponse.json(
       {
-        data: admin,
+        ...parsed,
         requestId: AdminTraceIdSchema.safeParse(json?.requestId).success
           ? json?.requestId
           : undefined,
       },
       { headers: { "cache-control": "private, no-store" } },
     );
-    if (pathname === "session" || pathname === "reauth") {
+    if (match.upstreamPath === "session" || match.upstreamPath === "reauth") {
       for (const cookie of response.headers.getSetCookie())
         result.headers.append("set-cookie", cookie);
     }

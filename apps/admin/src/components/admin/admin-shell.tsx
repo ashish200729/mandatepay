@@ -18,23 +18,36 @@ import { StatusBadge } from "./status-badge";
 import { AdminToastProvider } from "./toasts";
 
 const groups = [
-  { label: "Workspace", items: [{ label: "Overview", href: null }] },
+  { label: "Workspace", items: [{ label: "Overview", href: "/" }] },
   {
     label: "Operations",
-    items: ["Users", "Mandates", "Proposals", "Approvals", "Orders", "Payments", "Refunds"].map(
-      (label) => ({ label, href: null }),
-    ),
+    items: [
+      { label: "Users", href: "/users" },
+      { label: "Mandates", href: "/mandates" },
+      { label: "Proposals", href: "/proposals" },
+      { label: "Approvals", href: "/approvals" },
+      { label: "Orders", href: "/orders" },
+      { label: "Payments", href: "/payments" },
+      { label: "Refunds", href: "/refunds" },
+    ],
   },
   {
     label: "Platform",
-    items: ["Agent Activity", "Webhooks", "Audit Logs", "System Health", "Configuration"].map(
-      (label) => ({ label, href: null }),
-    ),
+    items: [
+      { label: "Agent Activity", href: null },
+      { label: "Webhooks", href: "/webhooks" },
+      { label: "Audit Logs", href: "/audit" },
+      { label: "System Health", href: null },
+      { label: "Configuration", href: null },
+    ],
   },
-  { label: "Admin", items: [{ label: "My Session", href: "/" }] },
+  { label: "Admin", items: [{ label: "My Session", href: "/session" }] },
 ] as const;
 export function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  function current(href: string) {
+    return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+  }
   return (
     <nav aria-label="Administration" className="space-y-5 px-4 py-5">
       {groups.map((group) => (
@@ -49,8 +62,8 @@ export function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
                   <Link
                     href={item.href}
                     onClick={onNavigate}
-                    aria-current={pathname === item.href ? "page" : undefined}
-                    className={`flex min-h-11 items-center rounded-xl px-3 text-sm ${pathname === item.href ? "bg-admin-active font-medium" : "hover:bg-secondary"}`}
+                    aria-current={current(item.href) ? "page" : undefined}
+                    className={`flex min-h-11 items-center rounded-xl px-3 text-sm ${current(item.href) ? "bg-admin-active font-medium" : "hover:bg-secondary"}`}
                   >
                     {item.label}
                   </Link>

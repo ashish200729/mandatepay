@@ -33,8 +33,11 @@ describe("admin BFF security", () => {
   });
   it("denies arbitrary paths, methods, queries and untrusted/missing origin before upstream access", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch");
-    for (const path of [["auth", "sign-up"], [".."], ["payments"], ["session", "extra"]])
+    for (const path of [["auth", "sign-up"], [".."], ["session", "extra"]])
       expect((await proxyAdmin(request(), { path })).status).toBe(404);
+    expect(
+      (await proxyAdmin(request("payments", { method: "POST" }), { path: ["payments"] })).status,
+    ).toBe(405);
     expect(
       (await proxyAdmin(request("session", { method: "PATCH" }), { path: ["session"] })).status,
     ).toBe(405);
@@ -101,6 +104,7 @@ describe("admin BFF security", () => {
             ...identity,
             token: "private-token",
             user: { ...identity.user, password: "private-hash" },
+            capabilities: ["session:read", "payments:read", "exports:read"],
           },
         }),
         {
@@ -151,5 +155,32 @@ describe("admin BFF security", () => {
     expect((await proxyAdmin(request(), { path: ["session"] })).status).toBe(503);
     fetcher.mockRejectedValueOnce(new Error("private-secret"));
     expect((await proxyAdmin(request(), { path: ["session"] })).status).toBe(503);
+  });
+  it("allowlists operation reads and re-projects list DTOs without forwarding unknown fields", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [],
+          page: { limit: 50, nextCursor: null },
+          requestId: "11111111-1111-4111-8111-111111111111",
+          token: "private-token",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    const response = await proxyAdmin(
+      new Request("http://localhost:3001/api/admin/payments?limit=50"),
+      { path: ["payments"] },
+    );
+    expect(response.status).toBe(200);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(await response.text()).not.toContain("private-token");
+    expect(
+      (
+        await proxyAdmin(new Request("http://localhost:3001/api/admin/payments?token=private"), {
+          path: ["payments"],
+        })
+      ).status,
+    ).toBe(400);
   });
 });

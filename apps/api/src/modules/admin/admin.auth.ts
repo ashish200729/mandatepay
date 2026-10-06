@@ -130,6 +130,22 @@ export function adminMe(identity: AdminIdentity) {
         ),
       ).toISOString(),
     },
-    capabilities: ["session:read", "session:reauthenticate", "session:sign-out", "audit:read"],
+    capabilities: [
+      "session:read",
+      "session:reauthenticate",
+      "session:sign-out",
+      "audit:read",
+      "overview:read",
+      "users:read",
+      "mandates:read",
+      "proposals:read",
+      "approvals:read",
+      "orders:read",
+      "payments:read",
+      "refunds:read",
+      "webhooks:read",
+      "domain-audit:read",
+      "exports:read",
+    ],
   };
 }

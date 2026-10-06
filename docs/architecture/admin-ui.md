@@ -4,7 +4,7 @@ Admin Phase 3 supplies the protected shell and reusable components under `apps/a
 
 ## Shell and display
 
-The protected layout authorizes through the existing no-store session helper before rendering `AdminShell`. It provides `AdminSidebar`, `AdminTopbar`, a focusable main landmark and `AdminToastProvider`. Root layout retains the skip link. The desktop sidebar scrolls independently; tablet/mobile navigation is a modal drawer with its own scrolling region, focus trapping, Escape/scrim dismissal and focus restoration. Enable navigation items only when the corresponding phase implements a real route. Future destinations currently display **Soon** and cannot be activated.
+The protected layout authorizes through the existing no-store session helper before rendering `AdminShell`. It provides `AdminSidebar`, `AdminTopbar`, a focusable main landmark and `AdminToastProvider`. Root layout retains the skip link. The desktop sidebar scrolls independently; tablet/mobile navigation is a modal drawer with its own scrolling region, focus trapping, Escape/scrim dismissal and focus restoration. Enable navigation items only when the corresponding phase implements a real route. Phase 4 enables Overview, Users, Mandates, Proposals, Approvals, Orders, Payments, Refunds, Webhooks, Audit Logs and My Session. Remaining Phase 7–8 destinations currently display **Soon** and cannot be activated.
 
 Use `PageHeader` with `Breadcrumbs`, `MetricCard`, `StatusBadge`, `HealthIndicator`, `LoadingSkeleton`, `EmptyState` and `ErrorState`. Unavailable metric values must be `null`/`undefined`, with an explanation; they render an em dash and unavailable status rather than zero. Status always has readable text, not color alone. Error copy must be safe product text rather than raw exceptions/provider responses. Give `ErrorState` a real retry handler when recovery is available.
 
@@ -37,7 +37,7 @@ const navigation = useTableQuery(resourceSpec);
 />;
 ```
 
-This example is an integration pattern, not an enabled endpoint. Supply the actual API DTO, query specification, implemented detail route and safe retry handler in each later phase.
+This example is an integration pattern used by Phase 4 operations collections. Supply the actual API DTO, query specification, implemented detail route and safe retry handler in each resource.
 
 `FilterBar`, `SearchInput`, `DateRangeFilter` and `Pagination` share URL state. Applying filters/sort/page size resets the cursor; clear removes filters. Query validation rejects duplicate/unknown keys, invalid enums, oversized search/cursors, invalid dates and limits outside 1–100. Date controls show UTC calendar dates and convert inclusive Through to an exclusive next-midnight upper bound. Paired ranges are bounded to 366 days; applying unrelated controls preserves bookmarked timestamp precision when calendar dates are unchanged.
 

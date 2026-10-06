@@ -1,5 +1,11 @@
 # Phase progress and handoff
 
+## Admin Phase 4 complete — 2026-10-06
+
+Implemented read-only administration for the MVP operations chain without mutation routes. Overview metrics, list/detail queries, HMAC pagination, validated filters, safe CSV exports and BFF re-projection cover users, mandates, proposals, approvals, orders, payments, refunds, webhooks and audit. The admin UI renders overview plus collection/detail pages with bidirectional cross-links. All 32 tasks and four exits are checked; [ADMIN_PHASE_4.md](./ADMIN_PHASE_4.md) records evidence.
+
+Verification: **344 unit**, **13 environment/boundary**, **88 API integration** and **six admin browser tests** pass; affected lint/types, production admin build, source/bundle boundaries and formatting on changed files pass. Operation fixtures are synthetic; mutable financial rows are cleaned up while immutable history is left in place. No real administrator was provisioned. Phases 5–10 remain unchecked with no operational mutations enabled. No migration/dependency change, hosted deployment or new live-provider qualification is claimed; prior unrelated formatting/schema baseline remains untouched.
+
 ## Admin Phase 3 complete — 2026-10-06
 
 Implemented the responsive protected admin shell, shared warm theme/status tokens, deployment badge, breadcrumbs/headers/metrics, server-driven tables and complete mobile cards, URL-synchronized search/enum/UTC dates/cursor pagination, loading/empty/error/retry states, safe event/audit summary timelines and notifications. Standard confirmation/reason/typed/fresh-auth/final-review dialogs preserve submitted intent through retry/reopening and guard duplicate requests. The session page uses the shell and real password dialog. All 24 tasks and three exits are checked; [ADMIN_PHASE_3.md](./ADMIN_PHASE_3.md) records evidence and [admin-ui.md](../architecture/admin-ui.md) documents component integration for later modules.

@@ -5,6 +5,13 @@ import {
   AdminRepository,
   AdminAuditRepository,
   AdminActionRepository,
+  MandateRepository,
+  ProposalRepository,
+  MandateStatus,
+  MandateRuleType,
+  RuleOperator,
+  ProductCondition,
+  PolicyDecisionType,
 } from "@mandatepay/database";
 import { createAuthRuntime } from "./auth.js";
 import { createApp } from "./app.js";
@@ -125,13 +132,21 @@ describe("admin security with persisted Better Auth sessions", () => {
   });
   afterAll(async () => {
     await app?.close();
+    const owners = [adminId, normalId, unverifiedId].filter(Boolean);
     await database.adminActionRequest.deleteMany({
       where: { principalId: principalId || "missing" },
     });
     await database.adminPrincipal.deleteMany({ where: { userId: adminId || "missing" } });
-    await database.user.deleteMany({
-      where: { id: { in: [adminId, normalId, unverifiedId].filter(Boolean) } },
+    await database.refund.deleteMany({ where: { userId: { in: owners } } });
+    await database.webhookInbox.deleteMany({
+      where: { providerEventId: { startsWith: "admin-ops-" } },
     });
+    await database.payment.deleteMany({ where: { userId: { in: owners } } });
+    await database.approval.deleteMany({ where: { userId: { in: owners } } });
+    await database.spendReservation.deleteMany({
+      where: { mandate: { userId: { in: owners } } },
+    });
+    await database.session.deleteMany({ where: { userId: { in: owners } } });
     await database.$disconnect();
   });
 
@@ -657,6 +672,255 @@ describe("admin security with persisted Better Auth sessions", () => {
         spy.mockRestore();
       }
     }
+  });
+
+  it("exposes the read-only operations chain without provider payloads or sample records", async () => {
+    await database.user.update({ where: { id: normalId }, data: { name: "=SUM(1)" } });
+    const prompt = "secret-original-prompt-must-not-render";
+    const mandate = await new MandateRepository(database).create({
+      userId: normalId,
+      title: "Admin operations headphones",
+      originalPrompt: prompt,
+      status: MandateStatus.ACTIVE,
+      autoSpendLimit: 15_000n,
+      transactionLimit: 18_000n,
+      dailyLimit: 20_000n,
+      startsAt: new Date(Date.now() - 60_000),
+      expiresAt: new Date(Date.now() + 86_400_000),
+      rules: [
+        { ruleType: MandateRuleType.ALLOWED_BRAND, operator: RuleOperator.IN, value: ["Sony"] },
+      ],
+    });
+    const product = await database.productSnapshot.create({
+      data: {
+        source: "admin-ops-test",
+        externalId: `headphones-${randomUUID()}`,
+        title: "Operations headphones",
+        brand: "Sony",
+        category: "headphones",
+        condition: ProductCondition.NEW,
+        price: 10_000n,
+        currency: "USD",
+        merchant: "Test merchant",
+        metadata: { token: "never-store" },
+      },
+    });
+    const proposal = await new ProposalRepository(database).create({
+      userId: normalId,
+      mandateId: mandate.id,
+      mandateVersionId: mandate.activeVersionId ?? "",
+      productSnapshotId: product.id,
+      quantity: 1,
+      shipping: 0n,
+      tax: 0n,
+      idempotencyKey: `admin-ops-proposal-${randomUUID()}`,
+    });
+    await database.policyDecision.create({
+      data: {
+        proposalId: proposal.id,
+        mandateVersionId: mandate.activeVersionId ?? "",
+        decision: PolicyDecisionType.REQUIRE_APPROVAL,
+        reasonCodes: ["AUTO_SPEND_THRESHOLD_EXCEEDED"],
+        rulesSnapshot: {},
+        spendSnapshot: {},
+      },
+    });
+    const approval = await database.approval.create({
+      data: {
+        proposalId: proposal.id,
+        userId: normalId,
+        decision: "APPROVED",
+        proposalFingerprint: proposal.proposalFingerprint,
+        expiresAt: new Date(Date.now() + 86_400_000),
+        decidedAt: new Date(),
+      },
+    });
+    const paypalOrderId = `ORDER-ADMIN-OPS-${randomUUID()}`;
+    const paypalCaptureId = `CAPTURE-ADMIN-OPS-${randomUUID()}`;
+    const payment = await database.payment.create({
+      data: {
+        userId: normalId,
+        mandateId: mandate.id,
+        proposalId: proposal.id,
+        paypalOrderId,
+        paypalCaptureId,
+        amount: 10_000n,
+        currency: "USD",
+        status: "PARTIALLY_REFUNDED",
+        idempotencyKey: `admin-ops-payment-${randomUUID()}`,
+        capturedAt: new Date(),
+      },
+    });
+    await database.purchaseProposal.update({
+      where: { id: proposal.id },
+      data: { status: "COMPLETED" },
+    });
+    const refund = await database.refund.create({
+      data: {
+        paymentId: payment.id,
+        userId: normalId,
+        amount: 2_000n,
+        currency: "USD",
+        status: "COMPLETED",
+        paypalRefundId: `REFUND-ADMIN-OPS-${randomUUID()}`,
+        idempotencyKey: `admin-ops-refund-${randomUUID()}`,
+        settledAt: new Date(),
+        reason: "Partial customer return.",
+      },
+    });
+    const sampleProposal = await new ProposalRepository(database).create({
+      userId: normalId,
+      mandateId: mandate.id,
+      mandateVersionId: mandate.activeVersionId ?? "",
+      productSnapshotId: product.id,
+      quantity: 1,
+      shipping: 0n,
+      tax: 0n,
+      idempotencyKey: `admin-ops-sample-${randomUUID()}`,
+    });
+    await database.purchaseProposal.update({
+      where: { id: sampleProposal.id },
+      data: { isSample: true },
+    });
+    const samplePayment = await database.payment.create({
+      data: {
+        userId: normalId,
+        mandateId: mandate.id,
+        proposalId: sampleProposal.id,
+        paypalOrderId: `ORDER-SAMPLE-${randomUUID()}`,
+        amount: 10_000n,
+        currency: "USD",
+        status: "COMPLETED",
+        isSample: true,
+        idempotencyKey: `admin-ops-sample-payment-${randomUUID()}`,
+        capturedAt: new Date(),
+      },
+    });
+    const webhook = await database.webhookInbox.create({
+      data: {
+        provider: "paypal",
+        providerEventId: `admin-ops-${randomUUID()}`,
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+        signatureVerified: true,
+        payload: {
+          resource: {
+            id: paypalCaptureId,
+            supplementary_data: { related_ids: { order_id: paypalOrderId } },
+            secret: "webhook-secret-must-not-render",
+          },
+        },
+        status: "PROCESSED",
+        attempts: 1,
+        processedAt: new Date(),
+        lastError: null,
+      },
+    });
+    await database.auditEvent.create({
+      data: {
+        userId: normalId,
+        eventType: "PAYMENT_CAPTURED",
+        entityType: "PAYMENT",
+        entityId: payment.id,
+        payload: { amountMinor: 10000, token: "never-store" },
+      },
+    });
+
+    const get = (url: string) => app.inject({ method: "GET", url, headers: { cookie } });
+    const getOk = async (url: string) => {
+      const response = await get(url);
+      expect(response.statusCode, response.body).toBe(200);
+      return response;
+    };
+    expect((await get("/api/admin/not-a-resource")).statusCode).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/admin/payments",
+          headers: { origin, cookie, "content-type": "application/json" },
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect((await get("/api/admin/users?secret=private")).statusCode).toBe(400);
+    expect((await get("/api/admin/users?limit=101")).statusCode).toBe(400);
+
+    const overview = await getOk("/api/admin/overview");
+    expect(overview.json().data.metrics.totalUsers.availability).toBe("available");
+    expect(overview.json().data.metrics.agentRequests.availability).toBe("unavailable");
+    expect(overview.json().data.metrics.agentRequests.value).toBeNull();
+    expect(overview.body).not.toContain(prompt);
+
+    const users = await getOk(`/api/admin/users?q=${encodeURIComponent(normalEmail)}&limit=10`);
+    expect(users.json().data.some((row: { id: string }) => row.id === normalId)).toBe(true);
+    const user = await getOk(`/api/admin/users/${normalId}`);
+    expect(user.json().data.capturedGrossMinor).toBe(10000);
+    expect(user.body).not.toMatch(/password|"token"/u);
+
+    const mandateDetail = await getOk(`/api/admin/mandates/${mandate.id}`);
+    expect(mandateDetail.json().data.owner.id).toBe(normalId);
+    expect(mandateDetail.body).not.toContain(prompt);
+    expect(mandateDetail.body).not.toContain("originalPrompt");
+
+    const proposalDetail = await getOk(`/api/admin/proposals/${proposal.id}`);
+    expect(proposalDetail.json().data.mandateId).toBe(mandate.id);
+    expect(proposalDetail.json().data.latestDecision.decision).toBe("REQUIRE_APPROVAL");
+    expect(proposalDetail.json().data.approvalId).toBe(approval.id);
+    expect(proposalDetail.json().data.paymentId).toBe(payment.id);
+    const reservation = await getOk(`/api/admin/proposals/${proposal.id}/reservation`);
+    expect(reservation.json().data).toBeNull();
+
+    const samples = await getOk("/api/admin/proposals?limit=50");
+    expect(samples.json().data.some((row: { id: string }) => row.id === sampleProposal.id)).toBe(
+      false,
+    );
+    const withSamples = await getOk("/api/admin/proposals?includeSamples=true&limit=50");
+    expect(
+      withSamples.json().data.some((row: { id: string }) => row.id === sampleProposal.id),
+    ).toBe(true);
+
+    const approvalDetail = await getOk(`/api/admin/approvals/${approval.id}`);
+    expect(approvalDetail.json().data.proposalId).toBe(proposal.id);
+    const order = await getOk(`/api/admin/orders/${payment.id}`);
+    expect(order.json().data.paypalOrderId).toBe(paypalOrderId);
+    const paymentDetail = await getOk(`/api/admin/payments/${payment.id}`);
+    expect(paymentDetail.json().data.mandateId).toBe(mandate.id);
+    expect(paymentDetail.json().data.refundState).toBe("refunded");
+    expect((await get(`/api/admin/orders/${samplePayment.id}`)).statusCode).toBe(200);
+    const defaultPayments = await getOk(`/api/admin/payments?userId=${normalId}&limit=50`);
+    expect(
+      defaultPayments.json().data.some((row: { id: string }) => row.id === samplePayment.id),
+    ).toBe(false);
+    const refundDetail = await getOk(`/api/admin/refunds/${refund.id}`);
+    expect(refundDetail.json().data.paymentId).toBe(payment.id);
+    expect(refundDetail.json().data.kind).toBe("PARTIAL");
+
+    const webhookDetail = await getOk(`/api/admin/webhooks/${webhook.id}`);
+    expect(webhookDetail.json().data.paymentId).toBe(payment.id);
+    expect(webhookDetail.json().data.errorCode).toBeNull();
+    expect(webhookDetail.body).not.toContain("webhook-secret-must-not-render");
+    expect(webhookDetail.body).not.toMatch(/"payload"|"lastError"|password=/u);
+
+    const first = await getOk("/api/admin/users?limit=1");
+    expect(first.json().data).toHaveLength(1);
+    const cursor = first.json().page.nextCursor;
+    expect(typeof cursor).toBe("string");
+    const second = await getOk("/api/admin/users?limit=1&cursor=" + encodeURIComponent(cursor));
+    expect(second.json().data[0].id).not.toBe(first.json().data[0].id);
+
+    const csv = await get("/api/admin/users/export?q=" + encodeURIComponent(normalEmail));
+    expect(csv.statusCode).toBe(200);
+    expect(String(csv.headers["content-type"])).toContain("text/csv");
+    expect(csv.body).toContain("'=SUM(1)");
+    expect(csv.body).not.toContain(prompt);
+    const secondCsv = await get("/api/admin/mandates/export");
+    expect(secondCsv.statusCode).toBe(200);
+    const limited = await get("/api/admin/payments/export");
+    expect(limited.statusCode).toBe(429);
+
+    expect((await get(`/api/admin/users/${randomUUID()}`)).statusCode).toBe(404);
+    const captured = await getOk("/api/admin/overview");
+    expect(captured.json().data.metrics.capturedPayments.value).toBeGreaterThan(0);
   });
 
   it("enforces principal-scoped read limits and keeps sign-out available through a separate bucket", async () => {

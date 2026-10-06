@@ -27,17 +27,13 @@ if (
   !new URL(process.env.DATABASE_URL).pathname.endsWith("_test")
 )
   throw new Error("Admin browser tests require the isolated test database.");
-const { createPrismaClient, AdminRepository } =
+const { createPrismaClient, AdminRepository, MandateRepository, ProposalRepository } =
   await import("../packages/database/dist/src/index.js");
 const { createAuthRuntime } = await import("../apps/api/dist/auth.js");
 const { createApp } = await import("../apps/api/dist/app.js");
 const database = createPrismaClient(process.env.DATABASE_URL);
-if (await database.adminPrincipal.count()) {
-  await database.$disconnect();
-  throw new Error(
-    "Admin browser fixtures require no existing main principal in the test database.",
-  );
-}
+await database.adminActionRequest.deleteMany();
+await database.adminPrincipal.deleteMany();
 const runtime = createAuthRuntime({
   database,
   databaseUrl: process.env.DATABASE_URL,
@@ -49,6 +45,7 @@ const runtime = createAuthRuntime({
 });
 const app = await createApp({
   authRuntime: runtime,
+  testAdminReadMaximum: 500,
   config: {
     HOST: "127.0.0.1",
     PORT: 4121,
@@ -70,13 +67,34 @@ const fixture = {
   adminEmail: `admin-browser-${randomUUID()}@mandatepay.local`,
   normalEmail: `normal-browser-${randomUUID()}@mandatepay.local`,
   password: "browser-fixture-only-password123!",
+  originalPrompt: "secret-original-prompt-must-not-render",
+  webhookSecret: "webhook-secret-must-not-render",
+  ownerUserId: "",
+  mandateId: "",
+  proposalId: "",
+  approvalId: "",
+  paymentId: "",
+  refundId: "",
+  webhookId: "",
 };
 let principal;
 let next;
 let stopping = false;
 async function cleanup() {
+  await database.refund.deleteMany({ where: { userId: { in: userIds } } });
+  await database.webhookInbox.deleteMany({
+    where: { providerEventId: { startsWith: "admin-ops-browser-" } },
+  });
+  await database.payment.deleteMany({ where: { userId: { in: userIds } } });
+  await database.approval.deleteMany({ where: { userId: { in: userIds } } });
+  await database.spendReservation.deleteMany({
+    where: { mandate: { userId: { in: userIds } } },
+  });
+  await database.adminActionRequest.deleteMany({
+    where: { principalId: principal?.id ?? "missing" },
+  });
   await database.adminPrincipal.deleteMany({ where: { userId: { in: userIds } } });
-  await database.user.deleteMany({ where: { id: { in: userIds } } });
+  await database.session.deleteMany({ where: { userId: { in: userIds } } });
 }
 async function shutdown(code = 0) {
   if (stopping) return;
@@ -109,6 +127,130 @@ try {
     await database.user.update({ where: { id: userId }, data: { emailVerified: true } });
   }
   principal = (await new AdminRepository(database).bootstrap(userIds[0])).principal;
+  const ownerUserId = userIds[1];
+  fixture.ownerUserId = ownerUserId;
+  const mandate = await new MandateRepository(database).create({
+    userId: ownerUserId,
+    title: "Browser operations headphones",
+    originalPrompt: fixture.originalPrompt,
+    status: "ACTIVE",
+    autoSpendLimit: 15_000n,
+    transactionLimit: 18_000n,
+    dailyLimit: 20_000n,
+    startsAt: new Date(Date.now() - 60_000),
+    expiresAt: new Date(Date.now() + 86_400_000),
+    rules: [{ ruleType: "ALLOWED_BRAND", operator: "IN", value: ["Sony"] }],
+  });
+  fixture.mandateId = mandate.id;
+  const product = await database.productSnapshot.create({
+    data: {
+      source: "admin-ops-browser",
+      externalId: `headphones-${randomUUID()}`,
+      title: "Browser operations headphones",
+      brand: "Sony",
+      category: "headphones",
+      condition: "NEW",
+      price: 10_000n,
+      currency: "USD",
+      merchant: "Test merchant",
+      metadata: { token: fixture.webhookSecret },
+    },
+  });
+  const proposal = await new ProposalRepository(database).create({
+    userId: ownerUserId,
+    mandateId: mandate.id,
+    mandateVersionId: mandate.activeVersionId ?? "",
+    productSnapshotId: product.id,
+    quantity: 1,
+    shipping: 0n,
+    tax: 0n,
+    idempotencyKey: `admin-ops-browser-proposal-${randomUUID()}`,
+  });
+  fixture.proposalId = proposal.id;
+  await database.policyDecision.create({
+    data: {
+      proposalId: proposal.id,
+      mandateVersionId: mandate.activeVersionId ?? "",
+      decision: "REQUIRE_APPROVAL",
+      reasonCodes: ["AUTO_SPEND_THRESHOLD_EXCEEDED"],
+      rulesSnapshot: {},
+      spendSnapshot: {},
+    },
+  });
+  const approval = await database.approval.create({
+    data: {
+      proposalId: proposal.id,
+      userId: ownerUserId,
+      decision: "APPROVED",
+      proposalFingerprint: proposal.proposalFingerprint,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      decidedAt: new Date(),
+    },
+  });
+  fixture.approvalId = approval.id;
+  const paypalOrderId = `ORDER-ADMIN-OPS-${randomUUID()}`;
+  const paypalCaptureId = `CAPTURE-ADMIN-OPS-${randomUUID()}`;
+  const payment = await database.payment.create({
+    data: {
+      userId: ownerUserId,
+      mandateId: mandate.id,
+      proposalId: proposal.id,
+      paypalOrderId,
+      paypalCaptureId,
+      amount: 10_000n,
+      currency: "USD",
+      status: "PARTIALLY_REFUNDED",
+      idempotencyKey: `admin-ops-browser-payment-${randomUUID()}`,
+      capturedAt: new Date(),
+    },
+  });
+  fixture.paymentId = payment.id;
+  await database.purchaseProposal.update({
+    where: { id: proposal.id },
+    data: { status: "COMPLETED" },
+  });
+  const refund = await database.refund.create({
+    data: {
+      paymentId: payment.id,
+      userId: ownerUserId,
+      amount: 2_000n,
+      currency: "USD",
+      status: "COMPLETED",
+      paypalRefundId: `REFUND-ADMIN-OPS-${randomUUID()}`,
+      idempotencyKey: `admin-ops-browser-refund-${randomUUID()}`,
+      settledAt: new Date(),
+      reason: "Partial customer return.",
+    },
+  });
+  fixture.refundId = refund.id;
+  const webhook = await database.webhookInbox.create({
+    data: {
+      provider: "paypal",
+      providerEventId: `admin-ops-browser-${randomUUID()}`,
+      eventType: "PAYMENT.CAPTURE.COMPLETED",
+      signatureVerified: true,
+      payload: {
+        resource: {
+          id: paypalCaptureId,
+          supplementary_data: { related_ids: { order_id: paypalOrderId } },
+          secret: fixture.webhookSecret,
+        },
+      },
+      status: "PROCESSED",
+      attempts: 1,
+      processedAt: new Date(),
+    },
+  });
+  fixture.webhookId = webhook.id;
+  await database.auditEvent.create({
+    data: {
+      userId: ownerUserId,
+      eventType: "PAYMENT_CAPTURED",
+      entityType: "PAYMENT",
+      entityId: payment.id,
+      payload: { amountMinor: 10000, token: fixture.webhookSecret },
+    },
+  });
   app.get("/__admin_fixture", async () => fixture);
   let fixtureSessionSequence = 1;
   app.post("/__admin_fixture/session", async (_request, reply) => {

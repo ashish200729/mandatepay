@@ -1,6 +1,9 @@
 export type TableQuerySpec = {
   search?: boolean;
   filters?: Record<string, readonly string[]>;
+  ids?: readonly string[];
+  tokens?: readonly string[];
+  numbers?: readonly string[];
   dates?: boolean;
   sortKeys?: readonly string[];
 };
@@ -10,6 +13,9 @@ export function tableQueryKeys(spec: TableQuerySpec) {
     "cursor",
     ...(spec.search ? ["q"] : []),
     ...Object.keys(spec.filters ?? {}),
+    ...(spec.ids ?? []),
+    ...(spec.tokens ?? []),
+    ...(spec.numbers ?? []),
     ...(spec.dates ? ["from", "to"] : []),
     ...(spec.sortKeys?.length ? ["sort", "direction"] : []),
   ];
@@ -43,6 +49,17 @@ export function readTableQuery(input: URLSearchParams, spec: TableQuerySpec) {
   for (const [key, values] of Object.entries(spec.filters ?? {}))
     if (params.has(key) && !values.includes(params.get(key)!))
       error = "Choose a supported filter value.";
+  for (const key of spec.ids ?? [])
+    if (params.has(key) && !/^[A-Za-z0-9_-]{1,255}$/u.test(params.get(key)!))
+      error = "Choose a supported record identifier.";
+  for (const key of spec.tokens ?? [])
+    if (params.has(key) && !/^[A-Za-z0-9._:-]{1,255}$/u.test(params.get(key)!))
+      error = "Choose a supported identifier.";
+  for (const key of spec.numbers ?? []) {
+    const text = params.get(key);
+    if (text !== null && (!/^\d{1,16}$/u.test(text) || Number(text) > Number.MAX_SAFE_INTEGER))
+      error = "Choose a whole-number amount.";
+  }
   const from = params.get("from"),
     to = params.get("to");
   if (from || to) {

@@ -69,7 +69,7 @@ export function UiFixtures({ state }: { state: TableState<FixtureRow> }) {
       <PageHeader
         title="UI fixtures"
         description="Synthetic records for UI testing. No business actions run. This route is unavailable outside the loopback test host."
-        breadcrumbs={[{ label: "My Session", href: "/" }, { label: "UI fixtures" }]}
+        breadcrumbs={[{ label: "My Session", href: "/session" }, { label: "UI fixtures" }]}
       />
       <div className="mb-7 grid gap-4 sm:grid-cols-2">
         <MetricCard label="Sample records" value={6} description="Synthetic data only." />

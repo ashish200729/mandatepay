@@ -36,6 +36,8 @@ test("admin identity, BFF, expiry and responsive session flows", async ({
   await expect(page.locator("#sign-in-error")).toContainText("Unable to sign in");
   await page.getByLabel("Password", { exact: true }).fill(fixture.password);
   await page.getByRole("button", { name: "Sign in to admin" }).click();
+  await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
+  await page.goto("/session");
   await expect(page.getByRole("heading", { name: "Your admin session" })).toBeVisible();
   const me = await page.request.get("/api/admin/me");
   expect(me.status()).toBe(200);
@@ -56,7 +58,8 @@ test("admin identity, BFF, expiry and responsive session flows", async ({
   const oldCookies = await page.context().cookies();
   expect(oldCookies.some((cookie) => cookie.httpOnly && cookie.sameSite === "Lax")).toBe(true);
   expect((await page.request.post("/api/admin/session", { data: {} })).status()).toBe(403);
-  expect((await page.request.get("/api/admin/payments")).status()).toBe(404);
+  expect((await page.request.get("/api/admin/payments")).status()).toBe(200);
+  expect((await page.request.post("/api/admin/payments", { data: {} })).status()).toBe(405);
   expect(
     (
       await page.request.post("/api/admin/session", {
@@ -95,7 +98,7 @@ test("admin identity, BFF, expiry and responsive session flows", async ({
   await phone.getByLabel("Email", { exact: true }).fill(fixture.adminEmail);
   await phone.getByLabel("Password", { exact: true }).fill(fixture.password);
   await submit.click();
-  await expect(phone.getByRole("heading", { name: "Your admin session" })).toBeVisible();
+  await expect(phone.getByRole("heading", { name: "Operations overview" })).toBeVisible();
   await request.post(`${api}/__admin_fixture/state`, { data: { action: "inactive" } });
   await phone.reload();
   await expect(phone).toHaveURL(/\/access-denied$/u);
@@ -328,7 +331,7 @@ test("foundation tablet and mobile navigation keep full records and keyboard acc
     await menu.click();
     await expect(menu).toHaveAttribute("aria-expanded", "true");
     const drawer = page.getByRole("dialog", { name: "Administration", exact: true });
-    await expect(drawer.getByRole("link", { name: "My Session", exact: true })).toBeFocused();
+    await expect(drawer.getByRole("link", { name: "Overview", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(drawer).not.toBeVisible();
     await expect(menu).toBeFocused();

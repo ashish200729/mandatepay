@@ -79,15 +79,18 @@ export type SelectFilter = {
   label: string;
   options: readonly { value: string; label: string }[];
 };
+export type TextFilter = { key: string; label: string; kind?: "text" | "number" };
 export function FilterBar({
   navigation,
   search,
   filters = [],
+  fields = [],
   dates = false,
 }: {
   navigation: TableNavigation;
   search?: { label: string };
   filters?: readonly SelectFilter[];
+  fields?: readonly TextFilter[];
   dates?: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -105,6 +108,8 @@ export function FilterBar({
             const values: Record<string, string | null> = { limit: String(data.get("limit")) };
             if (search) values.q = String(data.get("q") ?? "").trim();
             for (const filter of filters) values[filter.key] = String(data.get(filter.key) ?? "");
+            for (const field of fields)
+              values[field.key] = String(data.get(field.key) ?? "").trim();
             if (dates)
               Object.assign(
                 values,
@@ -147,6 +152,20 @@ export function FilterBar({
                 </option>
               ))}
             </select>
+          </label>
+        ))}
+        {fields.map((field) => (
+          <label key={field.key} className="min-w-0 flex-[1_1_160px] text-xs font-medium">
+            <span className="mb-2 block">{field.label}</span>
+            <input
+              aria-label={field.label}
+              name={field.key}
+              type={field.kind === "number" ? "text" : "text"}
+              inputMode={field.kind === "number" ? "numeric" : "text"}
+              defaultValue={navigation.query.params.get(field.key) ?? ""}
+              disabled={navigation.pending}
+              className={fieldClass}
+            />
           </label>
         ))}
         {dates && (

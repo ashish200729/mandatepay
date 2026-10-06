@@ -52,6 +52,8 @@ export interface CreateAppOptions {
   paypalClient?: PayPalClient | null;
   /** Isolated test servers can provision many fixture accounts from loopback. */
   testAuthPostMaximum?: number;
+  /** Isolated admin tests can raise the principal read bucket without changing production limits. */
+  testAdminReadMaximum?: number;
 }
 
 type RateLimitEntry = {
@@ -203,11 +205,16 @@ function buildAuthRequest(request: FastifyRequest, config: RuntimeConfig): Reque
 export async function createApp(options: CreateAppOptions = {}) {
   const config = options.config ?? env;
   if (
-    options.testAuthPostMaximum !== undefined &&
+    (options.testAuthPostMaximum !== undefined || options.testAdminReadMaximum !== undefined) &&
     (config.NODE_ENV !== "test" ||
-      !Number.isSafeInteger(options.testAuthPostMaximum) ||
-      options.testAuthPostMaximum < 1 ||
-      options.testAuthPostMaximum > 500)
+      (options.testAuthPostMaximum !== undefined &&
+        (!Number.isSafeInteger(options.testAuthPostMaximum) ||
+          options.testAuthPostMaximum < 1 ||
+          options.testAuthPostMaximum > 500)) ||
+      (options.testAdminReadMaximum !== undefined &&
+        (!Number.isSafeInteger(options.testAdminReadMaximum) ||
+          options.testAdminReadMaximum < 1 ||
+          options.testAdminReadMaximum > 500)))
   ) {
     throw new Error("Authentication fixture limits are supported only by isolated test servers.");
   }
@@ -245,6 +252,8 @@ export async function createApp(options: CreateAppOptions = {}) {
     appUrl: config.APP_URL,
     adminOrigin: config.ADMIN_ORIGIN,
     nodeEnv: config.NODE_ENV,
+    discoveryMode: config.PRODUCT_DISCOVERY_MODE,
+    readMaximum: options.testAdminReadMaximum,
   });
 
   app.get("/health", async () => ({

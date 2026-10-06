@@ -1575,49 +1575,49 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 ### Backend TODO
 
-- [ ] **P4-01** Add admin overview query service.
-- [ ] **P4-02** Add user list/detail admin queries.
-- [ ] **P4-03** Add mandate list/detail admin queries.
-- [ ] **P4-04** Add proposal list/detail admin queries.
-- [ ] **P4-05** Add approval list/detail admin queries.
-- [ ] **P4-06** Add order list/detail admin queries.
-- [ ] **P4-07** Add payment list/detail admin queries.
-- [ ] **P4-08** Add refund list/detail admin queries.
-- [ ] **P4-09** Add safe webhook list/detail queries.
-- [ ] **P4-10** Add cross-entity drill-down identifiers.
-- [ ] **P4-11** Add pagination bounds.
-- [ ] **P4-12** Add validated filters/sorts.
-- [ ] **P4-13** Add safe CSV exports where justified.
+- [x] **P4-01** Add admin overview query service.
+- [x] **P4-02** Add user list/detail admin queries.
+- [x] **P4-03** Add mandate list/detail admin queries.
+- [x] **P4-04** Add proposal list/detail admin queries.
+- [x] **P4-05** Add approval list/detail admin queries.
+- [x] **P4-06** Add order list/detail admin queries.
+- [x] **P4-07** Add payment list/detail admin queries.
+- [x] **P4-08** Add refund list/detail admin queries.
+- [x] **P4-09** Add safe webhook list/detail queries.
+- [x] **P4-10** Add cross-entity drill-down identifiers.
+- [x] **P4-11** Add pagination bounds.
+- [x] **P4-12** Add validated filters/sorts.
+- [x] **P4-13** Add safe CSV exports where justified.
 
 ### Frontend TODO
 
-- [ ] **P4-14** Overview dashboard.
-- [ ] **P4-15** Users page.
-- [ ] **P4-16** User detail.
-- [ ] **P4-17** Mandates page.
-- [ ] **P4-18** Mandate detail.
-- [ ] **P4-19** Proposals page.
-- [ ] **P4-20** Proposal detail.
-- [ ] **P4-21** Approvals page.
-- [ ] **P4-22** Approval detail.
-- [ ] **P4-23** Orders page.
-- [ ] **P4-24** Order detail.
-- [ ] **P4-25** Payments page.
-- [ ] **P4-26** Payment detail.
-- [ ] **P4-27** Refunds page.
-- [ ] **P4-28** Refund detail.
-- [ ] **P4-29** Webhook inbox page.
-- [ ] **P4-30** Webhook detail.
-- [ ] **P4-31** Audit log page.
-- [ ] **P4-32** Audit detail.
+- [x] **P4-14** Overview dashboard.
+- [x] **P4-15** Users page.
+- [x] **P4-16** User detail.
+- [x] **P4-17** Mandates page.
+- [x] **P4-18** Mandate detail.
+- [x] **P4-19** Proposals page.
+- [x] **P4-20** Proposal detail.
+- [x] **P4-21** Approvals page.
+- [x] **P4-22** Approval detail.
+- [x] **P4-23** Orders page.
+- [x] **P4-24** Order detail.
+- [x] **P4-25** Payments page.
+- [x] **P4-26** Payment detail.
+- [x] **P4-27** Refunds page.
+- [x] **P4-28** Refund detail.
+- [x] **P4-29** Webhook inbox page.
+- [x] **P4-30** Webhook detail.
+- [x] **P4-31** Audit log page.
+- [x] **P4-32** Audit detail.
 
 ### Exit criteria
 
-- [ ] Main admin can inspect the complete MVP flow:
+- [x] Main admin can inspect the complete MVP flow:
   `user → mandate → proposal → approval → order → payment → refund`.
-- [ ] Cross-links work in both directions where useful.
-- [ ] Lists are paginated and filterable.
-- [ ] No sensitive provider/auth material is exposed.
+- [x] Cross-links work in both directions where useful.
+- [x] Lists are paginated and filterable.
+- [x] No sensitive provider/auth material is exposed.
 
 **Feeds into:** Phase 5.
 
