@@ -183,4 +183,67 @@ describe("admin BFF security", () => {
       ).status,
     ).toBe(400);
   });
+  it("allowlists control mutations and maps conflict codes without forwarding secrets", async () => {
+    vi.restoreAllMocks();
+    vi.stubEnv("ADMIN_ORIGIN", "http://localhost:3001");
+    vi.stubEnv("API_URL", "http://localhost:4000");
+    const id = "11111111-1111-4111-8111-111111111111";
+    const user = {
+      id,
+      name: "Ada",
+      email: "ada@example.test",
+      emailVerified: true,
+      autonomousPurchasingEnabled: false,
+      createdAt: "2026-10-06T00:00:00.000Z",
+      updatedAt: "2026-10-06T00:00:00.000Z",
+      accessVersion: 1,
+      activeMandateCount: 0,
+      proposalCount: 0,
+      capturedGrossMinor: 0,
+      lastActivityAt: "2026-10-06T00:00:00.000Z",
+      lastActivityBasis: "observed_activity_proxy",
+      accessStatus: "disabled",
+      accessStatusReason: "Investigating fixture account access.",
+      disabledAt: "2026-10-06T00:00:00.000Z",
+      capabilities: [{ action: "users:enable", allowed: true, reason: null }],
+      token: "private-token",
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: user,
+          changed: true,
+          pending: false,
+          actionId: id,
+          requestId: id,
+        }),
+      ),
+    );
+    const response = await proxyAdmin(
+      request(`users/${id}/disable`, { body: JSON.stringify({ reason: "Investigate access." }) }),
+      { path: ["users", id, "disable"] },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain("private-token");
+    expect(String(fetcher.mock.calls[0]![0])).toContain(`/api/admin/users/${id}/disable`);
+    fetcher.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: "INVALID_STATE", message: "secret" } }), {
+        status: 409,
+      }),
+    );
+    const conflict = await proxyAdmin(request(`proposals/${id}/re-evaluate`, { body: "{}" }), {
+      path: ["proposals", id, "re-evaluate"],
+    });
+    expect(conflict.status).toBe(409);
+    const conflictBody = await conflict.text();
+    expect(JSON.parse(conflictBody).error.code).toBe("INVALID_STATE");
+    expect(conflictBody).not.toContain("secret");
+    expect(
+      (
+        await proxyAdmin(request(`users/${id}/impersonate`, { body: "{}" }), {
+          path: ["users", id, "impersonate"],
+        })
+      ).status,
+    ).toBe(404);
+  });
 });

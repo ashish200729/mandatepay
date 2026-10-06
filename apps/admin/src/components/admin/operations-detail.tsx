@@ -15,6 +15,7 @@ import {
   parseAdminDomainAudit,
   parseAdminList,
   parseAdminMandate,
+  parseAdminNote,
   parseAdminNullableDetail,
   parseAdminPayment,
   parseAdminProposal,
@@ -26,6 +27,7 @@ import {
   type AdminAuditTarget,
 } from "@mandatepay/shared";
 import Link from "next/link";
+import { UserControls, UserNotes, MandateControls, ProposalControls } from "./admin-actions";
 
 export async function OperationsDetail({
   resource,
@@ -57,7 +59,7 @@ export async function OperationsDetail({
             audit: "Audit event",
           }[resource]
         } ${id}`}
-        description="Read-only operational record. Related identifiers link in both directions where implemented."
+        description="Operational record. Access and mandate controls cannot rewrite PayPal or AgentGuard truth."
         breadcrumbs={[
           { label: "Overview", href: "/" },
           { label: config.caption, href: config.path },
@@ -113,10 +115,18 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
             { label: "Proposals", value: row.proposalCount },
             { label: "Captured spend", value: formatUsd(row.capturedGrossMinor) },
             { label: "Last activity (observed proxy)", value: formatUtcDate(row.lastActivityAt) },
-            { label: "Access status", value: row.accessStatusReason },
+            {
+              label: "Access status",
+              value: (
+                <StatusBadge status={row.accessStatus === "disabled" ? "DISABLED" : "ENABLED"} />
+              ),
+            },
+            { label: "Access detail", value: row.accessStatusReason ?? "Account can sign in." },
+            { label: "Disabled at", value: row.disabledAt ? formatUtcDate(row.disabledAt) : "—" },
             { label: "Created", value: formatUtcDate(row.createdAt) },
           ]}
         />
+        <UserControls user={row} />
         <Related
           links={[
             { href: `/mandates?userId=${encodeURIComponent(row.id)}`, label: "Mandates" },
@@ -173,6 +183,7 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
             { href: `/users/${encodeURIComponent(row.owner.id)}`, label: "Owner" },
           ]}
         />
+        <MandateControls mandate={row} />
       </div>
     );
   }
@@ -330,14 +341,17 @@ function Related({ links }: { links: readonly { href: string; label: string }[] 
 }
 
 async function UserExtras({ userId }: { userId: string }) {
-  const [sessions, audit] = await Promise.all([
+  const [sessions, audit, notes] = await Promise.all([
     adminApi(`/api/admin/users/${encodeURIComponent(userId)}/sessions?limit=10`),
     adminApi(`/api/admin/domain-audit?userId=${encodeURIComponent(userId)}&limit=20`),
+    adminApi(`/api/admin/users/${encodeURIComponent(userId)}/notes?limit=20`),
   ]);
   const sessionRows = parseAdminList(sessions.json, parseAdminUserSession);
   const auditRows = parseAdminList(audit.json, parseAdminDomainAudit);
+  const noteRows = parseAdminList(notes.json, parseAdminNote);
   return (
     <>
+      <UserNotes userId={userId} notes={noteRows?.data ?? []} />
       <section>
         <h2 className="mb-3 text-lg font-medium">Sessions</h2>
         <p className="mb-4 text-sm text-muted-foreground">
@@ -419,6 +433,7 @@ async function ProposalDetail({
           {formatUsd(reservation.data.amountMinor)}
         </p>
       )}
+      <ProposalControls proposal={row} />
     </div>
   );
 }

@@ -36,9 +36,9 @@ export function columnsFor(
         ),
       },
       {
-        key: "autonomy",
-        label: "Autonomy",
-        render: (row) => ((row as AdminUser).autonomousPurchasingEnabled ? "Enabled" : "Off"),
+        key: "access",
+        label: "Access",
+        render: (row) => <StatusBadge status={(row as AdminUser).accessStatus.toUpperCase()} />,
       },
       {
         key: "mandates",

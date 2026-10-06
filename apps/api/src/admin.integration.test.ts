@@ -97,7 +97,7 @@ describe("admin security with persisted Better Auth sessions", () => {
       throw new Error(
         "Admin integration requires no existing principal in the isolated test database.",
       );
-    app = await createApp({ config, authRuntime: runtime });
+    app = await createApp({ config, authRuntime: runtime, testAdminMutationMaximum: 100 });
     for (const [kind, verified] of [
       ["admin", true],
       ["normal", true],
@@ -855,6 +855,7 @@ describe("admin security with persisted Better Auth sessions", () => {
     expect(users.json().data.some((row: { id: string }) => row.id === normalId)).toBe(true);
     const user = await getOk(`/api/admin/users/${normalId}`);
     expect(user.json().data.capturedGrossMinor).toBe(10000);
+    expect(user.json().data.accessStatus).toBe("enabled");
     expect(user.body).not.toMatch(/password|"token"/u);
 
     const mandateDetail = await getOk(`/api/admin/mandates/${mandate.id}`);
@@ -921,6 +922,314 @@ describe("admin security with persisted Better Auth sessions", () => {
     expect((await get(`/api/admin/users/${randomUUID()}`)).statusCode).toBe(404);
     const captured = await getOk("/api/admin/overview");
     expect(captured.json().data.metrics.capturedPayments.value).toBeGreaterThan(0);
+    expect(captured.json().data.metrics.disabledUsers.availability).toBe("available");
+  });
+
+  it("applies safe user and domain controls without bypassing policy or leaving unaudited mutations", async () => {
+    await login();
+    await database.adminSessionSecurity.update({
+      where: { sessionId },
+      data: { reauthenticatedAt: new Date(Date.now() - ADMIN_FRESH_MS) },
+    });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/admin/users/${normalId}/disable`,
+          payload: JSON.stringify({
+            reason: "Investigating fixture account access.",
+            confirmation: true,
+            requestKey: randomUUID(),
+            expectedUpdatedAt: new Date().toISOString(),
+            expectedAccessVersion: 0,
+            typedConfirmation: normalId,
+          }),
+          headers: { origin, "content-type": "application/json", cookie },
+        })
+      ).json().error.code,
+    ).toBe("ADMIN_REAUTH_REQUIRED");
+    await login();
+    await database.user.update({
+      where: { id: normalId },
+      data: { globalAutonomousPurchasingEnabled: true },
+    });
+    const user = (
+      await app.inject({
+        method: "GET",
+        url: `/api/admin/users/${normalId}`,
+        headers: { cookie },
+      })
+    ).json().data as {
+      updatedAt: string;
+      accessVersion: number;
+      autonomousPurchasingEnabled: boolean;
+    };
+    expect(user.autonomousPurchasingEnabled).toBe(true);
+    const reason = "Investigating fixture account access.";
+    const mutate = (url: string, payload: unknown) =>
+      app.inject({
+        method: "POST",
+        url,
+        payload: JSON.stringify(payload),
+        headers: { origin, "content-type": "application/json", cookie },
+      });
+
+    expect(
+      (
+        await mutate(`/api/admin/users/${adminId}/disable`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedUpdatedAt: user.updatedAt,
+          expectedAccessVersion: 0,
+          typedConfirmation: adminId,
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    expect(
+      (
+        await mutate(`/api/admin/users/${normalId}/disable`, {
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedUpdatedAt: user.updatedAt,
+          expectedAccessVersion: user.accessVersion,
+          typedConfirmation: normalId,
+        })
+      ).statusCode,
+    ).toBe(400);
+
+    const autonomyKey = randomUUID();
+    const autonomy = await mutate(`/api/admin/users/${normalId}/disable-autonomy`, {
+      reason,
+      confirmation: true,
+      requestKey: autonomyKey,
+      expectedUpdatedAt: user.updatedAt,
+      expectedAccessVersion: user.accessVersion,
+    });
+    expect(autonomy.statusCode, autonomy.body).toBe(200);
+    expect(autonomy.json().changed).toBe(true);
+    const retryAutonomy = await mutate(`/api/admin/users/${normalId}/disable-autonomy`, {
+      reason,
+      confirmation: true,
+      requestKey: autonomyKey,
+      expectedUpdatedAt: user.updatedAt,
+      expectedAccessVersion: user.accessVersion,
+    });
+    expect(retryAutonomy.statusCode).toBe(200);
+    expect(retryAutonomy.json().changed).toBe(false);
+    expect(retryAutonomy.json().actionId).toBe(autonomy.json().actionId);
+
+    const afterAutonomy = (
+      await app.inject({
+        method: "GET",
+        url: `/api/admin/users/${normalId}`,
+        headers: { cookie },
+      })
+    ).json().data as { updatedAt: string; accessVersion: number };
+    expect(
+      (
+        await mutate(`/api/admin/users/${normalId}/disable`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedUpdatedAt: user.updatedAt,
+          expectedAccessVersion: user.accessVersion,
+          typedConfirmation: normalId,
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    const note = await mutate(`/api/admin/users/${normalId}/notes`, {
+      reason,
+      requestKey: randomUUID(),
+      body: "Follow up with the account owner after the investigation.",
+    });
+    expect(note.statusCode, note.body).toBe(200);
+    expect(note.json().data.body).toContain("Follow up");
+    const notes = await app.inject({
+      method: "GET",
+      url: `/api/admin/users/${normalId}/notes?limit=10`,
+      headers: { cookie },
+    });
+    expect(notes.statusCode).toBe(200);
+    expect(notes.json().data.some((row: { body: string }) => row.body.includes("Follow up"))).toBe(
+      true,
+    );
+
+    const disable = await mutate(`/api/admin/users/${normalId}/disable`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedUpdatedAt: afterAutonomy.updatedAt,
+      expectedAccessVersion: afterAutonomy.accessVersion,
+      typedConfirmation: normalId,
+    });
+    expect(disable.statusCode, disable.body).toBe(200);
+    expect(disable.json().data.accessStatus).toBe("disabled");
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/me",
+          headers: { cookie: normalCookie },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/auth/sign-in/email",
+          payload: { email: normalEmail, password },
+          headers: { origin: config.APP_URL, "content-type": "application/json" },
+        })
+      ).json().code,
+    ).toBe("ACCOUNT_DISABLED");
+
+    const disabledUser = disable.json().data as { updatedAt: string; accessVersion: number };
+    const enable = await mutate(`/api/admin/users/${normalId}/enable`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedUpdatedAt: disabledUser.updatedAt,
+      expectedAccessVersion: disabledUser.accessVersion,
+    });
+    expect(enable.statusCode, enable.body).toBe(200);
+    expect(enable.json().data.accessStatus).toBe("enabled");
+
+    const enabledUser = enable.json().data as { updatedAt: string; accessVersion: number };
+    const sessions = await mutate(`/api/admin/users/${normalId}/revoke-sessions`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedUpdatedAt: enabledUser.updatedAt,
+      expectedAccessVersion: enabledUser.accessVersion,
+    });
+    expect(sessions.statusCode, sessions.body).toBe(200);
+
+    const sample = await database.purchaseProposal.findFirstOrThrow({
+      where: { userId: normalId, isSample: true },
+    });
+    expect(
+      (
+        await mutate(`/api/admin/proposals/${sample.id}/re-evaluate`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedStatus: sample.status,
+          expectedUpdatedAt: sample.updatedAt.toISOString(),
+        })
+      ).statusCode,
+    ).toBe(409);
+
+    const mandate = await database.mandate.findFirstOrThrow({
+      where: { userId: normalId, status: "ACTIVE" },
+    });
+    const proposed = await new ProposalRepository(database).create({
+      userId: normalId,
+      mandateId: mandate.id,
+      mandateVersionId: mandate.activeVersionId ?? "",
+      productSnapshotId: (
+        await database.productSnapshot.findFirstOrThrow({
+          where: { source: "admin-ops-test" },
+        })
+      ).id,
+      quantity: 1,
+      shipping: 0n,
+      tax: 0n,
+      idempotencyKey: `admin-controls-proposal-${randomUUID()}`,
+    });
+    expect(
+      (
+        await mutate(`/api/admin/proposals/${proposed.id}/re-evaluate`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedStatus: "COMPLETED",
+          expectedUpdatedAt: proposed.updatedAt.toISOString(),
+        })
+      ).statusCode,
+    ).toBe(409);
+    const evaluated = await mutate(`/api/admin/proposals/${proposed.id}/re-evaluate`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedStatus: proposed.status,
+      expectedUpdatedAt: proposed.updatedAt.toISOString(),
+    });
+    expect(evaluated.statusCode, evaluated.body).toBe(200);
+    expect(["AUTHORIZED", "AWAITING_APPROVAL", "BLOCKED"]).toContain(evaluated.json().data.status);
+
+    const pause = await mutate(`/api/admin/mandates/${mandate.id}/pause`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedVersion: mandate.version,
+      expectedStatus: "ACTIVE",
+      typedConfirmation: mandate.id,
+    });
+    expect(pause.statusCode, pause.body).toBe(200);
+    expect(pause.json().data.status).toBe("PAUSED");
+    const paused = pause.json().data as { version: number; status: string };
+    expect(
+      (
+        await mutate(`/api/admin/mandates/${mandate.id}/pause`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedVersion: mandate.version,
+          expectedStatus: "ACTIVE",
+          typedConfirmation: mandate.id,
+        })
+      ).statusCode,
+    ).toBe(409);
+    const revoked = await mutate(`/api/admin/mandates/${mandate.id}/revoke`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedVersion: paused.version,
+      expectedStatus: "PAUSED",
+      typedConfirmation: mandate.id,
+    });
+    expect(revoked.statusCode, revoked.body).toBe(200);
+    expect(revoked.json().data.status).toBe("REVOKED");
+
+    const events = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?targetType=USER&targetId=${normalId}&limit=50`,
+      headers: { cookie },
+    });
+    expect(events.statusCode).toBe(200);
+    const actions = events.json().data.map((row: { action: string }) => row.action);
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        "ADMIN_AUTONOMY_DISABLED",
+        "ADMIN_NOTE_ADDED",
+        "ADMIN_USER_DISABLED",
+        "ADMIN_USER_ENABLED",
+        "ADMIN_SESSIONS_REVOKED",
+      ]),
+    );
+    expect(events.body).not.toMatch(/password|"token"/u);
+    const mandateEvents = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?targetType=MANDATE&targetId=${mandate.id}&limit=20`,
+      headers: { cookie },
+    });
+    expect(mandateEvents.statusCode).toBe(200);
+    expect(mandateEvents.json().data.map((row: { action: string }) => row.action)).toEqual(
+      expect.arrayContaining(["ADMIN_MANDATE_PAUSED", "ADMIN_MANDATE_REVOKED"]),
+    );
+    const proposalEvents = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?targetType=PROPOSAL&targetId=${proposed.id}&limit=20`,
+      headers: { cookie },
+    });
+    expect(proposalEvents.statusCode).toBe(200);
+    expect(proposalEvents.json().data.map((row: { action: string }) => row.action)).toContain(
+      "ADMIN_PROPOSAL_RE_EVALUATED",
+    );
   });
 
   it("enforces principal-scoped read limits and keeps sign-out available through a separate bucket", async () => {

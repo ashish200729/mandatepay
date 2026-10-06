@@ -54,6 +54,7 @@ export async function requireAdmin(
     const principal = session.user.adminPrincipal;
     if (
       !session.user.emailVerified ||
+      session.user.disabledAt ||
       !principal?.active ||
       principal.singletonKey !== "main" ||
       principal.role !== "ADMIN_SUPER"
@@ -146,6 +147,14 @@ export function adminMe(identity: AdminIdentity) {
       "webhooks:read",
       "domain-audit:read",
       "exports:read",
+      "users:disable",
+      "users:enable",
+      "users:revoke-sessions",
+      "users:disable-autonomy",
+      "users:notes",
+      "mandates:pause",
+      "mandates:revoke",
+      "proposals:re-evaluate",
     ],
   };
 }

@@ -1,5 +1,11 @@
 # Phase progress and handoff
 
+## Admin Phase 5 complete — 2026-10-06
+
+Implemented operational mutations that do not alter provider truth. Admins can disable/enable users, revoke sessions, disable autonomy, add immutable notes, pause or revoke mandates through MandateRepository, and re-evaluate proposals through AgentGuard. Disabled status is enforced on sign-in, customer APIs, admin authorization and proposal evaluation. Every mutation requires a reason, concurrency token and durable action/audit row in the same transaction. All 16 tasks and three exits are checked; [ADMIN_PHASE_5.md](./ADMIN_PHASE_5.md) records evidence. **P5-07:** admin may pause and revoke; admin may not resume, edit permissions, or force-allow a proposal.
+
+Verification: **346 unit**, **13 environment/boundary**, **89 API integration**, **eight database integration** and **seven admin browser tests** pass; affected lint/types, production admin build, source/bundle boundaries and formatting on changed files pass. Controls fixtures are synthetic. No real administrator was provisioned. Phases 6–10 remain unchecked with no payment/refund/webhook or platform-setting mutations enabled. Isolated browser tests raise the admin read limiter to 2000 and the mutation limiter to 100; production remains 120/20. No hosted deployment or new live-provider qualification is claimed; prior unrelated formatting/schema baseline remains untouched.
+
 ## Admin Phase 4 complete — 2026-10-06
 
 Implemented read-only administration for the MVP operations chain without mutation routes. Overview metrics, list/detail queries, HMAC pagination, validated filters, safe CSV exports and BFF re-projection cover users, mandates, proposals, approvals, orders, payments, refunds, webhooks and audit. The admin UI renders overview plus collection/detail pages with bidirectional cross-links. All 32 tasks and four exits are checked; [ADMIN_PHASE_4.md](./ADMIN_PHASE_4.md) records evidence.

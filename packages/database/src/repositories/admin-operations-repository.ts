@@ -18,6 +18,7 @@ import {
   type AdminDomainAuditQuery,
   type AdminMandateQuery,
   type AdminOrderQuery,
+  type AdminNoteQuery,
   type AdminOverviewQuery,
   type AdminPaymentQuery,
   type AdminProposalQuery,
@@ -95,6 +96,73 @@ function unavailable(definition: string, reason: string) {
 function directionOf(value?: "asc" | "desc", fallback: "asc" | "desc" = "desc") {
   return value ?? fallback;
 }
+function capability(
+  action:
+    | "users:disable"
+    | "users:enable"
+    | "users:revoke-sessions"
+    | "users:disable-autonomy"
+    | "users:notes"
+    | "mandates:pause"
+    | "mandates:revoke"
+    | "proposals:re-evaluate",
+  allowed: boolean,
+  reason: string | null = null,
+) {
+  return { action, allowed, reason: allowed ? null : reason };
+}
+function userCapabilities(input: {
+  disabled: boolean;
+  isAdmin: boolean;
+  autonomyEnabled: boolean;
+}) {
+  const lockout = "The singleton administrator account cannot be disabled.";
+  return [
+    capability(
+      "users:disable",
+      !input.disabled && !input.isAdmin,
+      input.isAdmin ? lockout : "This account is already disabled.",
+    ),
+    capability(
+      "users:enable",
+      input.disabled,
+      input.disabled ? null : "This account is already enabled.",
+    ),
+    capability("users:revoke-sessions", true),
+    capability(
+      "users:disable-autonomy",
+      input.autonomyEnabled,
+      "Autonomous purchasing is already off.",
+    ),
+    capability("users:notes", true),
+  ];
+}
+function mandateCapabilities(status: string) {
+  return [
+    capability(
+      "mandates:pause",
+      status === "ACTIVE",
+      "Pause is only available for an active mandate.",
+    ),
+    capability(
+      "mandates:revoke",
+      ["DRAFT", "ACTIVE", "PAUSED", "EXPIRED"].includes(status),
+      "This mandate is already revoked.",
+    ),
+  ];
+}
+function proposalCapabilities(status: string, isSample: boolean) {
+  const allowed = !isSample && ["PROPOSED", "POLICY_CHECKED", "AWAITING_APPROVAL"].includes(status);
+  return [
+    capability(
+      "proposals:re-evaluate",
+      allowed,
+      isSample
+        ? "Sample proposals cannot be targeted by controls."
+        : "Re-evaluation is limited to current AgentGuard evaluation states. BLOCKED and terminal proposals cannot be reset.",
+    ),
+  ];
+}
 
 export class AdminOperationsRepository {
   constructor(
@@ -153,6 +221,11 @@ export class AdminOperationsRepository {
       ...(query.autonomy === undefined
         ? {}
         : { globalAutonomousPurchasingEnabled: query.autonomy }),
+      ...(query.disabled === undefined
+        ? {}
+        : query.disabled
+          ? { disabledAt: { not: null } }
+          : { disabledAt: null }),
       ...(query.hasActiveMandate === undefined
         ? {}
         : {
@@ -171,8 +244,12 @@ export class AdminOperationsRepository {
         email: true,
         emailVerified: true,
         globalAutonomousPurchasingEnabled: true,
+        disabledAt: true,
+        disabledReason: true,
+        accessVersion: true,
         createdAt: true,
         updatedAt: true,
+        adminPrincipal: { select: { id: true, active: true } },
         _count: {
           select: {
             mandates: { where: activeMandateWhere(asOf) },
@@ -196,8 +273,12 @@ export class AdminOperationsRepository {
         email: true,
         emailVerified: true,
         globalAutonomousPurchasingEnabled: true,
+        disabledAt: true,
+        disabledReason: true,
+        accessVersion: true,
         createdAt: true,
         updatedAt: true,
+        adminPrincipal: { select: { id: true, active: true } },
         _count: {
           select: {
             mandates: { where: activeMandateWhere(asOf) },
@@ -217,8 +298,12 @@ export class AdminOperationsRepository {
       email: string;
       emailVerified: boolean;
       globalAutonomousPurchasingEnabled: boolean;
+      disabledAt: Date | null;
+      disabledReason: string | null;
+      accessVersion: number;
       createdAt: Date;
       updatedAt: Date;
+      adminPrincipal: { id: string; active: boolean } | null;
       _count: { mandates: number; proposals: number };
     }>,
     asOf: Date,
@@ -259,6 +344,7 @@ export class AdminOperationsRepository {
         (latest, value) => (value > latest ? value : latest),
         row.updatedAt,
       );
+      const disabled = row.disabledAt !== null;
       return {
         id: row.id,
         name: row.name,
@@ -267,13 +353,22 @@ export class AdminOperationsRepository {
         autonomousPurchasingEnabled: row.globalAutonomousPurchasingEnabled,
         createdAt: iso(row.createdAt),
         updatedAt: iso(row.updatedAt),
+        accessVersion: row.accessVersion,
         activeMandateCount: row._count.mandates,
         proposalCount: row._count.proposals,
         capturedGrossMinor: minorNumber(spend.get(row.id) ?? 0n, "captured spend"),
         lastActivityAt: iso(lastActivityAt > asOf ? asOf : lastActivityAt),
         lastActivityBasis: "observed_activity_proxy" as const,
-        accessStatus: "unavailable" as const,
-        accessStatusReason: "Account disablement is not available until Phase 5.",
+        accessStatus: disabled ? ("disabled" as const) : ("enabled" as const),
+        accessStatusReason: disabled
+          ? (safeAdminText(row.disabledReason, 255) ?? "This account is disabled.")
+          : null,
+        disabledAt: row.disabledAt ? iso(row.disabledAt) : null,
+        capabilities: userCapabilities({
+          disabled,
+          isAdmin: Boolean(row.adminPrincipal?.active),
+          autonomyEnabled: row.globalAutonomousPurchasingEnabled,
+        }),
       };
     });
   }
@@ -305,6 +400,48 @@ export class AdminOperationsRepository {
         updatedAt: iso(row.updatedAt),
         expiresAt: iso(row.expiresAt),
         isCurrent: row.expiresAt > asOf,
+      })),
+      page: { limit, nextCursor },
+    };
+  }
+
+  async listUserNotes(userId: string, query: AdminNoteQuery) {
+    requireId(userId, "user");
+    const user = await this.db.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!user) return null;
+    const { cursor, ...filters } = query;
+    const binding = queryBinding({ ...filters, userId, resource: "user-notes" });
+    const rows = await this.db.adminNote.findMany({
+      where: {
+        userId,
+        ...timestampPage("createdAt", "desc", this.boundary(cursor, binding)),
+      },
+      select: {
+        id: true,
+        userId: true,
+        body: true,
+        authorAdminId: true,
+        createdAt: true,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: query.limit + 1,
+    });
+    const { page, nextCursor, limit } = this.page(rows, query.limit, binding, "createdAt");
+    const authors = page.length
+      ? await this.db.adminPrincipal.findMany({
+          where: { id: { in: page.map((row) => row.authorAdminId) } },
+          select: { id: true, user: { select: { name: true } } },
+        })
+      : [];
+    const names = new Map(authors.map((row) => [row.id, row.user.name]));
+    return {
+      data: page.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        body: row.body,
+        authorPrincipalId: row.authorAdminId,
+        authorName: names.get(row.authorAdminId) ?? null,
+        createdAt: iso(row.createdAt),
       })),
       page: { limit, nextCursor },
     };
@@ -369,6 +506,7 @@ export class AdminOperationsRepository {
       relatedProposalCount: row._count.proposals,
       createdAt: iso(row.createdAt),
       updatedAt: iso(row.updatedAt),
+      capabilities: mandateCapabilities(row.status),
     };
   }
 
@@ -510,6 +648,7 @@ export class AdminOperationsRepository {
       isSample: row.isSample,
       createdAt: iso(row.createdAt),
       updatedAt: iso(row.updatedAt),
+      capabilities: proposalCapabilities(row.status, row.isSample),
     };
   }
 
@@ -1027,6 +1166,7 @@ export class AdminOperationsRepository {
       totalUsers,
       verifiedUsers,
       autonomousUsers,
+      disabledUsers,
       newUsers,
       activeMandates,
       mandateGroups,
@@ -1054,6 +1194,7 @@ export class AdminOperationsRepository {
       this.db.user.count(),
       this.db.user.count({ where: { emailVerified: true } }),
       this.db.user.count({ where: { globalAutonomousPurchasingEnabled: true } }),
+      this.db.user.count({ where: { disabledAt: { not: null } } }),
       this.db.$queryRaw<Array<{ day: Date; count: bigint }>>(Prisma.sql`
         SELECT date_trunc('day', "createdAt") AS day, COUNT(*)::bigint AS count
         FROM "User"
@@ -1378,9 +1519,9 @@ export class AdminOperationsRepository {
           "Failed agent runs.",
           "Unavailable until Phase 8 AgentRun telemetry exists.",
         ),
-        disabledUsers: unavailable(
-          "Disabled user count.",
-          "Unavailable until Phase 5 account access fields exist.",
+        disabledUsers: metric(
+          disabledUsers,
+          "User rows with disabledAt set. As-of count, including test/demo accounts because no User sample marker exists.",
         ),
         adminActions: metric(adminActions, "Admin audit events created in the selected range."),
       },

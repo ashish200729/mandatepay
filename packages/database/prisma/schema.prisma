@@ -33,6 +33,7 @@ enum AdminAuditAction {
   ADMIN_NOTE_ADDED
   ADMIN_MANDATE_PAUSED
   ADMIN_MANDATE_REVOKED
+  ADMIN_PROPOSAL_RE_EVALUATED
   ADMIN_PAYMENT_RECONCILE_REQUESTED
   ADMIN_REFUND_REQUESTED
   ADMIN_WEBHOOK_RETRY_REQUESTED
@@ -198,6 +199,9 @@ enum WebhookProcessingStatus {
 
 enum AuditEventType {
   USER_CREATED
+  USER_DISABLED
+  USER_ENABLED
+  USER_SESSIONS_REVOKED
   GLOBAL_AUTONOMY_UPDATED
   MANDATE_PARSE_REQUESTED
   MANDATE_PARSED
@@ -259,6 +263,10 @@ model User {
   emailVerified                     Boolean            @default(false)
   image                             String?            @db.Text
   globalAutonomousPurchasingEnabled Boolean            @default(false)
+  disabledAt                        DateTime?
+  disabledReason                    String?            @db.VarChar(255)
+  disabledByAdminId                 String?
+  accessVersion                     Int                @default(0)
   createdAt                         DateTime           @default(now())
   updatedAt                         DateTime           @updatedAt
   paymentProfile                    PaymentProfile?
@@ -271,8 +279,11 @@ model User {
   refunds                           Refund[]
   auditEvents                       AuditEvent[]
   adminPrincipal                    AdminPrincipal?
+  disabledByAdmin                   AdminPrincipal?    @relation("UserDisabledBy", fields: [disabledByAdminId], references: [id], onDelete: SetNull)
+  adminNotes                        AdminNote[]
 
   @@index([createdAt])
+  @@index([disabledAt])
 }
 
 // These tables intentionally follow Better Auth's Prisma adapter contract so
@@ -305,6 +316,21 @@ model AdminPrincipal {
   user           User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
   sessions       AdminSessionSecurity[]
   actionRequests AdminActionRequest[]
+  disabledUsers  User[]                 @relation("UserDisabledBy")
+}
+
+// Immutable internal operator notes. Author/principal IDs are historical
+// snapshots; v1 has no edit/delete, matching admin audit.
+model AdminNote {
+  id            String   @id @default(uuid())
+  userId        String
+  authorAdminId String
+  body          String   @db.VarChar(2000)
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt, id])
+  @@index([authorAdminId])
 }
 
 // Immutable actor/target identifiers are historical snapshots rather than

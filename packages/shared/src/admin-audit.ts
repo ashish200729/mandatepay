@@ -13,6 +13,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "ADMIN_NOTE_ADDED",
   "ADMIN_MANDATE_PAUSED",
   "ADMIN_MANDATE_REVOKED",
+  "ADMIN_PROPOSAL_RE_EVALUATED",
   "ADMIN_PAYMENT_RECONCILE_REQUESTED",
   "ADMIN_REFUND_REQUESTED",
   "ADMIN_WEBHOOK_RETRY_REQUESTED",
@@ -94,6 +95,15 @@ export const AdminReasonSchema = z
 export function requireAdminReason(value: unknown) {
   return AdminReasonSchema.parse(value);
 }
+export const AdminNoteBodySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2000)
+  .refine(
+    (value) => !/[\u0000-\u001f\u007f]/u.test(value) && !sensitiveText.test(value),
+    "Provide a note without credential material.",
+  );
 
 const date = z.iso.datetime({ offset: false });
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -109,6 +119,11 @@ const summaries = {
     emailVerified: z.boolean().optional(),
     autonomousPurchasingEnabled: z.boolean().optional(),
     disabledAt: date.nullable().optional(),
+    accessVersion: count.optional(),
+    noteHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
   }),
   MANDATE: z.object({
     status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "EXPIRED", "REVOKED"]).optional(),
@@ -247,6 +262,7 @@ export const ADMIN_ACTION_TARGET: Record<AdminAuditAction, AdminAuditTarget> = {
   ADMIN_NOTE_ADDED: "USER",
   ADMIN_MANDATE_PAUSED: "MANDATE",
   ADMIN_MANDATE_REVOKED: "MANDATE",
+  ADMIN_PROPOSAL_RE_EVALUATED: "PROPOSAL",
   ADMIN_PAYMENT_RECONCILE_REQUESTED: "PAYMENT",
   ADMIN_REFUND_REQUESTED: "REFUND",
   ADMIN_WEBHOOK_RETRY_REQUESTED: "WEBHOOK",

@@ -103,3 +103,9 @@ The user authorized the complete UI foundation. The existing scaffold/scripts we
 The user authorized read-only operations data. Admin query services, validated filters/cursors, safe DTOs, CSV exports and BFF allowlists were added without mutation routes. The admin app now renders overview plus list/detail pages for the MVP chain and webhook/audit inspection. Cross-links use existing identifiers; samples stay excluded by default; provider payloads, original prompts and credentials are not projected.
 
 [ADMIN_PHASE_4.md](./ADMIN_PHASE_4.md) records passing unit, API integration, browser, build/type/lint/format and boundary checks. All 32 tasks and four exits are checked; Phases 5–10 remain planned. No schema migration, new dependency, real admin grant, hosted deployment or live-provider claim is introduced.
+
+## Admin Phase 5 review — 2026-10-06
+
+The user authorized safe user and domain controls after Phase 4. Account disablement is a first-class User field enforced in authentication and business execution. Admin mutations reuse MandateRepository and AgentGuard rather than reconstructing policy. Pause and revoke are allowed; resume, permission edits and force-ALLOW are not. Fresh authentication covers disable, session revoke, pause and revoke. Reasons, expected version/timestamp tokens, durable action claims and admin audit share one transaction where the change is local.
+
+[ADMIN_PHASE_5.md](./ADMIN_PHASE_5.md) records passing unit, API integration, database, browser, build/type/lint/format and boundary checks. All 16 tasks and three exits are checked; Phases 6–10 remain planned. No real admin grant, hosted deployment or live-provider claim is introduced. Isolated browser tests raise read/mutation budgets on the shared fixture principal; production limits are unchanged.

@@ -14,6 +14,8 @@ const MESSAGES: Record<string, string> = {
   ADMIN_RATE_LIMITED: "Too many requests. Try again shortly.",
   ADMIN_UNAVAILABLE: "Administration is temporarily unavailable. Try again shortly.",
   ADMIN_TARGET_NOT_FOUND: "The requested record was not found.",
+  CONFLICT: "The record changed. Reload its current state before trying again.",
+  INVALID_STATE: "The record is not in a valid state for this action.",
 };
 function failure(code: string, status: number, requestId?: string) {
   return NextResponse.json(
@@ -36,7 +38,7 @@ function withTrace(result: NextResponse, upstream: Response) {
 }
 
 export async function proxyAdmin(request: Request, params: { path?: string[] }) {
-  const match = matchAdminProxy(params.path);
+  const match = matchAdminProxy(params.path, request.method);
   if (!match) return failure("ADMIN_INVALID_REQUEST", 404);
   if (!match.methods.includes(request.method)) return failure("ADMIN_INVALID_REQUEST", 405);
   const incoming = new URL(request.url);
@@ -125,7 +127,9 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
     if (request.method === "HEAD") {
       return withTrace(
         new NextResponse(null, {
-          status: [200, 401, 403, 404, 429, 503].includes(response.status) ? response.status : 503,
+          status: [200, 401, 403, 404, 409, 429, 503].includes(response.status)
+            ? response.status
+            : 503,
           headers: { "cache-control": "private, no-store" },
         }),
         response,
@@ -148,6 +152,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         400: "ADMIN_INVALID_REQUEST",
         401: "ADMIN_UNAUTHORIZED",
         403: "ADMIN_FORBIDDEN",
+        409: "CONFLICT",
         429: "ADMIN_RATE_LIMITED",
       };
       const code =
@@ -156,7 +161,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
           : (fallback[response.status] ?? "ADMIN_UNAVAILABLE");
       const result = failure(
         code,
-        [400, 401, 403, 404, 429, 503].includes(response.status) ? response.status : 503,
+        [400, 401, 403, 404, 409, 429, 503].includes(response.status) ? response.status : 503,
         AdminTraceIdSchema.safeParse(json?.error?.requestId).success
           ? json?.error?.requestId
           : undefined,

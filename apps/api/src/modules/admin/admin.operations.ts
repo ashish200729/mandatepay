@@ -374,6 +374,7 @@ function flattenUser(row: Record<string, unknown>) {
     email: String(row.email),
     emailVerified: Boolean(row.emailVerified),
     autonomousPurchasingEnabled: Boolean(row.autonomousPurchasingEnabled),
+    accessStatus: String(row.accessStatus),
     activeMandateCount: Number(row.activeMandateCount),
     proposalCount: Number(row.proposalCount),
     capturedGrossMinor: Number(row.capturedGrossMinor),

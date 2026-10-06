@@ -84,7 +84,7 @@ Sources: [shared transitions](../../packages/shared/src/state-machine.ts), [mand
 
 ### Mandate
 
-Shared map: `DRAFT → ACTIVE`; `ACTIVE → PAUSED / EXPIRED / REVOKED`; `PAUSED → ACTIVE / EXPIRED / REVOKED`; expired/revoked terminal. **Runtime repository differs:** activation accepts DRAFT/PAUSED; pause accepts ACTIVE; resume accepts PAUSED; revoke accepts DRAFT/ACTIVE/PAUSED/EXPIRED. Same-target requests return current state idempotently. Activation requires the validity interval and optional expected-version check. There is no public expire command or periodic mandate-expiry worker; effective expiry must be derived at read time. Admin pause/revoke remain gated on the Phase 5 policy decision and use repository rules, not a reconstructed diagram.
+Shared map: `DRAFT → ACTIVE`; `ACTIVE → PAUSED / EXPIRED / REVOKED`; `PAUSED → ACTIVE / EXPIRED / REVOKED`; expired/revoked terminal. **Runtime repository differs:** activation accepts DRAFT/PAUSED; pause accepts ACTIVE; resume accepts PAUSED; revoke accepts DRAFT/ACTIVE/PAUSED/EXPIRED. Same-target requests return current state idempotently. Activation requires the validity interval and optional expected-version check. There is no public expire command or periodic mandate-expiry worker; effective expiry must be derived at read time. Admin pause/revoke remain gated on the Phase 5 policy decision and use repository rules, not a reconstructed diagram. Phase 5 resolved that decision as allowed pause/revoke with no admin resume.
 
 ### Proposal and approval
 

@@ -385,7 +385,26 @@ export class MandateRepository {
   }
 
   async pause(mandateId: string, userId: string, expectedVersion?: number) {
-    return this.transitionStatus(
+    return this.db.$transaction((tx) =>
+      this.transitionStatusInTransaction(
+        tx,
+        mandateId,
+        userId,
+        MandateStatus.PAUSED,
+        [MandateStatus.ACTIVE],
+        expectedVersion,
+      ),
+    );
+  }
+
+  async pauseInTransaction(
+    tx: Prisma.TransactionClient,
+    mandateId: string,
+    userId: string,
+    expectedVersion?: number,
+  ) {
+    return this.transitionStatusInTransaction(
+      tx,
       mandateId,
       userId,
       MandateStatus.PAUSED,
@@ -395,17 +414,39 @@ export class MandateRepository {
   }
 
   async resume(mandateId: string, userId: string, expectedVersion?: number) {
-    return this.transitionStatus(
-      mandateId,
-      userId,
-      MandateStatus.ACTIVE,
-      [MandateStatus.PAUSED],
-      expectedVersion,
+    return this.db.$transaction((tx) =>
+      this.transitionStatusInTransaction(
+        tx,
+        mandateId,
+        userId,
+        MandateStatus.ACTIVE,
+        [MandateStatus.PAUSED],
+        expectedVersion,
+      ),
     );
   }
 
   async revoke(mandateId: string, userId: string, expectedVersion?: number) {
-    return this.transitionStatus(
+    return this.db.$transaction((tx) =>
+      this.transitionStatusInTransaction(
+        tx,
+        mandateId,
+        userId,
+        MandateStatus.REVOKED,
+        [MandateStatus.DRAFT, MandateStatus.ACTIVE, MandateStatus.PAUSED, MandateStatus.EXPIRED],
+        expectedVersion,
+      ),
+    );
+  }
+
+  async revokeInTransaction(
+    tx: Prisma.TransactionClient,
+    mandateId: string,
+    userId: string,
+    expectedVersion?: number,
+  ) {
+    return this.transitionStatusInTransaction(
+      tx,
       mandateId,
       userId,
       MandateStatus.REVOKED,
@@ -421,65 +462,83 @@ export class MandateRepository {
     allowedCurrent: readonly MandateStatus[],
     expectedVersion?: number,
   ) {
-    return this.db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Mandate" WHERE id = ${mandateId} FOR UPDATE`;
-      const mandate = await tx.mandate.findFirst({ where: { id: mandateId, userId } });
-      if (!mandate) {
-        throw new DatabaseError("NOT_FOUND", "Mandate was not found for this user.");
-      }
-      if (expectedVersion !== undefined && mandate.version !== expectedVersion) {
-        throw new DatabaseError("CONFLICT", "Mandate version is stale.");
-      }
-      if (mandate.status === next) {
-        const current = await tx.mandate.findUnique({
-          where: { id: mandate.id },
-          include: mandateWithVersion,
-        });
-        if (!current) throw new DatabaseError("NOT_FOUND", "Mandate was not found for this user.");
-        return current;
-      }
-      if (!allowedCurrent.includes(mandate.status)) {
-        throw new DatabaseError(
-          "INVALID_STATE",
-          `Cannot move mandate from ${mandate.status} to ${next}.`,
-        );
-      }
-      if (
-        next === MandateStatus.ACTIVE &&
-        (new Date() < mandate.startsAt || new Date() >= mandate.expiresAt)
-      ) {
-        throw new DatabaseError("INVALID_STATE", "Mandate is outside its validity window.");
-      }
-      const eventType =
-        next === MandateStatus.ACTIVE && mandate.status === MandateStatus.PAUSED
-          ? AuditEventType.MANDATE_RESUMED
-          : next === MandateStatus.ACTIVE
-            ? AuditEventType.MANDATE_ACTIVATED
-            : next === MandateStatus.PAUSED
-              ? AuditEventType.MANDATE_PAUSED
-              : next === MandateStatus.REVOKED
-                ? AuditEventType.MANDATE_REVOKED
-                : next === MandateStatus.EXPIRED
-                  ? AuditEventType.MANDATE_EXPIRED
-                  : AuditEventType.MANDATE_UPDATED;
-      await tx.auditEvent.create({
-        data: {
-          userId,
-          eventType,
-          entityType: AuditEntityType.MANDATE,
-          entityId: mandate.id,
-          payload: {
-            mandateId: mandate.id,
-            from: mandate.status,
-            to: next,
-          },
-        },
-      });
-      return tx.mandate.update({
+    return this.db.$transaction((tx) =>
+      this.transitionStatusInTransaction(
+        tx,
+        mandateId,
+        userId,
+        next,
+        allowedCurrent,
+        expectedVersion,
+      ),
+    );
+  }
+
+  private async transitionStatusInTransaction(
+    tx: Prisma.TransactionClient,
+    mandateId: string,
+    userId: string,
+    next: MandateStatus,
+    allowedCurrent: readonly MandateStatus[],
+    expectedVersion?: number,
+  ) {
+    await tx.$queryRaw`SELECT id FROM "Mandate" WHERE id = ${mandateId} FOR UPDATE`;
+    const mandate = await tx.mandate.findFirst({ where: { id: mandateId, userId } });
+    if (!mandate) {
+      throw new DatabaseError("NOT_FOUND", "Mandate was not found for this user.");
+    }
+    if (expectedVersion !== undefined && mandate.version !== expectedVersion) {
+      throw new DatabaseError("CONFLICT", "Mandate version is stale.");
+    }
+    if (mandate.status === next) {
+      const current = await tx.mandate.findUnique({
         where: { id: mandate.id },
-        data: { status: next },
         include: mandateWithVersion,
       });
+      if (!current) throw new DatabaseError("NOT_FOUND", "Mandate was not found for this user.");
+      return current;
+    }
+    if (!allowedCurrent.includes(mandate.status)) {
+      throw new DatabaseError(
+        "INVALID_STATE",
+        `Cannot move mandate from ${mandate.status} to ${next}.`,
+      );
+    }
+    if (
+      next === MandateStatus.ACTIVE &&
+      (new Date() < mandate.startsAt || new Date() >= mandate.expiresAt)
+    ) {
+      throw new DatabaseError("INVALID_STATE", "Mandate is outside its validity window.");
+    }
+    const eventType =
+      next === MandateStatus.ACTIVE && mandate.status === MandateStatus.PAUSED
+        ? AuditEventType.MANDATE_RESUMED
+        : next === MandateStatus.ACTIVE
+          ? AuditEventType.MANDATE_ACTIVATED
+          : next === MandateStatus.PAUSED
+            ? AuditEventType.MANDATE_PAUSED
+            : next === MandateStatus.REVOKED
+              ? AuditEventType.MANDATE_REVOKED
+              : next === MandateStatus.EXPIRED
+                ? AuditEventType.MANDATE_EXPIRED
+                : AuditEventType.MANDATE_UPDATED;
+    await tx.auditEvent.create({
+      data: {
+        userId,
+        eventType,
+        entityType: AuditEntityType.MANDATE,
+        entityId: mandate.id,
+        payload: {
+          mandateId: mandate.id,
+          from: mandate.status,
+          to: next,
+        },
+      },
+    });
+    return tx.mandate.update({
+      where: { id: mandate.id },
+      data: { status: next },
+      include: mandateWithVersion,
     });
   }
 }

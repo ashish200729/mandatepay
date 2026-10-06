@@ -3,11 +3,15 @@ import {
   AdminMandateQuerySchema,
   AdminOverviewQuerySchema,
   AdminPaymentQuerySchema,
+  AdminUserAccessMutationSchema,
+  AdminUserDisableMutationSchema,
   AdminUserQuerySchema,
   AdminWebhookQuerySchema,
   buildAdminCsv,
   checkoutEligibility,
   parseAdminMandate,
+  parseAdminMutation,
+  parseAdminNote,
   parseAdminPayment,
   parseAdminUser,
   parseAdminWebhook,
@@ -47,6 +51,51 @@ describe("admin operations contracts", () => {
     expect(csv).not.toMatch(/(?:^|,)=SUM/u);
   });
 
+  it("requires a reason, confirmation and concurrency token for every control mutation", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const base = {
+      reason: "Investigating fixture account access.",
+      confirmation: true as const,
+      requestKey: id,
+      expectedUpdatedAt: "2026-10-06T00:00:00.000Z",
+      expectedAccessVersion: 1,
+    };
+    expect(AdminUserAccessMutationSchema.parse(base).expectedAccessVersion).toBe(1);
+    expect(AdminUserDisableMutationSchema.safeParse(base).success).toBe(false);
+    expect(
+      AdminUserDisableMutationSchema.parse({ ...base, typedConfirmation: id }).typedConfirmation,
+    ).toBe(id);
+    expect(AdminUserAccessMutationSchema.safeParse({ ...base, reason: "" }).success).toBe(false);
+    expect(
+      AdminUserAccessMutationSchema.safeParse({ ...base, reason: "password=secret" }).success,
+    ).toBe(false);
+    expect(
+      parseAdminMutation(
+        {
+          data: {
+            id,
+            userId: id,
+            body: "Follow up with the account owner.",
+            authorPrincipalId: id,
+            authorName: "Ada",
+            createdAt: "2026-10-06T00:00:00.000Z",
+            token: "private",
+          },
+          changed: true,
+          pending: false,
+          actionId: id,
+        },
+        parseAdminNote,
+      ),
+    ).toMatchObject({ changed: true, pending: false });
+    expect(
+      parseAdminMutation(
+        { data: { id }, changed: true, pending: false, actionId: id },
+        parseAdminNote,
+      ),
+    ).toBeNull();
+  });
+
   it("projects safe DTOs and drops prompts, payloads and credential-like text", () => {
     expect(
       parseAdminUser({
@@ -62,11 +111,20 @@ describe("admin operations contracts", () => {
         capturedGrossMinor: 100,
         lastActivityAt: "2026-10-06T00:00:00.000Z",
         lastActivityBasis: "observed_activity_proxy",
-        accessStatus: "unavailable",
-        accessStatusReason: "Account disablement is not available until Phase 5.",
+        accessStatus: "enabled",
+        accessStatusReason: null,
+        disabledAt: null,
+        accessVersion: 0,
+        capabilities: [
+          {
+            action: "users:disable",
+            allowed: true,
+            reason: null,
+          },
+        ],
         password: "never",
       }),
-    ).toMatchObject({ email: "ada@example.test", accessStatus: "unavailable" });
+    ).toMatchObject({ email: "ada@example.test", accessStatus: "enabled" });
     expect(
       parseAdminMandate({
         id: "11111111-1111-4111-8111-111111111111",
@@ -93,6 +151,7 @@ describe("admin operations contracts", () => {
         relatedProposalCount: 1,
         createdAt: "2026-10-06T00:00:00.000Z",
         updatedAt: "2026-10-06T00:00:00.000Z",
+        capabilities: [],
         originalPrompt: "Buy anything secretly",
       }),
     ).toMatchObject({ title: "Headphones", rules: null });

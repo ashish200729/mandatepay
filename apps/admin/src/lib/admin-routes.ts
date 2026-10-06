@@ -6,6 +6,7 @@ import {
   AdminDomainAuditQuerySchema,
   AdminMandateQuerySchema,
   AdminMandateVersionQuerySchema,
+  AdminNoteQuerySchema,
   AdminOrderQuerySchema,
   AdminOverviewQuerySchema,
   AdminPaymentQuerySchema,
@@ -23,6 +24,8 @@ import {
   parseAdminList,
   parseAdminMandate,
   parseAdminMandateVersion,
+  parseAdminMutation,
+  parseAdminNote,
   parseAdminNullableDetail,
   parseAdminOrder,
   parseAdminOverview,
@@ -55,7 +58,10 @@ function id(value: string | undefined) {
   return value !== undefined && AdminResourceIdSchema.safeParse(value).success;
 }
 
-export function matchAdminProxy(path: string[] | undefined): AdminProxyMatch | null {
+export function matchAdminProxy(
+  path: string[] | undefined,
+  method = "GET",
+): AdminProxyMatch | null {
   if (!path?.length || path.length > 3) return null;
   const [a, b, c] = path;
   if (path.length === 1) {
@@ -106,7 +112,10 @@ export function matchAdminProxy(path: string[] | undefined): AdminProxyMatch | n
     };
   if (path.length === 2 && a && nestedList(a) && id(b) === false && b) return null;
   if (path.length === 2 && a && id(b)) return detail(a, b!);
-  if (path.length === 3 && a && id(b) && c) return nested(a, b!, c);
+  if (path.length === 3 && a && id(b) && c) {
+    if (method === "POST") return nestedMutation(a, b!, c);
+    return nested(a, b!, c);
+  }
   return null;
 }
 
@@ -216,6 +225,29 @@ function nested(resource: string, recordId: string, child: string): AdminProxyMa
       upstreamPath: `proposals/${recordId}/reservation`,
       parseJson: (value) => parseAdminNullableDetail(value, parseAdminReservation),
     };
+  if (resource === "users" && child === "notes")
+    return json(`users/${recordId}/notes`, AdminNoteQuerySchema, (value) =>
+      parseAdminList(value, parseAdminNote),
+    );
+  return null;
+}
+
+function nestedMutation(resource: string, recordId: string, child: string): AdminProxyMatch | null {
+  const mutation = (parseItem: (value: unknown) => unknown | null): AdminProxyMatch => ({
+    methods: ["POST"],
+    kind: "json",
+    allowSearch: false,
+    upstreamPath: `${resource}/${recordId}/${child}`,
+    parseJson: (value) => parseAdminMutation(value, parseItem),
+  });
+  if (resource === "users") {
+    if (["disable", "enable", "revoke-sessions", "disable-autonomy"].includes(child))
+      return mutation(parseAdminUser);
+    if (child === "notes") return mutation(parseAdminNote);
+  }
+  if (resource === "mandates" && (child === "pause" || child === "revoke"))
+    return mutation(parseAdminMandate);
+  if (resource === "proposals" && child === "re-evaluate") return mutation(parseAdminProposal);
   return null;
 }
 

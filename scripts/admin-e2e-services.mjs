@@ -45,7 +45,8 @@ const runtime = createAuthRuntime({
 });
 const app = await createApp({
   authRuntime: runtime,
-  testAdminReadMaximum: 500,
+  testAdminReadMaximum: 2000,
+  testAdminMutationMaximum: 100,
   config: {
     HOST: "127.0.0.1",
     PORT: 4121,
@@ -72,6 +73,7 @@ const fixture = {
   ownerUserId: "",
   mandateId: "",
   proposalId: "",
+  proposedProposalId: "",
   approvalId: "",
   paymentId: "",
   refundId: "",
@@ -90,10 +92,8 @@ async function cleanup() {
   await database.spendReservation.deleteMany({
     where: { mandate: { userId: { in: userIds } } },
   });
-  await database.adminActionRequest.deleteMany({
-    where: { principalId: principal?.id ?? "missing" },
-  });
-  await database.adminPrincipal.deleteMany({ where: { userId: { in: userIds } } });
+  await database.adminActionRequest.deleteMany();
+  await database.adminPrincipal.deleteMany();
   await database.session.deleteMany({ where: { userId: { in: userIds } } });
 }
 async function shutdown(code = 0) {
@@ -129,6 +129,10 @@ try {
   principal = (await new AdminRepository(database).bootstrap(userIds[0])).principal;
   const ownerUserId = userIds[1];
   fixture.ownerUserId = ownerUserId;
+  await database.user.update({
+    where: { id: ownerUserId },
+    data: { globalAutonomousPurchasingEnabled: true },
+  });
   const mandate = await new MandateRepository(database).create({
     userId: ownerUserId,
     title: "Browser operations headphones",
@@ -167,6 +171,17 @@ try {
     idempotencyKey: `admin-ops-browser-proposal-${randomUUID()}`,
   });
   fixture.proposalId = proposal.id;
+  const proposed = await new ProposalRepository(database).create({
+    userId: ownerUserId,
+    mandateId: mandate.id,
+    mandateVersionId: mandate.activeVersionId ?? "",
+    productSnapshotId: product.id,
+    quantity: 1,
+    shipping: 0n,
+    tax: 0n,
+    idempotencyKey: `admin-ops-browser-proposed-${randomUUID()}`,
+  });
+  fixture.proposedProposalId = proposed.id;
   await database.policyDecision.create({
     data: {
       proposalId: proposal.id,

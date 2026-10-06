@@ -73,7 +73,6 @@ export class AdminActionRepository {
           targetType: event.targetType,
           targetId: event.targetId,
           reason: event.reason,
-          before: event.beforeSummaryJson,
           requested: requestSummary,
         }),
       )

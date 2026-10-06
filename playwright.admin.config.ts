@@ -13,6 +13,7 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
+  globalTeardown: "./scripts/admin-e2e-teardown.mjs",
   webServer: {
     command: "node scripts/admin-e2e-services.mjs",
     url: "http://127.0.0.1:3121/login",

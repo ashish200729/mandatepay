@@ -54,6 +54,8 @@ export interface CreateAppOptions {
   testAuthPostMaximum?: number;
   /** Isolated admin tests can raise the principal read bucket without changing production limits. */
   testAdminReadMaximum?: number;
+  /** Isolated admin tests can raise the principal mutation bucket without changing production limits. */
+  testAdminMutationMaximum?: number;
 }
 
 type RateLimitEntry = {
@@ -145,10 +147,18 @@ async function readAuthenticatedUser(
         email: true,
         emailVerified: true,
         globalAutonomousPurchasingEnabled: true,
+        disabledAt: true,
       },
     });
     if (!user) {
       await reply.status(401).send({ error: "Unauthorized", code: "UNAUTHORIZED" });
+      return null;
+    }
+    if (user.disabledAt) {
+      await reply.status(403).send({
+        error: "This account is disabled.",
+        code: "ACCOUNT_DISABLED",
+      });
       return null;
     }
     if (runtime.requireEmailVerification && !user.emailVerified) {
@@ -181,6 +191,56 @@ async function forwardAuthResponse(response: Response, reply: FastifyReply) {
   return reply.status(response.status).send(body || null);
 }
 
+async function rejectDisabledCredentialSession(
+  runtime: AuthRuntime,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  response: Response,
+) {
+  const path = request.url.split("?")[0] ?? "";
+  const credential =
+    request.method === "POST" &&
+    (path.endsWith("/sign-in/email") || path.endsWith("/sign-up/email"));
+  if (!credential || response.status >= 400) return forwardAuthResponse(response, reply);
+  const setCookies =
+    typeof (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie ===
+    "function"
+      ? (response.headers as Headers & { getSetCookie: () => string[] }).getSetCookie()
+      : [];
+  const body = await response.text();
+  let userId: string | undefined;
+  try {
+    const parsed = JSON.parse(body) as { user?: { id?: unknown } };
+    userId = typeof parsed.user?.id === "string" ? parsed.user.id : undefined;
+  } catch {
+    return reconstructAuthResponse(reply, response, setCookies, body);
+  }
+  if (!userId) return reconstructAuthResponse(reply, response, setCookies, body);
+  const user = await runtime.database.user.findUnique({
+    where: { id: userId },
+    select: { disabledAt: true },
+  });
+  if (!user?.disabledAt) return reconstructAuthResponse(reply, response, setCookies, body);
+  await runtime.database.session.deleteMany({ where: { userId } });
+  return reply.status(403).send({
+    error: "This account is disabled.",
+    code: "ACCOUNT_DISABLED",
+  });
+}
+
+function reconstructAuthResponse(
+  reply: FastifyReply,
+  response: Response,
+  setCookies: string[],
+  body: string,
+) {
+  response.headers.forEach((value, key) => {
+    if (key !== "set-cookie") reply.header(key, value);
+  });
+  if (setCookies.length) reply.header("set-cookie", setCookies);
+  return reply.status(response.status).send(body || null);
+}
+
 function buildAuthRequest(request: FastifyRequest, config: RuntimeConfig): Request {
   const url = new URL(request.url, config.APP_URL);
   const headers = fromNodeHeaders(request.headers);
@@ -205,7 +265,9 @@ function buildAuthRequest(request: FastifyRequest, config: RuntimeConfig): Reque
 export async function createApp(options: CreateAppOptions = {}) {
   const config = options.config ?? env;
   if (
-    (options.testAuthPostMaximum !== undefined || options.testAdminReadMaximum !== undefined) &&
+    (options.testAuthPostMaximum !== undefined ||
+      options.testAdminReadMaximum !== undefined ||
+      options.testAdminMutationMaximum !== undefined) &&
     (config.NODE_ENV !== "test" ||
       (options.testAuthPostMaximum !== undefined &&
         (!Number.isSafeInteger(options.testAuthPostMaximum) ||
@@ -214,7 +276,11 @@ export async function createApp(options: CreateAppOptions = {}) {
       (options.testAdminReadMaximum !== undefined &&
         (!Number.isSafeInteger(options.testAdminReadMaximum) ||
           options.testAdminReadMaximum < 1 ||
-          options.testAdminReadMaximum > 500)))
+          options.testAdminReadMaximum > 2000)) ||
+      (options.testAdminMutationMaximum !== undefined &&
+        (!Number.isSafeInteger(options.testAdminMutationMaximum) ||
+          options.testAdminMutationMaximum < 1 ||
+          options.testAdminMutationMaximum > 500)))
   ) {
     throw new Error("Authentication fixture limits are supported only by isolated test servers.");
   }
@@ -254,6 +320,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     nodeEnv: config.NODE_ENV,
     discoveryMode: config.PRODUCT_DISCOVERY_MODE,
     readMaximum: options.testAdminReadMaximum,
+    mutationMaximum: options.testAdminMutationMaximum,
   });
 
   app.get("/health", async () => ({
@@ -323,7 +390,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       if (!runtime) return sendUnavailable(reply);
       try {
         const response = await runtime.auth.handler(buildAuthRequest(request, config));
-        return forwardAuthResponse(response, reply);
+        return rejectDisabledCredentialSession(runtime, request, reply, response);
       } catch {
         request.log.error(
           {

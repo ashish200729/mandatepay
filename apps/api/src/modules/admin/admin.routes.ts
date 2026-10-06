@@ -13,6 +13,7 @@ import { originsFor, trustedOrigin } from "../../origins.js";
 import { createMutationRateLimiter } from "../../services/rate-limits.js";
 import { AdminAuthError, adminMe, requireSuperAdmin, type AdminIdentity } from "./admin.auth.js";
 import { registerAdminOperationRoutes } from "./admin.operations.js";
+import { registerAdminControlRoutes } from "./admin.controls.js";
 
 const signInSchema = z
   .object({ email: z.email().max(320), password: z.string().min(1).max(128) })
@@ -29,12 +30,13 @@ export function registerAdminRoutes(
     nodeEnv: "development" | "test" | "production";
     discoveryMode?: string;
     readMaximum?: number;
+    mutationMaximum?: number;
   },
 ) {
   const origins = originsFor(options.adminOrigin, options.nodeEnv);
   const authAttempts = createMutationRateLimiter({ maximum: 5 });
   const reads = createMutationRateLimiter({ maximum: options.readMaximum ?? 120 });
-  const mutations = createMutationRateLimiter({ maximum: 20 });
+  const mutations = createMutationRateLimiter({ maximum: options.mutationMaximum ?? 20 });
   void app.register(
     async (scope) => {
       const identities = new WeakMap<FastifyRequest, AdminIdentity>();
@@ -130,6 +132,14 @@ export function registerAdminRoutes(
         getDatabase: () => options.runtime!.database,
         getSecret: () => options.runtime!.auth.options.secret,
         discoveryMode: options.discoveryMode,
+        sendError,
+        trace,
+      });
+      registerAdminControlRoutes(scope, {
+        getDatabase: () => options.runtime!.database,
+        getSecret: () => options.runtime!.auth.options.secret,
+        runtime: () => options.runtime!,
+        identity: (request) => identities.get(request)!,
         sendError,
         trace,
       });
@@ -259,6 +269,7 @@ export function registerAdminRoutes(
               !current ||
               current.expiresAt <= now ||
               !current.user.emailVerified ||
+              current.user.disabledAt ||
               !principal?.active ||
               principal.role !== "ADMIN_SUPER" ||
               principal.singletonKey !== "main"
@@ -397,6 +408,8 @@ export function registerAdminRoutes(
         }
       });
       scope.setErrorHandler((error, request, reply) => {
+        if (error instanceof AdminAuthError)
+          return sendError(reply, request, error.code, error.status, error.message);
         const invalid =
           typeof error === "object" &&
           error !== null &&

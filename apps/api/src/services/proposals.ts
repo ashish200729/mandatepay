@@ -320,8 +320,17 @@ async function loadLockedContext(
   user: UserOwner,
   proposalId: string,
   now: Date,
+  options: { allowDisabledAccount?: boolean } = {},
 ) {
   await tx.$queryRawUnsafe('SELECT id FROM "User" WHERE id = $1 FOR UPDATE', user.id);
+  const account = await tx.user.findUnique({
+    where: { id: user.id },
+    select: { disabledAt: true },
+  });
+  if (!account) throw new DatabaseError("NOT_FOUND", "User was not found.");
+  if (account.disabledAt && !options.allowDisabledAccount) {
+    throw new DatabaseError("INVALID_STATE", "Account is disabled.");
+  }
   const proposal = await tx.purchaseProposal.findUnique({
     where: { id: proposalId, isSample: false },
     include: { productSnapshot: true, mandate: true, mandateVersion: true, payment: true },
@@ -449,125 +458,135 @@ export async function evaluateProposal(
   database: DatabaseClient,
   user: UserOwner,
   proposalId: string,
+  options: { allowDisabledAccount?: boolean } = {},
 ) {
-  return database.$transaction(async (tx) => {
-    const now = new Date();
-    const loaded = await loadLockedContext(tx, user, proposalId, now);
-    const dbUser = await tx.user.findUnique({
-      where: { id: user.id },
-      select: { id: true, globalAutonomousPurchasingEnabled: true },
-    });
-    if (!dbUser) throw new DatabaseError("NOT_FOUND", "User was not found.");
-    if (
-      loaded.proposal.status !== ProposalStatus.PROPOSED &&
-      loaded.proposal.status !== ProposalStatus.POLICY_CHECKED &&
-      loaded.proposal.status !== ProposalStatus.AWAITING_APPROVAL
-    ) {
-      throw new DatabaseError(
-        "INVALID_STATE",
-        "Proposal cannot be evaluated in its current state.",
-      );
-    }
-    const spend = await spendContext(
-      tx,
-      loaded.mandate.id,
-      loaded.proposal.id,
-      user.id,
-      loaded.proposal.productSnapshot.merchant,
-      now,
-    );
-    const spendSnapshot = {
-      ...spend,
-      globalAutonomousPurchasingEnabled: dbUser.globalAutonomousPurchasingEnabled,
-    };
-    const decision = evaluateValidatedPolicy(policyContext(loaded, spend, dbUser, now));
-    const nextStatus =
-      decision.decision === "ALLOW"
-        ? ProposalStatus.AUTHORIZED
-        : decision.decision === "REQUIRE_APPROVAL"
-          ? ProposalStatus.AWAITING_APPROVAL
-          : ProposalStatus.BLOCKED;
-    const persistedDecision = await tx.policyDecision.create({
-      data: {
-        proposalId: loaded.proposal.id,
-        mandateVersionId: loaded.proposal.mandateVersionId,
-        decision: decision.decision as PolicyDecisionType,
-        reasonCodes: decision.reasonCodes,
-        rulesSnapshot: loaded.rules,
-        spendSnapshot,
-      },
-    });
-    await tx.purchaseProposal.update({
-      where: { id: loaded.proposal.id },
-      data: { status: nextStatus },
-    });
-    if (decision.decision === "ALLOW") {
-      await createReservation(tx, loaded.proposal, loaded.mandate, now);
-    } else if (decision.decision === "REQUIRE_APPROVAL") {
-      const existingApproval = await tx.approval.findUnique({
-        where: { proposalId: loaded.proposal.id },
-      });
-      if (existingApproval) {
-        if (existingApproval.proposalFingerprint !== loaded.proposal.proposalFingerprint) {
-          throw new DatabaseError("CONFLICT", "Approval fingerprint is stale.");
-        }
-        if (
-          existingApproval.decision !== ApprovalDecision.PENDING ||
-          existingApproval.expiresAt <= now
-        ) {
-          throw new DatabaseError("INVALID_STATE", "Approval is no longer available.");
-        }
-      } else {
-        const requestedExpiry = new Date(now.getTime() + 15 * 60_000);
-        const deadline = loaded.proposal.expiresAt ?? loaded.mandate.expiresAt;
-        const expiresAt = new Date(Math.min(requestedExpiry.getTime(), deadline.getTime()));
-        await tx.approval.create({
-          data: {
-            proposalId: loaded.proposal.id,
-            userId: user.id,
-            decision: ApprovalDecision.PENDING,
-            proposalFingerprint: loaded.proposal.proposalFingerprint,
-            expiresAt,
-          },
-        });
-      }
-    }
-    const eventType =
-      decision.decision === "ALLOW"
-        ? AuditEventType.POLICY_ALLOWED
-        : decision.decision === "REQUIRE_APPROVAL"
-          ? AuditEventType.POLICY_APPROVAL_REQUIRED
-          : AuditEventType.POLICY_BLOCKED;
-    await tx.auditEvent.create({
-      data: {
-        userId: user.id,
-        eventType,
-        entityType: AuditEntityType.PURCHASE_PROPOSAL,
-        entityId: loaded.proposal.id,
-        payload: {
-          proposalId: loaded.proposal.id,
-          mandateId: loaded.mandate.id,
-          mandateVersionId: loaded.proposal.mandateVersionId,
-          decision: decision.decision,
-          reasonCodes: decision.reasonCodes,
-        },
-      },
-    });
-    const updated = await tx.purchaseProposal.findUnique({
-      where: { id: loaded.proposal.id },
-      include: {
-        policyDecisions: { orderBy: { createdAt: "desc" }, take: 1 },
-        productSnapshot: true,
-        mandateVersion: true,
-        approval: true,
-      },
-    });
-    if (!updated) throw new DatabaseError("NOT_FOUND", "Proposal disappeared during evaluation.");
-    return {
-      proposal: serializeProposal(updated),
-      decision: serializeDecision(persistedDecision),
-    };
+  return database.$transaction((tx) =>
+    evaluateProposalInTransaction(tx, user, proposalId, options),
+  );
+}
+
+export async function evaluateProposalInTransaction(
+  tx: TransactionClient,
+  user: UserOwner,
+  proposalId: string,
+  options: { allowDisabledAccount?: boolean } = {},
+) {
+  const now = new Date();
+  const loaded = await loadLockedContext(tx, user, proposalId, now, options);
+  const dbUser = await tx.user.findUnique({
+    where: { id: user.id },
+    select: { id: true, globalAutonomousPurchasingEnabled: true, disabledAt: true },
   });
+  if (!dbUser) throw new DatabaseError("NOT_FOUND", "User was not found.");
+  if (dbUser.disabledAt && !options.allowDisabledAccount) {
+    throw new DatabaseError("INVALID_STATE", "Account is disabled.");
+  }
+  if (
+    loaded.proposal.status !== ProposalStatus.PROPOSED &&
+    loaded.proposal.status !== ProposalStatus.POLICY_CHECKED &&
+    loaded.proposal.status !== ProposalStatus.AWAITING_APPROVAL
+  ) {
+    throw new DatabaseError("INVALID_STATE", "Proposal cannot be evaluated in its current state.");
+  }
+  const spend = await spendContext(
+    tx,
+    loaded.mandate.id,
+    loaded.proposal.id,
+    user.id,
+    loaded.proposal.productSnapshot.merchant,
+    now,
+  );
+  const spendSnapshot = {
+    ...spend,
+    globalAutonomousPurchasingEnabled: dbUser.globalAutonomousPurchasingEnabled,
+  };
+  const decision = evaluateValidatedPolicy(policyContext(loaded, spend, dbUser, now));
+  const nextStatus =
+    decision.decision === "ALLOW"
+      ? ProposalStatus.AUTHORIZED
+      : decision.decision === "REQUIRE_APPROVAL"
+        ? ProposalStatus.AWAITING_APPROVAL
+        : ProposalStatus.BLOCKED;
+  const persistedDecision = await tx.policyDecision.create({
+    data: {
+      proposalId: loaded.proposal.id,
+      mandateVersionId: loaded.proposal.mandateVersionId,
+      decision: decision.decision as PolicyDecisionType,
+      reasonCodes: decision.reasonCodes,
+      rulesSnapshot: loaded.rules,
+      spendSnapshot,
+    },
+  });
+  await tx.purchaseProposal.update({
+    where: { id: loaded.proposal.id },
+    data: { status: nextStatus },
+  });
+  if (decision.decision === "ALLOW") {
+    await createReservation(tx, loaded.proposal, loaded.mandate, now);
+  } else if (decision.decision === "REQUIRE_APPROVAL") {
+    const existingApproval = await tx.approval.findUnique({
+      where: { proposalId: loaded.proposal.id },
+    });
+    if (existingApproval) {
+      if (existingApproval.proposalFingerprint !== loaded.proposal.proposalFingerprint) {
+        throw new DatabaseError("CONFLICT", "Approval fingerprint is stale.");
+      }
+      if (
+        existingApproval.decision !== ApprovalDecision.PENDING ||
+        existingApproval.expiresAt <= now
+      ) {
+        throw new DatabaseError("INVALID_STATE", "Approval is no longer available.");
+      }
+    } else {
+      const requestedExpiry = new Date(now.getTime() + 15 * 60_000);
+      const deadline = loaded.proposal.expiresAt ?? loaded.mandate.expiresAt;
+      const expiresAt = new Date(Math.min(requestedExpiry.getTime(), deadline.getTime()));
+      await tx.approval.create({
+        data: {
+          proposalId: loaded.proposal.id,
+          userId: user.id,
+          decision: ApprovalDecision.PENDING,
+          proposalFingerprint: loaded.proposal.proposalFingerprint,
+          expiresAt,
+        },
+      });
+    }
+  }
+  const eventType =
+    decision.decision === "ALLOW"
+      ? AuditEventType.POLICY_ALLOWED
+      : decision.decision === "REQUIRE_APPROVAL"
+        ? AuditEventType.POLICY_APPROVAL_REQUIRED
+        : AuditEventType.POLICY_BLOCKED;
+  await tx.auditEvent.create({
+    data: {
+      userId: user.id,
+      eventType,
+      entityType: AuditEntityType.PURCHASE_PROPOSAL,
+      entityId: loaded.proposal.id,
+      payload: {
+        proposalId: loaded.proposal.id,
+        mandateId: loaded.mandate.id,
+        mandateVersionId: loaded.proposal.mandateVersionId,
+        decision: decision.decision,
+        reasonCodes: decision.reasonCodes,
+      },
+    },
+  });
+  const updated = await tx.purchaseProposal.findUnique({
+    where: { id: loaded.proposal.id },
+    include: {
+      policyDecisions: { orderBy: { createdAt: "desc" }, take: 1 },
+      productSnapshot: true,
+      mandateVersion: true,
+      approval: true,
+    },
+  });
+  if (!updated) throw new DatabaseError("NOT_FOUND", "Proposal disappeared during evaluation.");
+  return {
+    proposal: serializeProposal(updated),
+    decision: serializeDecision(persistedDecision),
+  };
 }
 
 export async function approveProposal(

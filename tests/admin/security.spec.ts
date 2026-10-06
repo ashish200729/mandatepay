@@ -1,9 +1,5 @@
 import { test, expect } from "@playwright/test";
 
-test.afterAll(async ({ request }) => {
-  await request.post("http://127.0.0.1:4121/__admin_fixture/cleanup");
-});
-
 test("admin identity, BFF, expiry and responsive session flows", async ({
   page,
   browser,
@@ -244,24 +240,44 @@ test("foundation dialogs trap focus, validate reasons and require fresh typed re
   await expect(danger.getByRole("button", { name: "Review action" })).toBeDisabled();
   await danger.getByLabel("Target confirmation", { exact: true }).fill("fixture-1");
   await expect(danger.getByRole("button", { name: "Review action" })).toBeDisabled();
-  const me = await (await page.request.get("/api/admin/me")).json();
   // UI response simulations only; real reauth/session rotation is verified above.
+  const now = Date.now();
+  const simulatedMe = {
+    data: {
+      user: {
+        id: "fixture-admin",
+        name: "Browser fixture",
+        email: "admin@mandatepay.local",
+        emailVerified: true,
+      },
+      principal: { id: "fixture-principal", role: "ADMIN_SUPER" },
+      session: {
+        expiresAt: new Date(now + 60 * 60_000).toISOString(),
+        idleExpiresAt: new Date(now + 30 * 60_000).toISOString(),
+        freshAuthUntil: new Date(now + 10 * 60_000).toISOString(),
+      },
+      capabilities: ["session:read", "session:reauthenticate"],
+    },
+  };
   let reauthCount = 0;
-  await page.route("**/api/admin/reauth", async (route) => {
-    reauthCount++;
-    if (reauthCount === 1)
-      await route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: { code: "ADMIN_SIGN_IN_REJECTED" } }),
-      });
-    else
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(me),
-      });
-  });
+  await page.route(
+    (url) => url.pathname.replace(/\/$/u, "").endsWith("/api/admin/reauth"),
+    async (route) => {
+      reauthCount++;
+      if (reauthCount === 1)
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "ADMIN_SIGN_IN_REJECTED" } }),
+        });
+      else
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(simulatedMe),
+        });
+    },
+  );
   await danger.getByRole("button", { name: "Confirm password", exact: true }).click();
   const reauth = page.getByRole("dialog", { name: "Confirm your password", exact: true });
   await reauth.getByLabel("Confirm your password").fill("invalid-fixture-password");

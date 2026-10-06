@@ -26,6 +26,7 @@ export const resourceSpecs = {
       filters: {
         verified: ["true", "false"],
         autonomy: ["true", "false"],
+        disabled: ["true", "false"],
         hasActiveMandate: ["true", "false"],
       },
       sortKeys: ["createdAt"],
@@ -34,6 +35,7 @@ export const resourceSpecs = {
     filters: [
       { key: "verified", label: "Verified", options: trueFalse },
       { key: "autonomy", label: "Autonomous purchasing", options: trueFalse },
+      { key: "disabled", label: "Disabled", options: trueFalse },
       { key: "hasActiveMandate", label: "Has active mandate", options: trueFalse },
     ] satisfies SelectFilter[],
     fields: [] satisfies TextFilter[],

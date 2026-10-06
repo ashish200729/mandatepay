@@ -9,9 +9,9 @@ const tones: Record<StatusTone, string> = {
   info: "bg-admin-info text-admin-info-foreground",
 };
 export function statusTone(status: string): StatusTone {
-  if (["SUCCESS", "ACTIVE", "COMPLETED", "PROCESSED", "ready", "VERIFIED"].includes(status))
+  if (["SUCCESS", "ACTIVE", "COMPLETED", "PROCESSED", "ready", "VERIFIED", "ENABLED"].includes(status))
     return "success";
-  if (["FAILURE", "FAILED", "DENIED", "BLOCKED", "unavailable", "REVOKED"].includes(status))
+  if (["FAILURE", "FAILED", "DENIED", "BLOCKED", "unavailable", "REVOKED", "DISABLED"].includes(status))
     return "danger";
   if (
     [

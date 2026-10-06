@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { AdminResourceIdSchema, AdminTraceIdSchema } from "./admin-audit.js";
+import {
+  AdminNoteBodySchema,
+  AdminReasonSchema,
+  AdminResourceIdSchema,
+  AdminTraceIdSchema,
+} from "./admin-audit.js";
 import { CanonicalMandateSchema, PRODUCT_CONDITIONS, type CanonicalMandate } from "./mandates.js";
 import { POLICY_DECISIONS, POLICY_REASON_CODES } from "./policy.js";
 import { MANDATE_STATUSES, PROPOSAL_STATUSES } from "./state-machine.js";
@@ -41,6 +46,9 @@ export const ADMIN_RESERVATION_WINDOWS = ["TRANSACTION", "DAILY", "WEEKLY", "MON
 export const ADMIN_PRODUCT_CONDITIONS = [...PRODUCT_CONDITIONS, "UNKNOWN"] as const;
 export const ADMIN_DOMAIN_EVENT_TYPES = [
   "USER_CREATED",
+  "USER_DISABLED",
+  "USER_ENABLED",
+  "USER_SESSIONS_REVOKED",
   "GLOBAL_AUTONOMY_UPDATED",
   "MANDATE_PARSE_REQUESTED",
   "MANDATE_PARSED",
@@ -130,7 +138,11 @@ export const HIGH_RISK_ADMIN_ACTIONS = [
   "ADMIN_FEATURE_FLAG_CHANGED",
   "ADMIN_MAINTENANCE_MODE_CHANGED",
 ] as const;
-export const HIGH_RISK_DOMAIN_EVENTS = ["PAYMENT_FAILED", "REFUND_FAILED"] as const;
+export const HIGH_RISK_DOMAIN_EVENTS = [
+  "PAYMENT_FAILED",
+  "REFUND_FAILED",
+  "USER_DISABLED",
+] as const;
 export const ADMIN_WEBHOOK_ERROR_CODES = [
   "RECOVERY_EXHAUSTED",
   "WEBHOOK_TIMEOUT",
@@ -154,6 +166,24 @@ export const ADMIN_OPERATION_CAPABILITIES = [
   "webhooks:read",
   "domain-audit:read",
   "exports:read",
+  "users:disable",
+  "users:enable",
+  "users:revoke-sessions",
+  "users:disable-autonomy",
+  "users:notes",
+  "mandates:pause",
+  "mandates:revoke",
+  "proposals:re-evaluate",
+] as const;
+export const ADMIN_ENTITY_ACTIONS = [
+  "users:disable",
+  "users:enable",
+  "users:revoke-sessions",
+  "users:disable-autonomy",
+  "users:notes",
+  "mandates:pause",
+  "mandates:revoke",
+  "proposals:re-evaluate",
 ] as const;
 export const ADMIN_CSV_MAX_ROWS = 1000;
 export const ADMIN_OVERVIEW_DEFAULT_DAYS = 30;
@@ -227,6 +257,7 @@ export const AdminUserQuerySchema = withDates({
   q: z.string().trim().max(200).optional(),
   verified: booleanQuery.optional(),
   autonomy: booleanQuery.optional(),
+  disabled: booleanQuery.optional(),
   hasActiveMandate: booleanQuery.optional(),
   sort: z.enum(["createdAt"]).optional(),
   direction: z.enum(["asc", "desc"]).optional(),
@@ -238,6 +269,9 @@ export const AdminUserSessionQuerySchema = listBase
   .extend({ live: booleanQuery.optional() })
   .strict();
 export type AdminUserSessionQuery = z.infer<typeof AdminUserSessionQuerySchema>;
+
+export const AdminNoteQuerySchema = listBase.omit({ from: true, to: true }).strict();
+export type AdminNoteQuery = z.infer<typeof AdminNoteQuerySchema>;
 
 export const AdminMandateQuerySchema = withDates({
   q: z.string().trim().max(200).optional(),
@@ -402,6 +436,13 @@ export const AdminReservationSchema = z.object({
 });
 export type AdminReservation = z.infer<typeof AdminReservationSchema>;
 
+export const AdminEntityCapabilitySchema = z.object({
+  action: z.enum(ADMIN_ENTITY_ACTIONS),
+  allowed: z.boolean(),
+  reason: z.string().max(200).nullable(),
+});
+export type AdminEntityCapability = z.infer<typeof AdminEntityCapabilitySchema>;
+
 export const AdminUserSchema = z.object({
   id: AdminResourceIdSchema,
   name: z.string().max(200).nullable(),
@@ -410,13 +451,16 @@ export const AdminUserSchema = z.object({
   autonomousPurchasingEnabled: z.boolean(),
   createdAt: utc,
   updatedAt: utc,
+  accessVersion: z.number().int().nonnegative(),
   activeMandateCount: z.number().int().nonnegative(),
   proposalCount: z.number().int().nonnegative(),
   capturedGrossMinor: money,
   lastActivityAt: utc,
   lastActivityBasis: z.literal("observed_activity_proxy"),
-  accessStatus: z.literal("unavailable"),
-  accessStatusReason: z.string(),
+  accessStatus: z.enum(["enabled", "disabled"]),
+  accessStatusReason: z.string().max(255).nullable(),
+  disabledAt: utc.nullable(),
+  capabilities: z.array(AdminEntityCapabilitySchema).max(16),
 });
 export type AdminUser = z.infer<typeof AdminUserSchema>;
 
@@ -428,6 +472,59 @@ export const AdminUserSessionSchema = z.object({
   isCurrent: z.boolean(),
 });
 export type AdminUserSession = z.infer<typeof AdminUserSessionSchema>;
+
+export const AdminNoteSchema = z.object({
+  id: z.uuid(),
+  userId: AdminResourceIdSchema,
+  body: z.string().min(1).max(2000),
+  authorPrincipalId: z.uuid(),
+  authorName: z.string().max(200).nullable(),
+  createdAt: utc,
+});
+export type AdminNote = z.infer<typeof AdminNoteSchema>;
+
+const mutationBase = {
+  reason: AdminReasonSchema,
+  confirmation: z.literal(true),
+  requestKey: AdminTraceIdSchema,
+};
+export const AdminUserAccessMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedUpdatedAt: utc,
+    expectedAccessVersion: z.number().int().nonnegative(),
+    typedConfirmation: AdminResourceIdSchema.optional(),
+  })
+  .strict();
+export type AdminUserAccessMutation = z.infer<typeof AdminUserAccessMutationSchema>;
+export const AdminUserDisableMutationSchema = AdminUserAccessMutationSchema.extend({
+  typedConfirmation: AdminResourceIdSchema,
+}).strict();
+export const AdminMandateLifecycleMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedVersion: z.number().int().positive(),
+    expectedStatus: z.enum(MANDATE_STATUSES),
+    typedConfirmation: AdminResourceIdSchema,
+  })
+  .strict();
+export type AdminMandateLifecycleMutation = z.infer<typeof AdminMandateLifecycleMutationSchema>;
+export const AdminProposalReevaluateMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedStatus: z.enum(PROPOSAL_STATUSES),
+    expectedUpdatedAt: utc,
+  })
+  .strict();
+export type AdminProposalReevaluateMutation = z.infer<typeof AdminProposalReevaluateMutationSchema>;
+export const AdminNoteCreateSchema = z
+  .object({
+    reason: AdminReasonSchema,
+    requestKey: AdminTraceIdSchema,
+    body: AdminNoteBodySchema,
+  })
+  .strict();
+export type AdminNoteCreate = z.infer<typeof AdminNoteCreateSchema>;
 
 export const AdminMandateSchema = z.object({
   id: AdminResourceIdSchema,
@@ -450,6 +547,7 @@ export const AdminMandateSchema = z.object({
   relatedProposalCount: z.number().int().nonnegative(),
   createdAt: utc,
   updatedAt: utc,
+  capabilities: z.array(AdminEntityCapabilitySchema).max(16),
 });
 export type AdminMandate = z.infer<typeof AdminMandateSchema>;
 
@@ -495,6 +593,7 @@ export const AdminProposalSchema = z.object({
   isSample: z.boolean(),
   createdAt: utc,
   updatedAt: utc,
+  capabilities: z.array(AdminEntityCapabilitySchema).max(16),
 });
 export type AdminProposal = z.infer<typeof AdminProposalSchema>;
 
@@ -820,6 +919,9 @@ export function parseAdminUser(value: unknown) {
 export function parseAdminUserSession(value: unknown) {
   return pick(AdminUserSessionSchema, value);
 }
+export function parseAdminNote(value: unknown) {
+  return pick(AdminNoteSchema, value);
+}
 export function parseAdminProduct(value: unknown) {
   return pick(AdminProductSchema, value);
 }
@@ -963,6 +1065,28 @@ export function parseAdminNullableDetail<T>(
   return data ? { data } : null;
 }
 
+export function parseAdminMutation<T>(
+  value: unknown,
+  parseItem: (item: unknown) => T | null,
+): { data: T; changed: boolean; pending: boolean; actionId: string } | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const data = parseItem(source.data);
+  if (
+    !data ||
+    typeof source.changed !== "boolean" ||
+    typeof source.pending !== "boolean" ||
+    !AdminTraceIdSchema.safeParse(source.actionId).success
+  )
+    return null;
+  return {
+    data,
+    changed: source.changed,
+    pending: source.pending,
+    actionId: AdminTraceIdSchema.parse(source.actionId),
+  };
+}
+
 export const ADMIN_EXPORT_COLUMNS = {
   users: [
     "id",
@@ -970,6 +1094,7 @@ export const ADMIN_EXPORT_COLUMNS = {
     "email",
     "emailVerified",
     "autonomousPurchasingEnabled",
+    "accessStatus",
     "activeMandateCount",
     "proposalCount",
     "capturedGrossMinor",

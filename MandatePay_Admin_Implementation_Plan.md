@@ -1631,28 +1631,30 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 ### TODO
 
-- [ ] **P5-01** Add account disabled/suspended domain state if not already present.
-- [ ] **P5-02** Enforce disabled status in normal authentication/request path.
-- [ ] **P5-03** Implement admin disable user.
-- [ ] **P5-04** Implement admin enable user.
-- [ ] **P5-05** Implement revoke all user sessions.
-- [ ] **P5-06** Implement admin disable-autonomy action.
-- [ ] **P5-07** Decide whether admin may pause/revoke a mandate.
-- [ ] **P5-08** If allowed, route mandate action through existing state machine.
-- [ ] **P5-09** Implement proposal re-evaluation via AgentGuard.
-- [ ] **P5-10** Add admin notes.
-- [ ] **P5-11** Require reason for every mutation.
-- [ ] **P5-12** Require fresh auth for user disable and mandate revoke.
-- [ ] **P5-13** Write audit event in same transaction where practical.
-- [ ] **P5-14** Add optimistic concurrency/version check.
-- [ ] **P5-15** Add API integration tests.
-- [ ] **P5-16** Add E2E flows.
+- [x] **P5-01** Add account disabled/suspended domain state if not already present.
+- [x] **P5-02** Enforce disabled status in normal authentication/request path.
+- [x] **P5-03** Implement admin disable user.
+- [x] **P5-04** Implement admin enable user.
+- [x] **P5-05** Implement revoke all user sessions.
+- [x] **P5-06** Implement admin disable-autonomy action.
+- [x] **P5-07** Decide whether admin may pause/revoke a mandate.
+- [x] **P5-08** If allowed, route mandate action through existing state machine.
+- [x] **P5-09** Implement proposal re-evaluation via AgentGuard.
+- [x] **P5-10** Add admin notes.
+- [x] **P5-11** Require reason for every mutation.
+- [x] **P5-12** Require fresh auth for user disable and mandate revoke.
+- [x] **P5-13** Write audit event in same transaction where practical.
+- [x] **P5-14** Add optimistic concurrency/version check.
+- [x] **P5-15** Add API integration tests.
+- [x] **P5-16** Add E2E flows.
+
+**P5-07 decision:** Admin may pause and revoke a mandate through the existing MandateRepository state machine. Admin may not resume a mandate, edit permissions or limits, or force-allow a proposal. Fresh authentication is required for pause and revoke in addition to user disable.
 
 ### Exit criteria
 
-- [ ] Admin can safely intervene in user access.
-- [ ] No action bypasses existing mandate/proposal policy.
-- [ ] Every action is visible in admin audit.
+- [x] Admin can safely intervene in user access.
+- [x] No action bypasses existing mandate/proposal policy.
+- [x] Every action is visible in admin audit.
 
 **Feeds into:** Phase 6.
 
