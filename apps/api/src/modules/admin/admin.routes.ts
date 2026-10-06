@@ -16,6 +16,7 @@ import { AdminAuthError, adminMe, requireSuperAdmin, type AdminIdentity } from "
 import { registerAdminOperationRoutes } from "./admin.operations.js";
 import { registerAdminControlRoutes } from "./admin.controls.js";
 import { registerAdminFinanceRoutes } from "./admin.finance.js";
+import { registerAdminSettingRoutes } from "./admin.settings.js";
 
 const signInSchema = z
   .object({ email: z.email().max(320), password: z.string().min(1).max(128) })
@@ -156,6 +157,13 @@ export function registerAdminRoutes(
         getDatabase: () => options.runtime!.database,
         getSecret: () => options.runtime!.auth.options.secret,
         getPaypal: () => options.getPaypal?.() ?? null,
+        runtime: () => options.runtime!,
+        identity: (request) => identities.get(request)!,
+        sendError,
+        trace,
+      });
+      registerAdminSettingRoutes(scope, {
+        getDatabase: () => options.runtime!.database,
         runtime: () => options.runtime!,
         identity: (request) => identities.get(request)!,
         sendError,

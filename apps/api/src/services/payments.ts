@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertCustomerCapture, assertNewCheckout } from "./platform-controls.js";
 import { z } from "zod";
 import {
   AuditEntityType,
@@ -460,6 +461,7 @@ export async function createPaypalOrder(
       pending: false,
     };
   }
+  if (!proposal.payment?.paypalOrderId) await assertNewCheckout(context.database);
   const authoritative = await authoritativeDemoProduct(context, proposal.productSnapshot);
 
   const claimed = await context.database.$transaction(async (tx) => {
@@ -548,6 +550,7 @@ async function createProviderOrder(
   if (!context.paypal || !payment.paypalOrderRequestId) {
     throw new PaymentServiceError("PAYPAL_UNAVAILABLE");
   }
+  await assertNewCheckout(context.database);
   const input: CreateOrderInput = {
     amountMinor: toMinorUnits(safeAmount(payment.amount, "payment amount")),
     referenceId: payment.id,
@@ -805,6 +808,7 @@ export async function capturePaypalOrder(
   if (!payment.paypalOrderId || !payment.paypalCaptureRequestId) {
     throw new DatabaseError("INVALID_STATE", "A PayPal order must be created before capture.");
   }
+  await assertCustomerCapture(context.database);
   let order: PayPalOrder;
   try {
     order = await context.paypal.getOrder(payment.paypalOrderId);

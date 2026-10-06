@@ -1,5 +1,11 @@
 # Phase progress and handoff
 
+## Admin Phase 7 complete — 2026-10-07
+
+Implemented versioned platform settings and server-enforced kill switches. Administrators can change maintenance, registration, the shopping agent, agent proposals, Demo Catalog, Channel3, checkout, refund initiation, global autonomy and webhook processing. Critical switches require fresh authentication and the setting key typed exactly. Checkout, refunds, autonomy, agent chat, agent proposals and discovery are denied in the API that performs them. Maintenance blocks new checkout, capture and new refunds without stopping health checks, administration or webhook ingestion. Webhook recovery continues during maintenance unless processing is explicitly turned off. All 22 tasks and four exits are checked; [ADMIN_PHASE_7.md](./ADMIN_PHASE_7.md) records evidence.
+
+Verification: **351 unit**, **13 environment/boundary**, **91 API integration**, **eight database integration** and **nine admin browser tests** pass; affected lint/types, production API and admin builds, source/bundle boundaries and formatting on changed files pass. Migration `20261007000100_add_platform_settings` is applied to the local development and isolated test databases. No real administrator was provisioned. Phases 8–10 remain unchecked. Isolated browser tests raise the admin read limiter to 2000, the mutation limiter to 100, and the financial limiter to 50; production remains 120/20/5. No hosted deployment or new live-provider qualification is claimed; prior unrelated formatting/schema baseline remains untouched.
+
 ## Admin Phase 6 complete — 2026-10-06
 
 Implemented financial recovery that reuses existing payment, refund and verified-inbox services. Admins can reconcile PayPal orders/payments (never capture), initiate a remaining refund through `refundPayment` with fresh auth/typed ID/amount review, refresh known refund status, retry verified due or stale-lease webhooks, and reconcile a uniquely linked payment. Same-key retries do not duplicate captures or refunds. All 25 tasks and four exits are checked; [ADMIN_PHASE_6.md](./ADMIN_PHASE_6.md) records evidence. **P6-08:** admin refund initiation is included because remaining captured funds must be recoverable when the owner cannot act.

@@ -29,7 +29,10 @@ function routeReply(reply: FastifyReply): WebhookRouteReply {
   };
 }
 
-/** Registers an encapsulated raw JSON parser; global JSON routes are untouched. */
+/**
+ * Ingestion stays available during maintenance and when worker processing is off.
+ * Dropping a delivery here would lose a provider event that recovery can still replay.
+ */
 export function registerPayPalWebhookRoutes(
   app: FastifyInstance,
   service: PayPalWebhookService,

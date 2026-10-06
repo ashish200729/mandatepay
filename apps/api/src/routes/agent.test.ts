@@ -32,7 +32,10 @@ describe("shopping failure responses", () => {
     const app = Fastify();
     registerShoppingAgentRoutes(app, {
       app,
-      database: { mandate: { findMany: async () => [] } } as unknown as DatabaseClient,
+      database: {
+        mandate: { findMany: async () => [] },
+        platformSetting: { findMany: async () => [] },
+      } as unknown as DatabaseClient,
       appUrl: "http://127.0.0.1:3000",
       requireUser: async () => ({ id: "fixture-user" }),
       isTrustedOrigin: () => true,
@@ -102,6 +105,7 @@ describe("shopping chat through the catalog route", () => {
           }),
         },
         auditEvent: { create: audit },
+        platformSetting: { findMany: async () => [] },
       } as unknown as DatabaseClient;
       const origin = "http://localhost:3000";
       const requireUser = vi.fn(async (request, reply) => {

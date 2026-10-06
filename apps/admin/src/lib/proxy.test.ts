@@ -41,6 +41,17 @@ describe("admin BFF security", () => {
     expect(
       (await proxyAdmin(request("session", { method: "PATCH" }), { path: ["session"] })).status,
     ).toBe(405);
+    expect(
+      (
+        await proxyAdmin(
+          request("settings/payments.checkoutEnabled", {
+            method: "PATCH",
+            headers: { origin: "https://evil.example", "content-type": "application/json" },
+          }),
+          { path: ["settings", "payments.checkoutEnabled"] },
+        )
+      ).status,
+    ).toBe(403);
     expect((await proxyAdmin(request("session?token=private"), { path: ["session"] })).status).toBe(
       400,
     );

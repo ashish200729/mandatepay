@@ -1,5 +1,6 @@
 import type { PayPalClient, WebhookProcessingResult } from "@mandatepay/paypal";
 import type { DatabaseClient } from "@mandatepay/database";
+import { webhookProcessingOpen } from "./platform-controls.js";
 import {
   PrismaWebhookInboxStore,
   createPayPalWebhookService,
@@ -38,7 +39,7 @@ export class PayPalWebhookRecoveryWorker {
   private readonly service: ReturnType<typeof createPayPalWebhookService>;
 
   constructor(
-    database: DatabaseClient,
+    private readonly database: DatabaseClient,
     paypal: PayPalClient,
     private readonly options: WebhookRecoveryOptions = {},
   ) {
@@ -47,6 +48,10 @@ export class PayPalWebhookRecoveryWorker {
   }
 
   async runOnce(now = this.options.now ?? new Date()): Promise<WebhookRecoveryRunResult> {
+    // Maintenance does not reach this worker. Only an explicit stored false stops it.
+    if (!(await webhookProcessingOpen(this.database))) {
+      return { scanned: 0, claimed: 0, processed: 0, ignored: 0, pending: 0, exhausted: 0 };
+    }
     const maxAttempts = this.options.maxAttempts ?? WEBHOOK_RECOVERY_MAX_ATTEMPTS;
     const leaseMs = this.options.leaseMs ?? WEBHOOK_RECOVERY_LEASE_MS;
     const batchSize = this.options.batchSize ?? WEBHOOK_RECOVERY_BATCH_SIZE;

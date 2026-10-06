@@ -30,6 +30,7 @@ import {
   parseAdminOrder,
   parseAdminOverview,
   parseAdminPayment,
+  parseAdminPlatformSetting,
   parseAdminPolicyDecision,
   parseAdminProposal,
   parseAdminRefund,
@@ -37,6 +38,7 @@ import {
   parseAdminUser,
   parseAdminUserSession,
   parseAdminWebhook,
+  isPlatformSettingKey,
   type AdminExportResource,
 } from "@mandatepay/shared";
 import { parseAdminAuditResponse } from "./audit";
@@ -95,8 +97,24 @@ export function matchAdminProxy(
       return json("overview", AdminOverviewQuerySchema, (value) =>
         parseAdminDetail(value, parseAdminOverview),
       );
+    if (a === "settings")
+      return {
+        methods: GET,
+        kind: "json",
+        allowSearch: false,
+        upstreamPath: "settings",
+        parseJson: (value) => parseAdminList(value, parseAdminPlatformSetting),
+      };
     return list(a);
   }
+  if (path.length === 2 && a === "settings" && b && isPlatformSettingKey(b))
+    return {
+      methods: ["PATCH"],
+      kind: "json",
+      allowSearch: false,
+      upstreamPath: `settings/${b}`,
+      parseJson: (value) => parseAdminMutation(value, parseAdminPlatformSetting),
+    };
   if (path.length === 2 && a === "overview" && b === "activity")
     return json("overview/activity", AdminActivityQuerySchema, (value) =>
       parseAdminList(value, parseAdminActivityEvent),

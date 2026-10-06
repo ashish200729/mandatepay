@@ -15,6 +15,7 @@ import {
 } from "@mandatepay/database";
 import type { PayPalCapture, PayPalClient, PayPalOrder, PayPalRefund } from "@mandatepay/paypal";
 import { createAuthRuntime } from "./auth.js";
+import { PayPalWebhookRecoveryWorker } from "./services/webhook-recovery.js";
 import { createApp } from "./app.js";
 import {
   ADMIN_FRESH_MS,
@@ -153,6 +154,9 @@ describe("admin security with persisted Better Auth sessions", () => {
     const owners = [adminId, normalId, unverifiedId].filter(Boolean);
     await database.adminActionRequest.deleteMany({
       where: { principalId: principalId || "missing" },
+    });
+    await database.platformSetting.deleteMany({
+      where: { updatedByAdminId: principalId || "missing" },
     });
     await database.adminPrincipal.deleteMany({ where: { userId: adminId || "missing" } });
     await database.refund.deleteMany({ where: { userId: { in: owners } } });
@@ -1705,5 +1709,599 @@ describe("admin security with persisted Better Auth sessions", () => {
       ).statusCode,
     ).toBe(503);
     await unconfigured.close();
+  });
+
+  it("enforces versioned platform controls at the server even when the admin UI is bypassed", async () => {
+    const app = await createApp({
+      config,
+      authRuntime: runtime,
+      paypalClient,
+      testAdminReadMaximum: 2000,
+      testAdminMutationMaximum: 400,
+      testAdminFinancialMaximum: 50,
+    });
+    const reason = "Platform control verification for an isolated incident.";
+    const patch = (key: string, payload: Record<string, unknown>, sessionCookie = cookie) =>
+      app.inject({
+        method: "PATCH",
+        url: `/api/admin/settings/${encodeURIComponent(key)}`,
+        payload,
+        headers: { origin, "content-type": "application/json", cookie: sessionCookie },
+      });
+    const customer = async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        payload: { email: normalEmail, password },
+        headers: { origin: config.APP_URL, "content-type": "application/json" },
+      });
+      expect(response.statusCode).toBe(200);
+      return cookies(response);
+    };
+    const reset = () =>
+      database.platformSetting.deleteMany({ where: { updatedByAdminId: principalId } });
+    try {
+      await login();
+      await database.user.update({
+        where: { id: normalId },
+        data: { disabledAt: null, disabledReason: null, disabledByAdminId: null },
+      });
+      const shopper = await customer();
+      expect((await app.inject({ method: "GET", url: "/api/admin/settings" })).statusCode).toBe(
+        401,
+      );
+      const normalDenied = await app.inject({
+        method: "GET",
+        url: "/api/admin/settings",
+        headers: { cookie: shopper },
+      });
+      expect(normalDenied.statusCode).toBe(403);
+      const listed = await app.inject({
+        method: "GET",
+        url: "/api/admin/settings",
+        headers: { cookie },
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json().data).toHaveLength(10);
+      expect(listed.json().data.every((item: { version: number }) => item.version === 0)).toBe(
+        true,
+      );
+      expect(
+        (
+          await patch("payments.notASwitch", {
+            value: false,
+            expectedVersion: 0,
+            reason,
+            confirmation: true,
+            requestKey: randomUUID(),
+          })
+        ).statusCode,
+      ).toBe(400);
+      expect(
+        (
+          await patch("payments.checkoutEnabled", {
+            value: "off",
+            expectedVersion: 0,
+            reason,
+            confirmation: true,
+            requestKey: randomUUID(),
+            typedConfirmation: "payments.checkoutEnabled",
+          })
+        ).statusCode,
+      ).toBe(400);
+      expect(
+        (
+          await patch("payments.checkoutEnabled", {
+            value: false,
+            expectedVersion: 0,
+            reason,
+            confirmation: true,
+            requestKey: randomUUID(),
+          })
+        ).statusCode,
+      ).toBe(400);
+      await database.adminSessionSecurity.update({
+        where: { sessionId },
+        data: { reauthenticatedAt: new Date(Date.now() - ADMIN_FRESH_MS) },
+      });
+      expect(
+        (
+          await patch("payments.checkoutEnabled", {
+            value: false,
+            expectedVersion: 0,
+            reason,
+            confirmation: true,
+            requestKey: randomUUID(),
+            typedConfirmation: "payments.checkoutEnabled",
+          })
+        ).statusCode,
+      ).toBe(403);
+      await login();
+      const registrationKey = randomUUID();
+      const registration = await patch("platform.registrationEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: registrationKey,
+      });
+      expect(registration.statusCode, registration.body).toBe(200);
+      expect(registration.json().data).toMatchObject({ value: false, version: 1 });
+      expect(registration.json().changed).toBe(true);
+      const registrationRetry = await patch("platform.registrationEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: registrationKey,
+      });
+      expect(registrationRetry.statusCode).toBe(200);
+      expect(registrationRetry.json().changed).toBe(false);
+      expect(registrationRetry.json().data.version).toBe(1);
+      expect(
+        (
+          await patch("platform.registrationEnabled", {
+            value: true,
+            expectedVersion: 0,
+            reason,
+            confirmation: true,
+            requestKey: registrationKey,
+          })
+        ).statusCode,
+      ).toBe(409);
+      const stale = await patch("platform.registrationEnabled", {
+        value: true,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+      });
+      expect(stale.statusCode).toBe(409);
+      const checkoutKey = randomUUID();
+      const checkout = await patch("payments.checkoutEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: checkoutKey,
+        typedConfirmation: "payments.checkoutEnabled",
+      });
+      expect(checkout.statusCode, checkout.body).toBe(200);
+      expect(checkout.json().data.version).toBe(1);
+      const [first, second] = await Promise.all([
+        patch("payments.refundsEnabled", {
+          value: false,
+          expectedVersion: 0,
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          typedConfirmation: "payments.refundsEnabled",
+        }),
+        patch("payments.refundsEnabled", {
+          value: false,
+          expectedVersion: 0,
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          typedConfirmation: "payments.refundsEnabled",
+        }),
+      ]);
+      expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+      const maintenance = await patch("platform.maintenanceMode", {
+        value: true,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        typedConfirmation: "platform.maintenanceMode",
+      });
+      expect(maintenance.statusCode, maintenance.body).toBe(200);
+      const audits = await app.inject({
+        method: "GET",
+        url: "/api/admin/audit?targetType=PLATFORM_SETTING&limit=20",
+        headers: { cookie },
+      });
+      expect(audits.statusCode).toBe(200);
+      const actions = audits.json().data.map((event: { action: string }) => event.action);
+      expect(actions).toContain("ADMIN_FEATURE_FLAG_CHANGED");
+      expect(actions).toContain("ADMIN_MAINTENANCE_MODE_CHANGED");
+      const overview = await app.inject({
+        method: "GET",
+        url: "/api/admin/overview",
+        headers: { cookie },
+      });
+      expect(overview.json().data.controls.platformControls.availability).toBe("available");
+      expect(overview.json().data.controls.platformControls.value).toBeGreaterThan(0);
+
+      const beforeUsers = await database.user.count();
+      const signup = await app.inject({
+        method: "POST",
+        url: "/api/auth/sign-up/email",
+        payload: {
+          email: `closed-${randomUUID()}@mandatepay.local`,
+          password,
+          name: "Closed",
+        },
+        headers: { origin: config.APP_URL, "content-type": "application/json" },
+      });
+      expect(signup.statusCode).toBe(403);
+      expect(signup.json().code).toBe("REGISTRATION_DISABLED");
+      expect(await database.user.count()).toBe(beforeUsers);
+      const ready = await app.inject({ method: "GET", url: "/health/ready" });
+      expect(ready.statusCode).toBe(200);
+      const webhook = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/paypal",
+        payload: "{}",
+        headers: { "content-type": "application/json" },
+      });
+      expect(webhook.body).not.toContain("MAINTENANCE");
+      expect(webhook.body).not.toContain("maintenance");
+
+      const product = await database.productSnapshot.create({
+        data: {
+          source: "admin-ops-test",
+          externalId: `controls-${randomUUID()}`,
+          title: "Control headphones",
+          brand: "Sony",
+          category: "headphones",
+          condition: ProductCondition.NEW,
+          price: 10_000n,
+          currency: "USD",
+          merchant: "Test merchant",
+          metadata: {},
+        },
+      });
+      const mandate = await new MandateRepository(database).create({
+        userId: normalId,
+        title: "Platform control mandate",
+        originalPrompt: "Buy control headphones.",
+        status: "ACTIVE",
+        autoSpendLimit: 20_000n,
+        transactionLimit: 20_000n,
+        dailyLimit: 50_000n,
+        startsAt: new Date(Date.now() - 60_000),
+        expiresAt: new Date(Date.now() + 86_400_000),
+        rules: [{ ruleType: "ALLOWED_BRAND", operator: "IN", value: ["Sony"] }],
+      });
+      const proposal = await new ProposalRepository(database).create({
+        userId: normalId,
+        mandateId: mandate.id,
+        mandateVersionId: mandate.activeVersionId ?? "",
+        productSnapshotId: product.id,
+        quantity: 1,
+        shipping: 0n,
+        tax: 0n,
+        idempotencyKey: `admin-controls-proposal-${randomUUID()}`,
+      });
+      const order = await app.inject({
+        method: "POST",
+        url: "/api/paypal/orders",
+        payload: { proposalId: proposal.id },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(order.statusCode, order.body).toBe(403);
+      expect(order.json().code).toBe("MAINTENANCE");
+      const refund = await app.inject({
+        method: "POST",
+        url: `/api/payments/${randomUUID()}/refund`,
+        payload: {
+          amountMinor: null,
+          reason: "Customer refund during a closed window.",
+          requestKey: randomUUID(),
+          confirmed: true,
+        },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(refund.statusCode).toBe(403);
+      expect(refund.json().code).toBe("MAINTENANCE");
+      const held = await database.payment.create({
+        data: {
+          userId: normalId,
+          mandateId: mandate.id,
+          proposalId: proposal.id,
+          paypalOrderId: `ORDER-MAINT-${randomUUID()}`,
+          paypalCaptureRequestId: randomUUID(),
+          amount: 10_000n,
+          currency: "USD",
+          status: "CREATED",
+          idempotencyKey: `admin-controls-held-${randomUUID()}`,
+        },
+      });
+      const capture = await app.inject({
+        method: "POST",
+        url: `/api/paypal/orders/${held.id}/capture`,
+        payload: {},
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(capture.statusCode, capture.body).toBe(403);
+      expect(capture.json().code).toBe("MAINTENANCE");
+      await database.payment.delete({ where: { id: held.id } });
+
+      await reset();
+      await patch("payments.checkoutEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        typedConfirmation: "payments.checkoutEnabled",
+      });
+      const closedCheckout = await app.inject({
+        method: "POST",
+        url: "/api/paypal/orders",
+        payload: { proposalId: proposal.id },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(closedCheckout.statusCode, closedCheckout.body).toBe(403);
+      expect(closedCheckout.json().code).toBe("CHECKOUT_DISABLED");
+      expect(closedCheckout.json().error).toContain("Checkout is temporarily unavailable");
+
+      await reset();
+      await patch("payments.refundsEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        typedConfirmation: "payments.refundsEnabled",
+      });
+      const closedRefund = await app.inject({
+        method: "POST",
+        url: `/api/payments/${randomUUID()}/refund`,
+        payload: {
+          amountMinor: null,
+          reason: "Customer refund while initiation is closed.",
+          requestKey: randomUUID(),
+          confirmed: true,
+        },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(closedRefund.statusCode).toBe(403);
+      expect(closedRefund.json().code).toBe("REFUNDS_DISABLED");
+      const payment = await database.payment.create({
+        data: {
+          userId: normalId,
+          mandateId: mandate.id,
+          proposalId: proposal.id,
+          paypalOrderId: `ORDER-CONTROLS-${randomUUID()}`,
+          paypalCaptureId: `CAPTURE-CONTROLS-${randomUUID()}`,
+          amount: 10_000n,
+          currency: "USD",
+          status: "COMPLETED",
+          capturedAt: new Date(),
+          idempotencyKey: `admin-controls-payment-${randomUUID()}`,
+        },
+      });
+      const currentPayment = await database.payment.findUniqueOrThrow({
+        where: { id: payment.id },
+      });
+      const adminRefund = await app.inject({
+        method: "POST",
+        url: `/api/admin/payments/${payment.id}/refund`,
+        payload: {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedStatus: currentPayment.status,
+          expectedUpdatedAt: currentPayment.updatedAt.toISOString(),
+          amountMinor: null,
+          reviewedAmountMinor: 10_000,
+          typedConfirmation: payment.id,
+        },
+        headers: { origin, "content-type": "application/json", cookie },
+      });
+      expect(adminRefund.statusCode, adminRefund.body).toBe(403);
+      expect(adminRefund.json().error.code).toBe("ADMIN_ACTION_NOT_ALLOWED");
+      expect(await database.refund.count({ where: { paymentId: payment.id } })).toBe(0);
+
+      await reset();
+      await database.user.update({
+        where: { id: normalId },
+        data: { globalAutonomousPurchasingEnabled: true },
+      });
+      await patch("payments.autonomyEnabledGlobally", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        typedConfirmation: "payments.autonomyEnabledGlobally",
+      });
+      const autonomyProposal = await new ProposalRepository(database).create({
+        userId: normalId,
+        mandateId: mandate.id,
+        mandateVersionId: mandate.activeVersionId ?? "",
+        productSnapshotId: product.id,
+        quantity: 1,
+        shipping: 0n,
+        tax: 0n,
+        idempotencyKey: `admin-controls-autonomy-${randomUUID()}`,
+      });
+      const evaluated = await app.inject({
+        method: "POST",
+        url: `/api/proposals/${autonomyProposal.id}/evaluate`,
+        payload: {},
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(evaluated.statusCode, evaluated.body).toBe(200);
+      expect(evaluated.body).toContain("AWAITING_APPROVAL");
+      expect(evaluated.body).toContain("GLOBAL_AUTONOMY_DISABLED");
+
+      await reset();
+      await patch("agent.enabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+      });
+      const agent = await app.inject({
+        method: "POST",
+        url: "/api/agent/chat",
+        payload: { message: "Find headphones", requestKey: randomUUID() },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(agent.statusCode, agent.body).toBe(403);
+      expect(agent.json().code).toBe("AGENT_DISABLED");
+
+      await reset();
+      await patch("agent.proposalCreationEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+      });
+      const agentProposal = await app.inject({
+        method: "POST",
+        url: "/api/proposals",
+        payload: {},
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+          "x-mandatepay-agent": "proposal",
+        },
+      });
+      expect(agentProposal.statusCode).toBe(403);
+      expect(agentProposal.json().code).toBe("AGENT_PROPOSALS_DISABLED");
+      const directProposal = await app.inject({
+        method: "POST",
+        url: "/api/proposals",
+        payload: {},
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(directProposal.statusCode).toBe(400);
+
+      await reset();
+      await patch("discovery.demoCatalogEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+      });
+      const demo = await app.inject({
+        method: "POST",
+        url: "/api/products/search",
+        payload: { mandateId: mandate.id, query: "headphones" },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(demo.statusCode, demo.body).toBe(403);
+      expect(demo.json().code).toBe("DEMO_CATALOG_DISABLED");
+
+      await reset();
+      await patch("discovery.channel3Enabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+      });
+      const channel = await app.inject({
+        method: "POST",
+        url: "/api/products/compare",
+        payload: {
+          mandateId: mandate.id,
+          products: [{ source: "channel3", externalId: "external-product" }],
+        },
+        headers: {
+          origin: config.APP_URL,
+          "content-type": "application/json",
+          cookie: shopper,
+        },
+      });
+      expect(channel.statusCode, channel.body).toBe(403);
+      expect(channel.json().code).toBe("CHANNEL3_DISABLED");
+
+      const inbox = await database.webhookInbox.create({
+        data: {
+          provider: "paypal",
+          providerEventId: `admin-controls-${randomUUID()}`,
+          eventType: "PAYMENT.CAPTURE.COMPLETED",
+          signatureVerified: true,
+          payload: { id: "evt" },
+          status: "FAILED",
+          attempts: 1,
+          nextAttemptAt: new Date(Date.now() - 1_000),
+        },
+      });
+      await patch("workers.webhookProcessingEnabled", {
+        value: false,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        typedConfirmation: "workers.webhookProcessingEnabled",
+      });
+      const paused = await new PayPalWebhookRecoveryWorker(database, paypalClient, {
+        replay: async () => "processed",
+      }).runOnce();
+      expect(paused.scanned).toBe(0);
+      expect(
+        (await database.webhookInbox.findUniqueOrThrow({ where: { id: inbox.id } })).status,
+      ).toBe("FAILED");
+      await reset();
+      await patch("platform.maintenanceMode", {
+        value: true,
+        expectedVersion: 0,
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        typedConfirmation: "platform.maintenanceMode",
+      });
+      const duringMaintenance = await new PayPalWebhookRecoveryWorker(database, paypalClient, {
+        replay: async () => "processed",
+      }).runOnce();
+      expect(duringMaintenance.scanned).toBeGreaterThan(0);
+      expect(duringMaintenance.processed).toBeGreaterThan(0);
+    } finally {
+      await app.close();
+      await database.user.update({
+        where: { id: normalId },
+        data: { globalAutonomousPurchasingEnabled: false },
+      });
+      await database.platformSetting.deleteMany({ where: { updatedByAdminId: principalId } });
+      await database.webhookInbox.deleteMany({
+        where: { providerEventId: { startsWith: "admin-controls-" } },
+      });
+    }
   });
 });

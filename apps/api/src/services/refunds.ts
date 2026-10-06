@@ -18,6 +18,7 @@ import {
   type PayPalCapture,
   type PayPalRefund,
 } from "@mandatepay/paypal";
+import { assertNewRefund } from "./platform-controls.js";
 import { toMinorUnits } from "@mandatepay/shared";
 import {
   paymentReceiptInclude,
@@ -623,6 +624,11 @@ export async function refundPayment(
   },
 ): Promise<RefundResult> {
   if (!context.paypal) throw new RefundServiceError("PAYPAL_UNAVAILABLE");
+  const existing = await context.database.refund.findFirst({
+    where: { userId: user.id, isSample: false, idempotencyKey: input.requestKey },
+    select: { id: true },
+  });
+  if (!existing) await assertNewRefund(context.database);
   const claimed = await claimRefund(context, user, input);
   if (!claimed.created) {
     if (

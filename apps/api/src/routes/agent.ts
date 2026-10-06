@@ -9,12 +9,20 @@ import {
   type DatabaseClient,
 } from "@mandatepay/database";
 import {
+  AGENT_PROPOSAL_CALLER_HEADER,
+  AGENT_PROPOSAL_CALLER_VALUE,
   CanonicalMandateSchema,
+  PLATFORM_CONTROL_MESSAGES,
   parseDecimalToMinorUnits,
   formatMinorUnits,
   toMinorUnits,
   type CanonicalMandate,
 } from "@mandatepay/shared";
+import {
+  agentProposalsOpen,
+  assertShoppingAgentOpen,
+  PlatformControlDenied,
+} from "../services/platform-controls.js";
 import {
   FindTransactionToolInputSchema,
   PrepareRefundRequestToolInputSchema,
@@ -344,6 +352,9 @@ async function internalJSON(
     headers: {
       origin: context.appUrl,
       ...(cookieOf(request) ? { cookie: cookieOf(request) } : {}),
+      ...(url === "/api/proposals" && method === "POST"
+        ? { [AGENT_PROPOSAL_CALLER_HEADER]: AGENT_PROPOSAL_CALLER_VALUE }
+        : {}),
       ...(payload === undefined ? {} : { "content-type": "application/json" }),
     },
   };
@@ -405,6 +416,13 @@ export function registerShoppingAgentRoutes(
     }
     const user = await context.requireUser(request, reply);
     if (!user) return;
+    try {
+      await assertShoppingAgentOpen(context.database);
+    } catch (cause) {
+      if (cause instanceof PlatformControlDenied)
+        return reply.status(cause.httpStatus).send({ error: cause.message, code: cause.code });
+      throw cause;
+    }
     const nowMs = Date.now();
     for (const [key, value] of rateLimits) if (value.resetAt <= nowMs) rateLimits.delete(key);
     const currentRate = rateLimits.get(user.id);
@@ -632,6 +650,12 @@ export function registerShoppingAgentRoutes(
           };
         },
         create_purchase_proposal: async (input) => {
+          if (!(await agentProposalsOpen(context.database))) {
+            return {
+              error: PLATFORM_CONTROL_MESSAGES.AGENT_PROPOSALS_DISABLED,
+              code: "AGENT_PROPOSALS_DISABLED",
+            };
+          }
           if (!mandateId) return { error: "Select exactly one active purchase mandate first." };
           const parsed = ShoppingAgentToolSchemas.create_purchase_proposal.parse(input);
           const product = knownProducts.get(parsed.productId);

@@ -23,6 +23,7 @@ import { registerProposalRoutes } from "./routes/proposals.js";
 import { registerPayPalRoutes } from "./routes/paypal.js";
 import { registerRefundRoutes } from "./routes/refunds.js";
 import { createPayPalClientFromEnvironment } from "./services/payments.js";
+import { PlatformControlDenied, assertRegistrationOpen } from "./services/platform-controls.js";
 import { createPayPalWebhookService } from "./services/webhooks.js";
 import { registerPayPalWebhookRoutes } from "./routes/webhooks.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
@@ -403,6 +404,19 @@ export async function createApp(options: CreateAppOptions = {}) {
     },
     handler: async (request, reply) => {
       if (!runtime) return sendUnavailable(reply);
+      const path = request.url.split("?")[0] ?? "";
+      if (request.method === "POST" && path.endsWith("/sign-up/email")) {
+        try {
+          await assertRegistrationOpen(runtime.database);
+        } catch (error) {
+          if (error instanceof PlatformControlDenied)
+            return reply.status(error.httpStatus).send({ error: error.message, code: error.code });
+          return reply.status(503).send({
+            error: "New account registration is temporarily unavailable.",
+            code: "REGISTRATION_DISABLED",
+          });
+        }
+      }
       try {
         const response = await runtime.auth.handler(buildAuthRequest(request, config));
         return rejectDisabledCredentialSession(runtime, request, reply, response);

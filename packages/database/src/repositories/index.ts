@@ -7,6 +7,11 @@ export {
   normalizeAdminAuditInput,
 } from "./admin-audit-repository.js";
 export { AdminOperationsRepository } from "./admin-operations-repository.js";
+export { compareAndSetPlatformSetting } from "./platform-setting-repository.js";
+export type {
+  ComparedPlatformSetting,
+  StoredPlatformSetting,
+} from "./platform-setting-repository.js";
 export type {
   AppendAdminAuditEventInput,
   AdminAuditActor,

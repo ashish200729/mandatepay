@@ -5,12 +5,15 @@ import {
   HIGH_RISK_ADMIN_ACTIONS,
   HIGH_RISK_DOMAIN_EVENTS,
   checkoutEligibility,
+  describePlatformMode,
   normalizeFailureCode,
   parseCanonicalRules,
   parseDomainFacts,
   parseReasonCodes,
   parseSpendProjection,
   paymentReconciliation,
+  restrictiveControlCount,
+  resolvePlatformControls,
   safeAdminText,
   webhookErrorCode,
   type AdminActivityQuery,
@@ -92,6 +95,25 @@ function metric(
 }
 function unavailable(definition: string, reason: string) {
   return { value: null, availability: "unavailable" as const, reason, definition };
+}
+async function platformControlMetric(db: {
+  platformSetting: {
+    findMany(args: {
+      select: { key: true; valueJson: true };
+    }): Promise<ReadonlyArray<{ key: string; valueJson: unknown }>>;
+  };
+}) {
+  try {
+    const rows = await db.platformSetting.findMany({ select: { key: true, valueJson: true } });
+    const controls = resolvePlatformControls(rows);
+    return metric(
+      restrictiveControlCount(controls),
+      "Count of platform controls that differ from normal operation. Zero means maintenance is off and the other switches are on.",
+      { reason: describePlatformMode(controls) },
+    );
+  } catch {
+    return unavailable("Platform kill-switch state.", "Platform settings could not be read.");
+  }
 }
 function directionOf(value?: "asc" | "desc", fallback: "asc" | "desc" = "desc") {
   return value ?? fallback;
@@ -1647,10 +1669,7 @@ export class AdminOperationsRepository {
               },
             )
           : unavailable("Configured product discovery mode.", "Discovery mode is not configured."),
-        platformControls: unavailable(
-          "Platform kill-switch state.",
-          "Unavailable until Phase 7 platform settings exist.",
-        ),
+        platformControls: await platformControlMetric(this.db),
         workerLive: unavailable(
           "Worker liveness.",
           "Unavailable until Phase 8 heartbeat telemetry exists.",

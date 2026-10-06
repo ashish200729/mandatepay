@@ -1719,35 +1719,35 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 ### TODO
 
-- [ ] **P7-01** Add `PlatformSetting` model/repository.
-- [ ] **P7-02** Define typed setting registry.
-- [ ] **P7-03** Add setting schema validation.
-- [ ] **P7-04** Add version/check-and-set behavior.
-- [ ] **P7-05** Add settings API.
-- [ ] **P7-06** Add settings UI.
-- [ ] **P7-07** Add global autonomy kill switch.
-- [ ] **P7-08** Enforce global autonomy setting inside execution path.
-- [ ] **P7-09** Add checkout kill switch.
-- [ ] **P7-10** Enforce before PayPal order creation.
-- [ ] **P7-11** Add refund initiation kill switch.
-- [ ] **P7-12** Add shopping agent switch.
-- [ ] **P7-13** Add proposal-from-agent switch.
-- [ ] **P7-14** Add Demo Catalog switch.
-- [ ] **P7-15** Add Channel3 discovery switch.
-- [ ] **P7-16** Add maintenance mode.
-- [ ] **P7-17** Ensure webhook ingestion/recovery can remain active during maintenance.
-- [ ] **P7-18** Add current control banner to admin dashboard.
-- [ ] **P7-19** Add clear disabled-state messages in user app/API.
-- [ ] **P7-20** Require fresh auth + typed confirmation for critical controls.
-- [ ] **P7-21** Audit every setting change.
-- [ ] **P7-22** Test every setting at the server enforcement point.
+- [x] **P7-01** Add `PlatformSetting` model/repository.
+- [x] **P7-02** Define typed setting registry.
+- [x] **P7-03** Add setting schema validation.
+- [x] **P7-04** Add version/check-and-set behavior.
+- [x] **P7-05** Add settings API.
+- [x] **P7-06** Add settings UI.
+- [x] **P7-07** Add global autonomy kill switch.
+- [x] **P7-08** Enforce global autonomy setting inside execution path.
+- [x] **P7-09** Add checkout kill switch.
+- [x] **P7-10** Enforce before PayPal order creation.
+- [x] **P7-11** Add refund initiation kill switch.
+- [x] **P7-12** Add shopping agent switch.
+- [x] **P7-13** Add proposal-from-agent switch.
+- [x] **P7-14** Add Demo Catalog switch.
+- [x] **P7-15** Add Channel3 discovery switch.
+- [x] **P7-16** Add maintenance mode.
+- [x] **P7-17** Ensure webhook ingestion/recovery can remain active during maintenance.
+- [x] **P7-18** Add current control banner to admin dashboard.
+- [x] **P7-19** Add clear disabled-state messages in user app/API.
+- [x] **P7-20** Require fresh auth + typed confirmation for critical controls.
+- [x] **P7-21** Audit every setting change.
+- [x] **P7-22** Test every setting at the server enforcement point.
 
 ### Exit criteria
 
-- [ ] Every switch works even if the admin UI is bypassed.
-- [ ] Controls fail closed where appropriate.
-- [ ] Maintenance does not accidentally drop provider webhooks.
-- [ ] Current platform mode is visible to the admin.
+- [x] Every switch works even if the admin UI is bypassed.
+- [x] Controls fail closed where appropriate.
+- [x] Maintenance does not accidentally drop provider webhooks.
+- [x] Current platform mode is visible to the admin.
 
 **Feeds into:** Phase 8.
 

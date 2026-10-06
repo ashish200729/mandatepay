@@ -16,12 +16,20 @@ import {
   type DatabaseClient,
 } from "@mandatepay/database";
 import {
+  AGENT_PROPOSAL_CALLER_HEADER,
+  AGENT_PROPOSAL_CALLER_VALUE,
   CanonicalMandateSchema,
+  PLATFORM_CONTROL_MESSAGES,
   calculatePurchaseTotal,
   multiplyMinorUnits,
   toMinorUnits,
 } from "@mandatepay/shared";
 import { serializeProposal } from "../services/proposals.js";
+import {
+  PlatformControlDenied,
+  agentProposalsOpen,
+  assertDiscoverySource,
+} from "../services/platform-controls.js";
 
 type Owner = { id: string };
 type ProductRef = { source: "demo" | "channel3"; externalId: string };
@@ -54,6 +62,9 @@ function hash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 function fail(reply: FastifyReply, cause: unknown) {
+  if (cause instanceof PlatformControlDenied) {
+    return reply.status(cause.httpStatus).send({ error: cause.message, code: cause.code });
+  }
   if (cause instanceof DatabaseError) {
     const status =
       cause.code === "NOT_FOUND"
@@ -85,6 +96,7 @@ async function ownedMandate(context: CatalogRouteContext, mandateId: string, use
   return { mandate, rules: CanonicalMandateSchema.parse(mandate.activeVersion.canonicalRules) };
 }
 async function lookup(context: CatalogRouteContext, product: ProductRef) {
+  await assertDiscoverySource(context.database, product.source);
   if (product.source === "demo") {
     const found = lookupDemoProduct(product.externalId);
     if (!found) throw new DatabaseError("NOT_FOUND", "Product not found.");
@@ -143,6 +155,7 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
     try {
       const { rules } = await ownedMandate(context, parsed.data.mandateId, user.id);
       const query = parsed.data.query ?? rules.productIntent;
+      await assertDiscoverySource(context.database, context.mode === "demo" ? "demo" : "channel3");
       const products =
         context.mode === "demo"
           ? searchDemoCatalog(query, 20, rules.allowedBrands)
@@ -214,6 +227,14 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
   app.post("/api/proposals", async (request, reply) => {
     const user = await authenticate(request, reply);
     if (!user) return;
+    if (request.headers[AGENT_PROPOSAL_CALLER_HEADER] === AGENT_PROPOSAL_CALLER_VALUE) {
+      if (!(await agentProposalsOpen(context.database))) {
+        return reply.status(403).send({
+          error: PLATFORM_CONTROL_MESSAGES.AGENT_PROPOSALS_DISABLED,
+          code: "AGENT_PROPOSALS_DISABLED",
+        });
+      }
+    }
     const parsed = proposalSchema.safeParse(request.body);
     if (!parsed.success)
       return reply

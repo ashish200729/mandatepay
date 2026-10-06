@@ -1,3 +1,4 @@
+import { ControlBanner } from "@/components/admin/control-banner";
 import { PageHeader } from "@/components/admin/page-header";
 import { MetricCard } from "@/components/admin/metric-card";
 import { EventTimeline } from "@/components/admin/timeline";
@@ -9,7 +10,12 @@ import {
   parseAdminList,
   parseAdminOverview,
   parseAdminActivityEvent,
+  parseAdminPlatformSetting,
+  describePlatformMode,
+  PLATFORM_SETTING_DEFAULTS,
+  restrictiveControlCount,
   type AdminMetric,
+  type PlatformSettingKey,
 } from "@mandatepay/shared";
 import Link from "next/link";
 
@@ -19,12 +25,23 @@ function metricValue(metric: AdminMetric | undefined) {
 }
 
 export default async function OverviewPage() {
-  const [overviewResponse, activityResponse] = await Promise.all([
+  const [overviewResponse, activityResponse, settingsResponse] = await Promise.all([
     adminApi("/api/admin/overview"),
     adminApi("/api/admin/overview/activity?limit=20"),
+    adminApi("/api/admin/settings"),
   ]);
   const overview = parseAdminDetail(overviewResponse.json, parseAdminOverview);
   const activity = parseAdminList(activityResponse.json, parseAdminActivityEvent);
+  const settings = parseAdminList(settingsResponse.json, parseAdminPlatformSetting);
+  const controls = settings
+    ? (Object.fromEntries(settings.data.map((item) => [item.key, item.value])) as Record<
+        PlatformSettingKey,
+        boolean
+      >)
+    : null;
+  const mode = controls
+    ? describePlatformMode({ ...PLATFORM_SETTING_DEFAULTS, ...controls })
+    : "Platform mode could not be loaded. Treat customer checkout, capture, and new refunds as unavailable until the controls load.";
   const metrics = overview?.data.metrics ?? {};
   const cards: { key: string; label: string }[] = [
     { key: "totalUsers", label: "Total users" },
@@ -47,6 +64,11 @@ export default async function OverviewPage() {
         title="Operations overview"
         description="Read-only snapshot of MandatePay operations. Unavailable telemetry is shown as an em dash, never as zero."
         breadcrumbs={[{ label: "Overview" }]}
+      />
+      <ControlBanner
+        mode={mode}
+        restricted={controls ? restrictiveControlCount(controls) > 0 : true}
+        unavailable={!controls}
       />
       {!overview ? (
         <p role="alert">The overview could not be loaded. Try again shortly.</p>

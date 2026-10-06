@@ -16,6 +16,7 @@ import {
   type Prisma,
 } from "@mandatepay/database";
 import { CanonicalMandateSchema, toMinorUnits } from "@mandatepay/shared";
+import { platformAutonomyEnabled } from "./platform-controls.js";
 import { proposalFingerprint } from "@mandatepay/database";
 
 type UserOwner = { id: string };
@@ -500,7 +501,12 @@ export async function evaluateProposalInTransaction(
     ...spend,
     globalAutonomousPurchasingEnabled: dbUser.globalAutonomousPurchasingEnabled,
   };
-  const decision = evaluateValidatedPolicy(policyContext(loaded, spend, dbUser, now));
+  const policyUser = {
+    ...dbUser,
+    globalAutonomousPurchasingEnabled:
+      dbUser.globalAutonomousPurchasingEnabled && (await platformAutonomyEnabled(tx)),
+  };
+  const decision = evaluateValidatedPolicy(policyContext(loaded, spend, policyUser, now));
   const nextStatus =
     decision.decision === "ALLOW"
       ? ProposalStatus.AUTHORIZED
@@ -862,9 +868,9 @@ export async function revalidateAuthorizationInTransaction(
     }
   }
 
-  // The user row is locked by loadLockedContext before this read. This keeps
-  // the global autonomy kill switch in the same serialization boundary as the
-  // policy decision and the spend reservation.
+  // The user row is locked by loadLockedContext before this read. The platform
+  // autonomy switch is read in the same transaction so execution cannot ALLOW
+  // after an administrator has turned global autonomy off.
   const dbUser = await tx.user.findUnique({
     where: { id: user.id },
     select: { id: true, globalAutonomousPurchasingEnabled: true },
@@ -882,7 +888,12 @@ export async function revalidateAuthorizationInTransaction(
     ...spend,
     globalAutonomousPurchasingEnabled: dbUser.globalAutonomousPurchasingEnabled,
   };
-  const decision = evaluateValidatedPolicy(policyContext(loaded, spend, dbUser, now));
+  const policyUser = {
+    ...dbUser,
+    globalAutonomousPurchasingEnabled:
+      dbUser.globalAutonomousPurchasingEnabled && (await platformAutonomyEnabled(tx)),
+  };
+  const decision = evaluateValidatedPolicy(policyContext(loaded, spend, policyUser, now));
   const persistedDecision = await tx.policyDecision.create({
     data: {
       proposalId,

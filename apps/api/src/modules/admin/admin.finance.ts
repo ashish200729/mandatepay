@@ -27,6 +27,7 @@ import {
   reconcileRefundStatus,
   refundPayment,
 } from "../../services/refunds.js";
+import { PlatformControlDenied } from "../../services/platform-controls.js";
 import { PrismaWebhookInboxStore, createPayPalWebhookService } from "../../services/webhooks.js";
 import {
   WEBHOOK_RECOVERY_BASE_DELAY_MS,
@@ -45,6 +46,8 @@ type Trace = { requestId: string; correlationId: string };
 
 function financeError(error: unknown): never {
   if (error instanceof AdminControlError) throw error;
+  if (error instanceof PlatformControlDenied)
+    throw new AdminControlError("ADMIN_ACTION_NOT_ALLOWED", 403, error.message);
   if (error instanceof PaymentServiceError || error instanceof RefundServiceError) {
     if (error.code === "PAYPAL_UNAVAILABLE")
       throw new AdminControlError(
@@ -648,7 +651,10 @@ async function initiateRefund(input: {
         actionId: prepared.actionId,
       };
     } catch (error) {
-      if (error instanceof RefundServiceError && error.code === "REFUND_POLICY_BLOCKED") {
+      if (
+        error instanceof PlatformControlDenied ||
+        (error instanceof RefundServiceError && error.code === "REFUND_POLICY_BLOCKED")
+      ) {
         await failQuietly({
           db: input.db,
           actor: input.actor,

@@ -38,7 +38,7 @@ const groups = [
       { label: "Webhooks", href: "/webhooks" },
       { label: "Audit Logs", href: "/audit" },
       { label: "System Health", href: null },
-      { label: "Configuration", href: null },
+      { label: "Configuration", href: "/settings" },
     ],
   },
   { label: "Admin", items: [{ label: "My Session", href: "/session" }] },

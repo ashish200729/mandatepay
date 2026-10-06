@@ -57,6 +57,7 @@ function fixture(options: { propose?: boolean; demo?: boolean; unsafeUrl?: boole
   app.post("/api/products/search", search);
   app.post("/api/proposals", create);
   const database = {
+    platformSetting: { findMany: async () => [] },
     mandate: {
       findFirst: async () => ({
         id: "nike-mandate",

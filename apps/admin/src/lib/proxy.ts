@@ -21,7 +21,12 @@ const MESSAGES: Record<string, string> = {
   ADMIN_RECONCILE_FAILED:
     "Provider confirmation is pending. Check the current state before retrying.",
   ADMIN_ACTION_NOT_ALLOWED: "This action is not allowed in the current state.",
+  ADMIN_SETTING_INVALID: "That platform setting is not valid. Reload and try again.",
+  ADMIN_CONFIRMATION_REQUIRED: "Type the setting key to confirm this change.",
 };
+function writesBody(method: string) {
+  return method === "POST" || method === "PATCH";
+}
 function failure(code: string, status: number, requestId?: string) {
   return NextResponse.json(
     {
@@ -57,7 +62,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
     )
       return failure("ADMIN_INVALID_REQUEST", 400);
   }
-  if (request.method === "POST") {
+  if (writesBody(request.method)) {
     const origin = request.headers.get("origin");
     const configured =
       process.env.ADMIN_ORIGIN ??
@@ -90,7 +95,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
     if (value) headers.set(name, value);
   }
   let body: Uint8Array | undefined;
-  if (request.method === "POST" && request.body) {
+  if (writesBody(request.method) && request.body) {
     const reader = request.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -126,7 +131,7 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         signal: AbortSignal.any([
           request.signal,
           AbortSignal.timeout(
-            match.kind === "csv" ? 30_000 : request.method === "POST" ? 30_000 : 15_000,
+            match.kind === "csv" ? 30_000 : writesBody(request.method) ? 30_000 : 15_000,
           ),
         ]),
       },

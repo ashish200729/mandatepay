@@ -315,9 +315,23 @@ model AdminPrincipal {
   createdAt      DateTime               @default(now())
   updatedAt      DateTime               @updatedAt
   user           User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
-  sessions       AdminSessionSecurity[]
-  actionRequests AdminActionRequest[]
-  disabledUsers  User[]                 @relation("UserDisabledBy")
+  sessions         AdminSessionSecurity[]
+  actionRequests   AdminActionRequest[]
+  disabledUsers    User[]                 @relation("UserDisabledBy")
+  platformSettings PlatformSetting[]
+}
+
+// Versioned operational switches. Missing rows use code defaults. History of
+// changes lives in AdminAuditEvent. Compare-and-set uses version under a lock.
+model PlatformSetting {
+  key              String         @id @db.VarChar(64)
+  valueJson        Json
+  version          Int
+  updatedByAdminId String
+  updatedAt        DateTime       @updatedAt
+  updatedBy        AdminPrincipal @relation(fields: [updatedByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([updatedByAdminId])
 }
 
 // Immutable internal operator notes. Author/principal IDs are historical

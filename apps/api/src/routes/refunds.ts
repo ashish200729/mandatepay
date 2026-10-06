@@ -7,6 +7,7 @@ import {
   RefundServiceError,
   type RefundGateway,
 } from "../services/refunds.js";
+import { PlatformControlDenied } from "../services/platform-controls.js";
 
 type AuthenticatedUser = { id: string };
 
@@ -37,6 +38,9 @@ function originOf(request: FastifyRequest) {
 }
 
 function error(reply: FastifyReply, cause: unknown) {
+  if (cause instanceof PlatformControlDenied) {
+    return reply.status(cause.httpStatus).send({ error: cause.message, code: cause.code });
+  }
   if (cause instanceof RefundServiceError) {
     if (cause.code === "REFUND_POLICY_BLOCKED") {
       return reply.status(cause.httpStatus).send({

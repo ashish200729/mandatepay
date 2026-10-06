@@ -3,9 +3,10 @@ import { AdminActionError } from "./action-error";
 export async function postAdminControl(
   path: string,
   body: unknown,
+  method: "POST" | "PATCH" = "POST",
 ): Promise<{ status: "success" | "pending"; changed: boolean }> {
   const response = await fetch(`/api/admin/${path}`, {
-    method: "POST",
+    method,
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

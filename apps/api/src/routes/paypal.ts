@@ -12,6 +12,7 @@ import {
   type DemoProductFacts,
   type PayPalGateway,
 } from "../services/payments.js";
+import { PlatformControlDenied } from "../services/platform-controls.js";
 
 type AuthenticatedUser = { id: string };
 
@@ -44,6 +45,9 @@ function originOf(request: FastifyRequest) {
 }
 
 function error(reply: FastifyReply, cause: unknown) {
+  if (cause instanceof PlatformControlDenied) {
+    return reply.status(cause.httpStatus).send({ error: cause.message, code: cause.code });
+  }
   if (cause instanceof PaymentServiceError) {
     return reply.status(cause.httpStatus).send({
       error:

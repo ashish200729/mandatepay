@@ -105,6 +105,7 @@ const paypalClient = {
   },
 };
 await database.adminActionRequest.deleteMany();
+await database.platformSetting.deleteMany();
 await database.adminPrincipal.deleteMany();
 const runtime = createAuthRuntime({
   database,
@@ -169,6 +170,7 @@ async function cleanup() {
     where: { mandate: { userId: { in: userIds } } },
   });
   await database.adminActionRequest.deleteMany();
+  await database.platformSetting.deleteMany();
   await database.adminPrincipal.deleteMany();
   await database.session.deleteMany({ where: { userId: { in: userIds } } });
 }
