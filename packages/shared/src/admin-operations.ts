@@ -133,6 +133,7 @@ export const HIGH_RISK_ADMIN_ACTIONS = [
   "ADMIN_MANDATE_REVOKED",
   "ADMIN_PAYMENT_RECONCILE_REQUESTED",
   "ADMIN_REFUND_REQUESTED",
+  "ADMIN_REFUND_REFRESH_REQUESTED",
   "ADMIN_WEBHOOK_RETRY_REQUESTED",
   "ADMIN_WEBHOOK_RECONCILE_REQUESTED",
   "ADMIN_FEATURE_FLAG_CHANGED",
@@ -174,6 +175,12 @@ export const ADMIN_OPERATION_CAPABILITIES = [
   "mandates:pause",
   "mandates:revoke",
   "proposals:re-evaluate",
+  "orders:reconcile",
+  "payments:reconcile",
+  "payments:refund",
+  "refunds:refresh",
+  "webhooks:retry",
+  "webhooks:reconcile",
 ] as const;
 export const ADMIN_ENTITY_ACTIONS = [
   "users:disable",
@@ -184,6 +191,12 @@ export const ADMIN_ENTITY_ACTIONS = [
   "mandates:pause",
   "mandates:revoke",
   "proposals:re-evaluate",
+  "orders:reconcile",
+  "payments:reconcile",
+  "payments:refund",
+  "refunds:refresh",
+  "webhooks:retry",
+  "webhooks:reconcile",
 ] as const;
 export const ADMIN_CSV_MAX_ROWS = 1000;
 export const ADMIN_OVERVIEW_DEFAULT_DAYS = 30;
@@ -517,6 +530,50 @@ export const AdminProposalReevaluateMutationSchema = z
   })
   .strict();
 export type AdminProposalReevaluateMutation = z.infer<typeof AdminProposalReevaluateMutationSchema>;
+export const AdminPaymentReconcileMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedStatus: z.enum(ADMIN_PAYMENT_STATUSES),
+    expectedUpdatedAt: utc,
+  })
+  .strict();
+export type AdminPaymentReconcileMutation = z.infer<typeof AdminPaymentReconcileMutationSchema>;
+export const AdminPaymentRefundMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedStatus: z.enum(ADMIN_PAYMENT_STATUSES),
+    expectedUpdatedAt: utc,
+    amountMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
+    reviewedAmountMinor: money,
+    typedConfirmation: AdminResourceIdSchema,
+  })
+  .strict();
+export type AdminPaymentRefundMutation = z.infer<typeof AdminPaymentRefundMutationSchema>;
+export const AdminRefundRefreshMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedStatus: z.enum(ADMIN_REFUND_STATUSES),
+    expectedUpdatedAt: utc,
+  })
+  .strict();
+export type AdminRefundRefreshMutation = z.infer<typeof AdminRefundRefreshMutationSchema>;
+export const AdminWebhookRetryMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedStatus: z.enum(ADMIN_WEBHOOK_STATUSES),
+    expectedUpdatedAt: utc,
+    expectedAttempts: z.number().int().nonnegative().max(10_000),
+  })
+  .strict();
+export type AdminWebhookRetryMutation = z.infer<typeof AdminWebhookRetryMutationSchema>;
+export const AdminWebhookReconcileMutationSchema = z
+  .object({
+    ...mutationBase,
+    expectedStatus: z.enum(ADMIN_WEBHOOK_STATUSES),
+    expectedUpdatedAt: utc,
+  })
+  .strict();
+export type AdminWebhookReconcileMutation = z.infer<typeof AdminWebhookReconcileMutationSchema>;
 export const AdminNoteCreateSchema = z
   .object({
     reason: AdminReasonSchema,
@@ -650,6 +707,7 @@ export const AdminPaymentSchema = AdminOrderSchema.extend({
   refundCount: z.number().int().nonnegative(),
   remainingRefundableMinor: money,
   refundState: z.enum(["none", "pending", "refunded"]),
+  capabilities: z.array(AdminEntityCapabilitySchema).max(16),
 });
 export type AdminPayment = z.infer<typeof AdminPaymentSchema>;
 
@@ -669,6 +727,7 @@ export const AdminRefundSchema = z.object({
   kind: z.enum(["FULL", "PARTIAL"]),
   isSample: z.boolean(),
   updatedAt: utc,
+  capabilities: z.array(AdminEntityCapabilitySchema).max(16),
 });
 export type AdminRefund = z.infer<typeof AdminRefundSchema>;
 
@@ -691,6 +750,7 @@ export const AdminWebhookSchema = z.object({
   paymentId: AdminResourceIdSchema.nullable(),
   orderId: AdminResourceIdSchema.nullable(),
   refundId: AdminResourceIdSchema.nullable(),
+  capabilities: z.array(AdminEntityCapabilitySchema).max(16),
 });
 export type AdminWebhook = z.infer<typeof AdminWebhookSchema>;
 

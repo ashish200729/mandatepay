@@ -238,6 +238,27 @@ describe("admin BFF security", () => {
     const conflictBody = await conflict.text();
     expect(JSON.parse(conflictBody).error.code).toBe("INVALID_STATE");
     expect(conflictBody).not.toContain("secret");
+    fetcher.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: {
+            ...user,
+            capabilities: [{ action: "payments:reconcile", allowed: true, reason: null }],
+          },
+          changed: false,
+          pending: false,
+          actionId: id,
+          requestId: id,
+        }),
+      ),
+    );
+    expect(
+      (
+        await proxyAdmin(request(`payments/${id}/reconcile`, { body: "{}" }), {
+          path: ["payments", id, "reconcile"],
+        })
+      ).status,
+    ).toBe(503);
     expect(
       (
         await proxyAdmin(request(`users/${id}/impersonate`, { body: "{}" }), {

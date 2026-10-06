@@ -27,7 +27,15 @@ import {
   type AdminAuditTarget,
 } from "@mandatepay/shared";
 import Link from "next/link";
-import { UserControls, UserNotes, MandateControls, ProposalControls } from "./admin-actions";
+import {
+  UserControls,
+  UserNotes,
+  MandateControls,
+  ProposalControls,
+  PaymentControls,
+  RefundControls,
+  WebhookControls,
+} from "./admin-actions";
 
 export async function OperationsDetail({
   resource,
@@ -247,6 +255,7 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
             { label: "Failure code", value: row.failureCode ?? "—" },
           ]}
         />
+        <PaymentControls payment={row} resource={resource} />
         <Related
           links={[
             { href: `/refunds?paymentId=${encodeURIComponent(row.id)}`, label: "Refunds" },
@@ -260,23 +269,26 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
   if (resource === "refunds") {
     const row = data as NonNullable<ReturnType<typeof parseAdminRefund>>;
     return (
-      <DefinitionList
-        items={[
-          {
-            label: "Owner",
-            value: <EntityLink resource="users" id={row.owner.id} label={row.owner.email} />,
-          },
-          { label: "Payment", value: <EntityLink resource="payments" id={row.paymentId} /> },
-          { label: "Invoice ID", value: row.invoiceId },
-          { label: "Amount", value: formatUsd(row.amountMinor) },
-          { label: "Type", value: row.kind },
-          { label: "Status", value: <StatusBadge status={row.status} /> },
-          { label: "PayPal refund ID", value: row.paypalRefundId ?? "—" },
-          { label: "Settled", value: row.settledAt ? formatUtcDate(row.settledAt) : "—" },
-          { label: "Reason", value: row.reason ?? "—" },
-          { label: "Failure code", value: row.failureCode ?? "—" },
-        ]}
-      />
+      <div className="space-y-8">
+        <DefinitionList
+          items={[
+            {
+              label: "Owner",
+              value: <EntityLink resource="users" id={row.owner.id} label={row.owner.email} />,
+            },
+            { label: "Payment", value: <EntityLink resource="payments" id={row.paymentId} /> },
+            { label: "Invoice ID", value: row.invoiceId },
+            { label: "Amount", value: formatUsd(row.amountMinor) },
+            { label: "Type", value: row.kind },
+            { label: "Status", value: <StatusBadge status={row.status} /> },
+            { label: "PayPal refund ID", value: row.paypalRefundId ?? "—" },
+            { label: "Settled", value: row.settledAt ? formatUtcDate(row.settledAt) : "—" },
+            { label: "Reason", value: row.reason ?? "—" },
+            { label: "Failure code", value: row.failureCode ?? "—" },
+          ]}
+        />
+        <RefundControls refund={row} />
+      </div>
     );
   }
   if (resource === "webhooks") {
@@ -305,6 +317,7 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
             },
           ]}
         />
+        <WebhookControls webhook={row} />
       </div>
     );
   }

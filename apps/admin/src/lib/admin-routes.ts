@@ -184,7 +184,7 @@ function detail(resource: string, recordId: string): AdminProxyMatch | null {
           : resource === "approvals"
             ? (value: unknown) => parseAdminDetail(value, parseAdminApproval)
             : resource === "orders"
-              ? (value: unknown) => parseAdminDetail(value, parseAdminOrder)
+              ? (value: unknown) => parseAdminDetail(value, parseAdminPayment)
               : resource === "payments"
                 ? (value: unknown) => parseAdminDetail(value, parseAdminPayment)
                 : resource === "refunds"
@@ -248,6 +248,12 @@ function nestedMutation(resource: string, recordId: string, child: string): Admi
   if (resource === "mandates" && (child === "pause" || child === "revoke"))
     return mutation(parseAdminMandate);
   if (resource === "proposals" && child === "re-evaluate") return mutation(parseAdminProposal);
+  if (resource === "orders" && child === "reconcile") return mutation(parseAdminPayment);
+  if (resource === "payments" && child === "reconcile") return mutation(parseAdminPayment);
+  if (resource === "payments" && child === "refund") return mutation(parseAdminPayment);
+  if (resource === "refunds" && child === "refresh") return mutation(parseAdminRefund);
+  if (resource === "webhooks" && (child === "retry" || child === "reconcile"))
+    return mutation(parseAdminWebhook);
   return null;
 }
 

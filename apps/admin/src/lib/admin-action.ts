@@ -9,7 +9,7 @@ export async function postAdminControl(
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(30_000),
   });
   const json = (await response.json().catch(() => null)) as {
     error?: { code?: string };
@@ -27,7 +27,13 @@ export async function postAdminControl(
     window.location.replace("/access-denied");
     throw new AdminActionError("unavailable");
   }
-  if (response.status === 409 && (code === "CONFLICT" || code === "INVALID_STATE"))
+  if (
+    response.status === 409 &&
+    (code === "CONFLICT" ||
+      code === "INVALID_STATE" ||
+      code === "ADMIN_RETRY_NOT_ALLOWED" ||
+      code === "ADMIN_ACTION_NOT_ALLOWED")
+  )
     throw new AdminActionError("conflict");
   if (response.status === 400) throw new AdminActionError("invalid");
   if (!response.ok) throw new AdminActionError("unavailable");

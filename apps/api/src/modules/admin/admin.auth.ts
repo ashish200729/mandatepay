@@ -155,6 +155,12 @@ export function adminMe(identity: AdminIdentity) {
       "mandates:pause",
       "mandates:revoke",
       "proposals:re-evaluate",
+      "orders:reconcile",
+      "payments:reconcile",
+      "payments:refund",
+      "refunds:refresh",
+      "webhooks:retry",
+      "webhooks:reconcile",
     ],
   };
 }

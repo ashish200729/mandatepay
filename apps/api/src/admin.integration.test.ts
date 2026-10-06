@@ -13,6 +13,7 @@ import {
   ProductCondition,
   PolicyDecisionType,
 } from "@mandatepay/database";
+import type { PayPalCapture, PayPalClient, PayPalOrder, PayPalRefund } from "@mandatepay/paypal";
 import { createAuthRuntime } from "./auth.js";
 import { createApp } from "./app.js";
 import {
@@ -24,6 +25,17 @@ import {
 const database = createPrismaClient(process.env.TEST_DATABASE_URL);
 const origin = "http://localhost:3001";
 const password = "admin-fixture-password-123!";
+const getOrder = vi.fn<(id: string) => Promise<PayPalOrder>>();
+const getCapture = vi.fn<(id: string) => Promise<PayPalCapture>>();
+const getRefund = vi.fn<(id: string) => Promise<PayPalRefund>>();
+const refundCapture = vi.fn<(input: unknown) => Promise<PayPalRefund>>();
+const paypalClient = {
+  getOrder,
+  getCapture,
+  getRefund,
+  refundCapture,
+  config: { webhookId: "admin-test-webhook" },
+} as unknown as PayPalClient;
 const runtime = createAuthRuntime({
   database,
   databaseUrl: process.env.TEST_DATABASE_URL!,
@@ -97,7 +109,13 @@ describe("admin security with persisted Better Auth sessions", () => {
       throw new Error(
         "Admin integration requires no existing principal in the isolated test database.",
       );
-    app = await createApp({ config, authRuntime: runtime, testAdminMutationMaximum: 100 });
+    app = await createApp({
+      config,
+      authRuntime: runtime,
+      testAdminMutationMaximum: 100,
+      testAdminFinancialMaximum: 50,
+      paypalClient,
+    });
     for (const [kind, verified] of [
       ["admin", true],
       ["normal", true],
@@ -1230,6 +1248,424 @@ describe("admin security with persisted Better Auth sessions", () => {
     expect(proposalEvents.json().data.map((row: { action: string }) => row.action)).toContain(
       "ADMIN_PROPOSAL_RE_EVALUATED",
     );
+  });
+
+  it("reconciles payments, refreshes refunds and retries webhooks without duplicating captures", async () => {
+    await login();
+    const reason = "Recovering a sandbox payment after a lost provider response.";
+    const mutate = (url: string, payload: unknown) =>
+      app.inject({
+        method: "POST",
+        url,
+        payload: JSON.stringify(payload),
+        headers: { origin, "content-type": "application/json", cookie },
+      });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/admin/payments/${randomUUID()}/reconcile`,
+          payload: JSON.stringify({
+            reason,
+            confirmation: true,
+            requestKey: randomUUID(),
+            expectedStatus: "CREATED",
+            expectedUpdatedAt: new Date().toISOString(),
+          }),
+          headers: { origin, "content-type": "application/json" },
+        })
+      ).statusCode,
+    ).toBe(401);
+    const normalSession = await app.inject({
+      method: "POST",
+      url: "/api/auth/sign-in/email",
+      payload: { email: normalEmail, password },
+      headers: { origin: config.APP_URL, "content-type": "application/json" },
+    });
+    expect(normalSession.statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/admin/payments/${randomUUID()}/reconcile`,
+          payload: JSON.stringify({
+            reason,
+            confirmation: true,
+            requestKey: randomUUID(),
+            expectedStatus: "CREATED",
+            expectedUpdatedAt: new Date().toISOString(),
+          }),
+          headers: {
+            origin,
+            "content-type": "application/json",
+            cookie: cookies(normalSession),
+          },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    const mandate = await new MandateRepository(database).create({
+      userId: normalId,
+      title: "Admin finance headphones",
+      originalPrompt: "Buy demo headphones for finance recovery tests.",
+      status: "ACTIVE",
+      autoSpendLimit: 20_000n,
+      transactionLimit: 20_000n,
+      dailyLimit: 50_000n,
+      startsAt: new Date(Date.now() - 60_000),
+      expiresAt: new Date(Date.now() + 86_400_000),
+      rules: [{ ruleType: "ALLOWED_BRAND", operator: "IN", value: ["Sony"] }],
+    });
+    const product = await database.productSnapshot.findFirstOrThrow({
+      where: { source: "admin-ops-test" },
+    });
+    const proposal = await new ProposalRepository(database).create({
+      userId: normalId,
+      mandateId: mandate.id,
+      mandateVersionId: mandate.activeVersionId ?? "",
+      productSnapshotId: product.id,
+      quantity: 1,
+      shipping: 0n,
+      tax: 0n,
+      idempotencyKey: `admin-finance-proposal-${randomUUID()}`,
+    });
+    const paypalOrderId = `ORDER-ADMIN-FINANCE-${randomUUID()}`;
+    const pendingPayment = await database.payment.create({
+      data: {
+        userId: normalId,
+        mandateId: mandate.id,
+        proposalId: proposal.id,
+        paypalOrderId,
+        amount: 10_000n,
+        currency: "USD",
+        status: "CREATED",
+        idempotencyKey: `admin-finance-pending-${randomUUID()}`,
+      },
+    });
+    getOrder.mockResolvedValue({
+      id: paypalOrderId,
+      status: "APPROVED",
+      links: [],
+      purchase_units: [
+        {
+          reference_id: pendingPayment.id,
+          custom_id: proposal.id,
+          amount: { currency_code: "USD", value: "100.00" },
+        },
+      ],
+      approvalUrl: "https://sandbox.paypal.com/checkoutnow?token=" + paypalOrderId,
+    });
+    const currentPending = (
+      await app.inject({
+        method: "GET",
+        url: `/api/admin/payments/${pendingPayment.id}`,
+        headers: { cookie },
+      })
+    ).json().data as { updatedAt: string; paymentStatus: string };
+    const missingReason = await mutate(`/api/admin/payments/${pendingPayment.id}/reconcile`, {
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedStatus: currentPending.paymentStatus,
+      expectedUpdatedAt: currentPending.updatedAt,
+    });
+    expect(missingReason.statusCode, missingReason.body).toBe(400);
+    const reconcileKey = randomUUID();
+    const reconciled = await mutate(`/api/admin/payments/${pendingPayment.id}/reconcile`, {
+      reason,
+      confirmation: true,
+      requestKey: reconcileKey,
+      expectedStatus: currentPending.paymentStatus,
+      expectedUpdatedAt: currentPending.updatedAt,
+    });
+    expect(reconciled.statusCode, reconciled.body).toBe(200);
+    expect(reconciled.json().data.paymentStatus).toBe("APPROVED");
+    expect(getOrder).toHaveBeenCalledWith(paypalOrderId);
+    const retryReconcile = await mutate(`/api/admin/payments/${pendingPayment.id}/reconcile`, {
+      reason,
+      confirmation: true,
+      requestKey: reconcileKey,
+      expectedStatus: currentPending.paymentStatus,
+      expectedUpdatedAt: currentPending.updatedAt,
+    });
+    expect(retryReconcile.statusCode).toBe(200);
+    expect(retryReconcile.json().changed).toBe(false);
+    expect(retryReconcile.json().actionId).toBe(reconciled.json().actionId);
+    const currentApproved = (
+      await app.inject({
+        method: "GET",
+        url: `/api/admin/orders/${pendingPayment.id}`,
+        headers: { cookie },
+      })
+    ).json().data as { updatedAt: string; paymentStatus: string };
+    const orderReconcile = await mutate(`/api/admin/orders/${pendingPayment.id}/reconcile`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedStatus: currentApproved.paymentStatus,
+      expectedUpdatedAt: currentApproved.updatedAt,
+    });
+    expect(orderReconcile.statusCode, orderReconcile.body).toBe(200);
+    expect(orderReconcile.json().data.paymentStatus).toBe("APPROVED");
+
+    const capturedProposal = await new ProposalRepository(database).create({
+      userId: normalId,
+      mandateId: mandate.id,
+      mandateVersionId: mandate.activeVersionId ?? "",
+      productSnapshotId: product.id,
+      quantity: 1,
+      shipping: 0n,
+      tax: 0n,
+      idempotencyKey: `admin-finance-captured-${randomUUID()}`,
+    });
+    const captureId = `CAPTURE-ADMIN-FINANCE-${randomUUID()}`;
+    const capturedPayment = await database.payment.create({
+      data: {
+        userId: normalId,
+        mandateId: mandate.id,
+        proposalId: capturedProposal.id,
+        paypalOrderId: `ORDER-ADMIN-FINANCE-CAP-${randomUUID()}`,
+        paypalCaptureId: captureId,
+        amount: 10_000n,
+        currency: "USD",
+        status: "COMPLETED",
+        capturedAt: new Date(),
+        idempotencyKey: `admin-finance-captured-pay-${randomUUID()}`,
+      },
+    });
+    await database.purchaseProposal.update({
+      where: { id: capturedProposal.id },
+      data: { status: "COMPLETED" },
+    });
+    getCapture.mockResolvedValue({
+      id: captureId,
+      status: "COMPLETED",
+      amount: { currency_code: "USD", value: "100.00" },
+      custom_id: capturedProposal.id,
+      create_time: "2026-10-06T12:00:00Z",
+      supplementary_data: { related_ids: { order_id: capturedPayment.paypalOrderId } },
+    });
+    refundCapture.mockImplementation(async (input) => {
+      const body = input as { invoiceId: string; amountMinor: number; captureId: string };
+      return {
+        id: `REFUND-${body.invoiceId}`,
+        status: "COMPLETED",
+        amount: { currency_code: "USD", value: "100.00" },
+        invoice_id: body.invoiceId,
+        capture_id: body.captureId,
+        create_time: "2026-10-06T12:05:00Z",
+      };
+    });
+    const captured = (
+      await app.inject({
+        method: "GET",
+        url: `/api/admin/payments/${capturedPayment.id}`,
+        headers: { cookie },
+      })
+    ).json().data as {
+      updatedAt: string;
+      paymentStatus: string;
+      remainingRefundableMinor: number;
+    };
+    expect(captured.remainingRefundableMinor).toBe(10_000);
+    await database.adminSessionSecurity.update({
+      where: { sessionId },
+      data: { reauthenticatedAt: new Date(Date.now() - ADMIN_FRESH_MS) },
+    });
+    expect(
+      (
+        await mutate(`/api/admin/payments/${capturedPayment.id}/refund`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedStatus: captured.paymentStatus,
+          expectedUpdatedAt: captured.updatedAt,
+          amountMinor: null,
+          reviewedAmountMinor: 10_000,
+          typedConfirmation: capturedPayment.id,
+        })
+      ).json().error.code,
+    ).toBe("ADMIN_REAUTH_REQUIRED");
+    await login();
+    expect(
+      (
+        await mutate(`/api/admin/payments/${capturedPayment.id}/refund`, {
+          reason,
+          confirmation: true,
+          requestKey: randomUUID(),
+          expectedStatus: captured.paymentStatus,
+          expectedUpdatedAt: captured.updatedAt,
+          amountMinor: null,
+          reviewedAmountMinor: 1,
+          typedConfirmation: capturedPayment.id,
+        })
+      ).statusCode,
+    ).toBe(400);
+    const refundKey = randomUUID();
+    const refunded = await mutate(`/api/admin/payments/${capturedPayment.id}/refund`, {
+      reason,
+      confirmation: true,
+      requestKey: refundKey,
+      expectedStatus: captured.paymentStatus,
+      expectedUpdatedAt: captured.updatedAt,
+      amountMinor: null,
+      reviewedAmountMinor: 10_000,
+      typedConfirmation: capturedPayment.id,
+    });
+    expect(refunded.statusCode, refunded.body).toBe(200);
+    expect(refunded.json().data.paymentStatus).toBe("REFUNDED");
+    expect(refundCapture).toHaveBeenCalledOnce();
+    const retryRefund = await mutate(`/api/admin/payments/${capturedPayment.id}/refund`, {
+      reason,
+      confirmation: true,
+      requestKey: refundKey,
+      expectedStatus: captured.paymentStatus,
+      expectedUpdatedAt: captured.updatedAt,
+      amountMinor: null,
+      reviewedAmountMinor: 10_000,
+      typedConfirmation: capturedPayment.id,
+    });
+    expect(retryRefund.statusCode).toBe(200);
+    expect(retryRefund.json().changed).toBe(false);
+    expect(refundCapture).toHaveBeenCalledOnce();
+
+    const createdRefund = await database.refund.findFirstOrThrow({
+      where: { paymentId: capturedPayment.id, idempotencyKey: refundKey },
+    });
+    expect(createdRefund.paypalRequestId).toBeTruthy();
+    const refreshed = await mutate(`/api/admin/refunds/${createdRefund.id}/refresh`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedStatus: createdRefund.status,
+      expectedUpdatedAt: createdRefund.updatedAt.toISOString(),
+    });
+    expect(refreshed.statusCode, refreshed.body).toBe(200);
+
+    const webhook = await database.webhookInbox.create({
+      data: {
+        provider: "paypal",
+        providerEventId: `admin-finance-${randomUUID()}`,
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+        signatureVerified: true,
+        payload: {
+          id: `EVT-${randomUUID()}`,
+          event_type: "PAYMENT.CAPTURE.COMPLETED",
+          resource: {
+            id: captureId,
+            supplementary_data: {
+              related_ids: { order_id: capturedPayment.paypalOrderId },
+            },
+          },
+        },
+        status: "FAILED",
+        attempts: 1,
+        nextAttemptAt: new Date(Date.now() - 1_000),
+      },
+    });
+    getOrder.mockResolvedValue({
+      id: capturedPayment.paypalOrderId!,
+      status: "COMPLETED",
+      links: [],
+      purchase_units: [
+        {
+          reference_id: capturedPayment.id,
+          custom_id: capturedProposal.id,
+          amount: { currency_code: "USD", value: "100.00" },
+          payments: {
+            captures: [
+              {
+                id: captureId,
+                status: "COMPLETED",
+                amount: { currency_code: "USD", value: "100.00" },
+                custom_id: capturedProposal.id,
+                create_time: "2026-10-06T12:00:00Z",
+              },
+            ],
+          },
+        },
+      ],
+      approvalUrl: "https://sandbox.paypal.com/checkoutnow?token=" + capturedPayment.paypalOrderId,
+    });
+    const webhookRow = (
+      await app.inject({
+        method: "GET",
+        url: `/api/admin/webhooks/${webhook.id}`,
+        headers: { cookie },
+      })
+    ).json().data as {
+      updatedAt: string;
+      status: string;
+      attempts: number;
+      retryEligible: boolean;
+    };
+    expect(webhookRow.retryEligible).toBe(true);
+    const duplicate = await Promise.all([
+      mutate(`/api/admin/webhooks/${webhook.id}/retry`, {
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        expectedStatus: webhookRow.status,
+        expectedUpdatedAt: webhookRow.updatedAt,
+        expectedAttempts: webhookRow.attempts,
+      }),
+      mutate(`/api/admin/webhooks/${webhook.id}/retry`, {
+        reason,
+        confirmation: true,
+        requestKey: randomUUID(),
+        expectedStatus: webhookRow.status,
+        expectedUpdatedAt: webhookRow.updatedAt,
+        expectedAttempts: webhookRow.attempts,
+      }),
+    ]);
+    expect(
+      duplicate.some((row) => row.statusCode === 200),
+      duplicate.map((row) => row.body).join("\n"),
+    ).toBe(true);
+    expect(duplicate.some((row) => row.statusCode === 409)).toBe(true);
+    const afterRetry = await database.webhookInbox.findUniqueOrThrow({ where: { id: webhook.id } });
+    expect(afterRetry.attempts).toBeGreaterThan(webhook.attempts);
+
+    const linked = await mutate(`/api/admin/webhooks/${webhook.id}/reconcile`, {
+      reason,
+      confirmation: true,
+      requestKey: randomUUID(),
+      expectedStatus: (await database.webhookInbox.findUniqueOrThrow({ where: { id: webhook.id } }))
+        .status,
+      expectedUpdatedAt: (
+        await database.webhookInbox.findUniqueOrThrow({ where: { id: webhook.id } })
+      ).updatedAt.toISOString(),
+    });
+    expect(linked.statusCode, linked.body).toBe(200);
+
+    const events = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?targetType=PAYMENT&targetId=${pendingPayment.id}&limit=20`,
+      headers: { cookie },
+    });
+    expect(events.statusCode).toBe(200);
+    expect(events.json().data.map((row: { action: string }) => row.action)).toContain(
+      "ADMIN_PAYMENT_RECONCILE_REQUESTED",
+    );
+    const refundEvents = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?targetType=REFUND&targetId=${capturedPayment.id}&limit=20`,
+      headers: { cookie },
+    });
+    expect(refundEvents.json().data.map((row: { action: string }) => row.action)).toContain(
+      "ADMIN_REFUND_REQUESTED",
+    );
+    const webhookEvents = await app.inject({
+      method: "GET",
+      url: `/api/admin/audit?targetType=WEBHOOK&targetId=${webhook.id}&limit=20`,
+      headers: { cookie },
+    });
+    expect(webhookEvents.json().data.map((row: { action: string }) => row.action)).toEqual(
+      expect.arrayContaining([
+        "ADMIN_WEBHOOK_RETRY_REQUESTED",
+        "ADMIN_WEBHOOK_RECONCILE_REQUESTED",
+      ]),
+    );
+    expect(events.body).not.toMatch(/password|"token"/u);
   });
 
   it("enforces principal-scoped read limits and keeps sign-out available through a separate bucket", async () => {

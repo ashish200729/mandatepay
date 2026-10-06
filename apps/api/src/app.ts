@@ -56,6 +56,8 @@ export interface CreateAppOptions {
   testAdminReadMaximum?: number;
   /** Isolated admin tests can raise the principal mutation bucket without changing production limits. */
   testAdminMutationMaximum?: number;
+  /** Isolated admin tests can raise the financial recovery bucket without changing production limits. */
+  testAdminFinancialMaximum?: number;
 }
 
 type RateLimitEntry = {
@@ -267,7 +269,8 @@ export async function createApp(options: CreateAppOptions = {}) {
   if (
     (options.testAuthPostMaximum !== undefined ||
       options.testAdminReadMaximum !== undefined ||
-      options.testAdminMutationMaximum !== undefined) &&
+      options.testAdminMutationMaximum !== undefined ||
+      options.testAdminFinancialMaximum !== undefined) &&
     (config.NODE_ENV !== "test" ||
       (options.testAuthPostMaximum !== undefined &&
         (!Number.isSafeInteger(options.testAuthPostMaximum) ||
@@ -280,12 +283,22 @@ export async function createApp(options: CreateAppOptions = {}) {
       (options.testAdminMutationMaximum !== undefined &&
         (!Number.isSafeInteger(options.testAdminMutationMaximum) ||
           options.testAdminMutationMaximum < 1 ||
-          options.testAdminMutationMaximum > 500)))
+          options.testAdminMutationMaximum > 500)) ||
+      (options.testAdminFinancialMaximum !== undefined &&
+        (!Number.isSafeInteger(options.testAdminFinancialMaximum) ||
+          options.testAdminFinancialMaximum < 1 ||
+          options.testAdminFinancialMaximum > 500)))
   ) {
     throw new Error("Authentication fixture limits are supported only by isolated test servers.");
   }
   const maximumAuthRequests = options.testAuthPostMaximum ?? authPostMaxRequests;
   const runtime = resolveAuthRuntime(options, config);
+  const paypal =
+    runtime === null
+      ? null
+      : options.paypalClient !== undefined
+        ? options.paypalClient
+        : createPayPalClientFromEnvironment(config);
   const authPostRateLimits = new Map<string, RateLimitEntry>();
   const app = Fastify({
     logger: safeLoggerConfig(config),
@@ -321,6 +334,8 @@ export async function createApp(options: CreateAppOptions = {}) {
     discoveryMode: config.PRODUCT_DISCOVERY_MODE,
     readMaximum: options.testAdminReadMaximum,
     mutationMaximum: options.testAdminMutationMaximum,
+    financialMaximum: options.testAdminFinancialMaximum,
+    getPaypal: () => paypal,
   });
 
   app.get("/health", async () => ({
@@ -500,10 +515,6 @@ export async function createApp(options: CreateAppOptions = {}) {
 
   if (runtime) {
     const consumeMutation = createMutationRateLimiter();
-    const paypal =
-      options.paypalClient !== undefined
-        ? options.paypalClient
-        : createPayPalClientFromEnvironment(config);
     const modelConfig = () =>
       loadOpenAIConfig({
         OPENAI_API_KEY: config.OPENAI_API_KEY,

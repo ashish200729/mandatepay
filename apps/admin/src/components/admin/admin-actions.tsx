@@ -8,13 +8,17 @@ import {
   type ActionConfirmation,
 } from "@/components/admin/action-dialogs";
 import { postAdminControl } from "@/lib/admin-action";
+import { formatUsd } from "@/lib/money";
 import { parseAdminMe } from "@/lib/session";
 import {
   requireAdminReason,
   type AdminEntityCapability,
   type AdminMandate,
+  type AdminPayment,
   type AdminProposal,
+  type AdminRefund,
   type AdminUser,
+  type AdminWebhook,
 } from "@mandatepay/shared";
 
 function allowed(capabilities: AdminEntityCapability[], action: AdminEntityCapability["action"]) {
@@ -372,6 +376,236 @@ export function ProposalControls({ proposal }: { proposal: AdminProposal }) {
           router.refresh();
           return result;
         }}
+      />
+    </section>
+  );
+}
+
+export function PaymentControls({
+  payment,
+  resource,
+}: {
+  payment: AdminPayment;
+  resource: "orders" | "payments";
+}) {
+  const router = useRouter();
+  const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [refundOpen, setRefundOpen] = useState(false);
+  const [fresh, setFresh] = useState<string>();
+  const intent = `${payment.id}:${payment.paymentStatus}:${payment.updatedAt}:${payment.remainingRefundableMinor}`;
+  const remaining = formatUsd(payment.remainingRefundableMinor);
+  async function run(path: string, extra: Record<string, unknown>, input: ActionConfirmation) {
+    const result = await postAdminControl(
+      `${resource === "orders" ? "orders" : "payments"}/${encodeURIComponent(payment.id)}/${path}`,
+      {
+        reason: input.reason,
+        confirmation: true,
+        requestKey: input.requestKey,
+        expectedStatus: payment.paymentStatus,
+        expectedUpdatedAt: payment.updatedAt,
+        ...extra,
+        ...(input.confirmation ? { typedConfirmation: input.confirmation } : {}),
+      },
+    );
+    router.refresh();
+    return result;
+  }
+  return (
+    <section className="space-y-4">
+      <h2 className="text-lg font-medium">Payment recovery</h2>
+      <p className="text-sm text-muted-foreground">
+        Reconciliation reads PayPal Sandbox and updates MandatePay to match. It never captures,
+        never edits amounts, and never marks success locally. Refunds reuse the guarded refund
+        service and do not restore spending permission.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!allowed(payment.capabilities, "payments:reconcile")}
+          onClick={() => setReconcileOpen(true)}
+        >
+          Reconcile with PayPal
+        </Button>
+        {resource === "payments" && (
+          <Button
+            type="button"
+            disabled={!allowed(payment.capabilities, "payments:refund")}
+            onClick={() => {
+              void freshAuthUntil().then((value) => {
+                setFresh(value);
+                setRefundOpen(true);
+              });
+            }}
+          >
+            Initiate remaining refund
+          </Button>
+        )}
+      </div>
+      {!allowed(payment.capabilities, "payments:reconcile") && (
+        <p className="text-sm text-muted-foreground">
+          {blockedReason(payment.capabilities, "payments:reconcile")}
+        </p>
+      )}
+      <ReasonDialog
+        open={reconcileOpen}
+        onOpenChange={setReconcileOpen}
+        title="Reconcile with PayPal"
+        description="Read the current PayPal Sandbox order and persist the authoritative result. This does not capture a payment."
+        target={{
+          id: payment.id,
+          label: `${formatUsd(payment.amountMinor)} ${payment.paymentStatus}`,
+        }}
+        actionLabel="Reconcile"
+        intentKey={`reconcile:${intent}`}
+        onConfirm={(input) => run("reconcile", {}, input)}
+      />
+      {resource === "payments" && (
+        <DangerConfirmDialog
+          open={refundOpen}
+          onOpenChange={setRefundOpen}
+          title="Initiate remaining refund"
+          description="Submit the remaining refundable amount through the existing guarded refund service. PayPal remains authoritative. Spending limits are not restored."
+          target={{
+            id: payment.id,
+            label: `${formatUsd(payment.amountMinor)} remaining ${remaining}`,
+          }}
+          actionLabel="Refund remaining amount"
+          intentKey={`refund:${intent}`}
+          freshAuthUntil={fresh}
+          reviewItems={[
+            { label: "Captured", value: `${formatUsd(payment.amountMinor)} USD` },
+            { label: "Already refunded", value: `${formatUsd(payment.refundedMinor)} USD` },
+            { label: "Remaining refundable", value: `${remaining} USD` },
+          ]}
+          amountConfirmation={{ expected: remaining, label: "Amount confirmation" }}
+          onConfirm={(input) =>
+            run(
+              "refund",
+              { amountMinor: null, reviewedAmountMinor: payment.remainingRefundableMinor },
+              input,
+            )
+          }
+        />
+      )}
+    </section>
+  );
+}
+
+export function RefundControls({ refund }: { refund: AdminRefund }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="space-y-4">
+      <h2 className="text-lg font-medium">Refund recovery</h2>
+      <p className="text-sm text-muted-foreground">
+        Status refresh reads known PayPal refund IDs only. It does not create a new refund or
+        restore spending permission.
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={!allowed(refund.capabilities, "refunds:refresh")}
+        onClick={() => setOpen(true)}
+      >
+        Refresh refund status
+      </Button>
+      {!allowed(refund.capabilities, "refunds:refresh") && (
+        <p className="text-sm text-muted-foreground">
+          {blockedReason(refund.capabilities, "refunds:refresh")}
+        </p>
+      )}
+      <ReasonDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Refresh refund status"
+        description="Read the known PayPal refund and persist the authoritative status. No new refund is submitted."
+        target={{ id: refund.id, label: `${formatUsd(refund.amountMinor)} ${refund.status}` }}
+        actionLabel="Refresh status"
+        intentKey={`refresh:${refund.id}:${refund.status}:${refund.updatedAt}`}
+        onConfirm={async (input) => {
+          const result = await postAdminControl(
+            `refunds/${encodeURIComponent(refund.id)}/refresh`,
+            {
+              reason: input.reason,
+              confirmation: true,
+              requestKey: input.requestKey,
+              expectedStatus: refund.status,
+              expectedUpdatedAt: refund.updatedAt,
+            },
+          );
+          router.refresh();
+          return result;
+        }}
+      />
+    </section>
+  );
+}
+
+export function WebhookControls({ webhook }: { webhook: AdminWebhook }) {
+  const router = useRouter();
+  const [retryOpen, setRetryOpen] = useState(false);
+  const [reconcileOpen, setReconcileOpen] = useState(false);
+  async function run(
+    path: "retry" | "reconcile",
+    extra: Record<string, unknown>,
+    input: ActionConfirmation,
+  ) {
+    const result = await postAdminControl(`webhooks/${encodeURIComponent(webhook.id)}/${path}`, {
+      reason: input.reason,
+      confirmation: true,
+      requestKey: input.requestKey,
+      expectedStatus: webhook.status,
+      expectedUpdatedAt: webhook.updatedAt,
+      ...extra,
+    });
+    router.refresh();
+    return result;
+  }
+  return (
+    <section className="space-y-4">
+      <h2 className="text-lg font-medium">Webhook recovery</h2>
+      <p className="text-sm text-muted-foreground">
+        Retry uses the verified inbox lease and five-attempt cap. Linked reconciliation reads the
+        matching PayPal order or refund without editing payloads.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!allowed(webhook.capabilities, "webhooks:retry")}
+          onClick={() => setRetryOpen(true)}
+        >
+          Retry processing
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!allowed(webhook.capabilities, "webhooks:reconcile")}
+          onClick={() => setReconcileOpen(true)}
+        >
+          Reconcile linked payment
+        </Button>
+      </div>
+      <ReasonDialog
+        open={retryOpen}
+        onOpenChange={setRetryOpen}
+        title="Retry webhook processing"
+        description="Claim the verified inbox lease and replay existing provider facts. Concurrent duplicate retries are rejected."
+        target={{ id: webhook.id, label: webhook.eventType }}
+        actionLabel="Retry processing"
+        intentKey={`retry:${webhook.id}:${webhook.status}:${webhook.updatedAt}:${webhook.attempts}`}
+        onConfirm={(input) => run("retry", { expectedAttempts: webhook.attempts }, input)}
+      />
+      <ReasonDialog
+        open={reconcileOpen}
+        onOpenChange={setReconcileOpen}
+        title="Reconcile linked payment"
+        description="Resolve the linked order or payment and reconcile against PayPal Sandbox. Ambiguous or unlinked events are rejected."
+        target={{ id: webhook.id, label: webhook.paymentId ?? webhook.eventType }}
+        actionLabel="Reconcile linked payment"
+        intentKey={`hook-reconcile:${webhook.id}:${webhook.status}:${webhook.updatedAt}`}
+        onConfirm={(input) => run("reconcile", {}, input)}
       />
     </section>
   );

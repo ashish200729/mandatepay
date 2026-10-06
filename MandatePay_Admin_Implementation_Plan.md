@@ -1668,44 +1668,44 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 ### Payment TODO
 
-- [ ] **P6-01** Expose payment reconciliation service to admin API.
-- [ ] **P6-02** Expose order reconciliation service.
-- [ ] **P6-03** Add reconcile confirmation/reason.
-- [ ] **P6-04** Ensure provider truth remains authoritative.
-- [ ] **P6-05** Add idempotency protection.
-- [ ] **P6-06** Add audit events.
+- [x] **P6-01** Expose payment reconciliation service to admin API.
+- [x] **P6-02** Expose order reconciliation service.
+- [x] **P6-03** Add reconcile confirmation/reason.
+- [x] **P6-04** Ensure provider truth remains authoritative.
+- [x] **P6-05** Add idempotency protection.
+- [x] **P6-06** Add audit events.
 
 ### Refund TODO
 
-- [ ] **P6-07** Reuse existing guarded refund flow.
-- [ ] **P6-08** Add admin refund initiation endpoint only if operationally needed.
-- [ ] **P6-09** Require fresh auth.
-- [ ] **P6-10** Require amount review.
-- [ ] **P6-11** Require typed confirmation.
-- [ ] **P6-12** Require reason.
-- [ ] **P6-13** Preserve stable refund key.
-- [ ] **P6-14** Preserve invoice binding.
-- [ ] **P6-15** Preserve no-spend-restoration rule.
-- [ ] **P6-16** Add refund status refresh.
-- [ ] **P6-17** Add audit events.
+- [x] **P6-07** Reuse existing guarded refund flow.
+- [x] **P6-08** Add admin refund initiation endpoint only if operationally needed.
+- [x] **P6-09** Require fresh auth.
+- [x] **P6-10** Require amount review.
+- [x] **P6-11** Require typed confirmation.
+- [x] **P6-12** Require reason.
+- [x] **P6-13** Preserve stable refund key.
+- [x] **P6-14** Preserve invoice binding.
+- [x] **P6-15** Preserve no-spend-restoration rule.
+- [x] **P6-16** Add refund status refresh.
+- [x] **P6-17** Add audit events.
 
 ### Webhook TODO
 
-- [ ] **P6-18** Implement retry through inbox/recovery service.
-- [ ] **P6-19** Protect against concurrent duplicate retries.
-- [ ] **P6-20** Respect lease ownership/state.
-- [ ] **P6-21** Add stale lease recovery only if current worker model supports it.
-- [ ] **P6-22** Add linked order/payment reconciliation shortcut.
-- [ ] **P6-23** Add bounded retry constraints.
-- [ ] **P6-24** Add audit events.
-- [ ] **P6-25** Add integration and E2E tests.
+- [x] **P6-18** Implement retry through inbox/recovery service.
+- [x] **P6-19** Protect against concurrent duplicate retries.
+- [x] **P6-20** Respect lease ownership/state.
+- [x] **P6-21** Add stale lease recovery only if current worker model supports it.
+- [x] **P6-22** Add linked order/payment reconciliation shortcut.
+- [x] **P6-23** Add bounded retry constraints.
+- [x] **P6-24** Add audit events.
+- [x] **P6-25** Add integration and E2E tests.
 
 ### Exit criteria
 
-- [ ] Admin can diagnose and recover operational payment/webhook failures.
-- [ ] PayPal Sandbox remains authoritative.
-- [ ] No duplicated captures/refunds can be caused by an admin retry.
-- [ ] Every financial action is idempotent, reasoned, and audited.
+- [x] Admin can diagnose and recover operational payment/webhook failures.
+- [x] PayPal Sandbox remains authoritative.
+- [x] No duplicated captures/refunds can be caused by an admin retry.
+- [x] Every financial action is idempotent, reasoned, and audited.
 
 **Feeds into:** Phase 7.
 

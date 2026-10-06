@@ -7,6 +7,7 @@ import {
   isDatabaseError,
   type AppendAdminAuditEventInput,
 } from "@mandatepay/database";
+import type { PayPalClient } from "@mandatepay/paypal";
 import { AdminTraceIdSchema } from "@mandatepay/shared";
 import type { AuthRuntime } from "../../auth.js";
 import { originsFor, trustedOrigin } from "../../origins.js";
@@ -14,6 +15,7 @@ import { createMutationRateLimiter } from "../../services/rate-limits.js";
 import { AdminAuthError, adminMe, requireSuperAdmin, type AdminIdentity } from "./admin.auth.js";
 import { registerAdminOperationRoutes } from "./admin.operations.js";
 import { registerAdminControlRoutes } from "./admin.controls.js";
+import { registerAdminFinanceRoutes } from "./admin.finance.js";
 
 const signInSchema = z
   .object({ email: z.email().max(320), password: z.string().min(1).max(128) })
@@ -31,12 +33,15 @@ export function registerAdminRoutes(
     discoveryMode?: string;
     readMaximum?: number;
     mutationMaximum?: number;
+    financialMaximum?: number;
+    getPaypal?: () => PayPalClient | null;
   },
 ) {
   const origins = originsFor(options.adminOrigin, options.nodeEnv);
   const authAttempts = createMutationRateLimiter({ maximum: 5 });
   const reads = createMutationRateLimiter({ maximum: options.readMaximum ?? 120 });
   const mutations = createMutationRateLimiter({ maximum: options.mutationMaximum ?? 20 });
+  const financial = createMutationRateLimiter({ maximum: options.financialMaximum ?? 5 });
   void app.register(
     async (scope) => {
       const identities = new WeakMap<FastifyRequest, AdminIdentity>();
@@ -115,6 +120,10 @@ export function registerAdminRoutes(
             identity.principalId,
           );
           if (!rate.allowed) return rateLimited(reply, request, rate.retryAfter);
+          if (isAdminFinancialMutation(request.method, request.url)) {
+            const money = financial(identity.principalId);
+            if (!money.allowed) return rateLimited(reply, request, money.retryAfter);
+          }
           identities.set(request, identity);
           (request as FastifyRequest & { adminPrincipalId?: string }).adminPrincipalId =
             identity.principalId;
@@ -138,6 +147,15 @@ export function registerAdminRoutes(
       registerAdminControlRoutes(scope, {
         getDatabase: () => options.runtime!.database,
         getSecret: () => options.runtime!.auth.options.secret,
+        runtime: () => options.runtime!,
+        identity: (request) => identities.get(request)!,
+        sendError,
+        trace,
+      });
+      registerAdminFinanceRoutes(scope, {
+        getDatabase: () => options.runtime!.database,
+        getSecret: () => options.runtime!.auth.options.secret,
+        getPaypal: () => options.getPaypal?.() ?? null,
         runtime: () => options.runtime!,
         identity: (request) => identities.get(request)!,
         sendError,
@@ -462,5 +480,14 @@ function rateLimited(reply: FastifyReply, request: FastifyRequest, seconds: numb
     "ADMIN_RATE_LIMITED",
     429,
     "Too many requests. Try again shortly.",
+  );
+}
+
+function isAdminFinancialMutation(method: string, url: string) {
+  return (
+    method === "POST" &&
+    /\/(?:orders|payments|refunds|webhooks)\/[^/]+\/(?:reconcile|refund|refresh|retry)(?:\?|$)/u.test(
+      url.split("?")[0] ?? "",
+    )
   );
 }

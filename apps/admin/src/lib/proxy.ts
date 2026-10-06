@@ -16,6 +16,11 @@ const MESSAGES: Record<string, string> = {
   ADMIN_TARGET_NOT_FOUND: "The requested record was not found.",
   CONFLICT: "The record changed. Reload its current state before trying again.",
   INVALID_STATE: "The record is not in a valid state for this action.",
+  ADMIN_RETRY_NOT_ALLOWED:
+    "Retry is limited to verified due failures or stale processing leases under the five-attempt cap.",
+  ADMIN_RECONCILE_FAILED:
+    "Provider confirmation is pending. Check the current state before retrying.",
+  ADMIN_ACTION_NOT_ALLOWED: "This action is not allowed in the current state.",
 };
 function failure(code: string, status: number, requestId?: string) {
   return NextResponse.json(
@@ -120,7 +125,9 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
         redirect: "manual",
         signal: AbortSignal.any([
           request.signal,
-          AbortSignal.timeout(match.kind === "csv" ? 30_000 : 15_000),
+          AbortSignal.timeout(
+            match.kind === "csv" ? 30_000 : request.method === "POST" ? 30_000 : 15_000,
+          ),
         ]),
       },
     );

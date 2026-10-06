@@ -105,7 +105,13 @@ function capability(
     | "users:notes"
     | "mandates:pause"
     | "mandates:revoke"
-    | "proposals:re-evaluate",
+    | "proposals:re-evaluate"
+    | "orders:reconcile"
+    | "payments:reconcile"
+    | "payments:refund"
+    | "refunds:refresh"
+    | "webhooks:retry"
+    | "webhooks:reconcile",
   allowed: boolean,
   reason: string | null = null,
 ) {
@@ -160,6 +166,68 @@ function proposalCapabilities(status: string, isSample: boolean) {
       isSample
         ? "Sample proposals cannot be targeted by controls."
         : "Re-evaluation is limited to current AgentGuard evaluation states. BLOCKED and terminal proposals cannot be reset.",
+    ),
+  ];
+}
+function paymentCapabilities(input: {
+  isSample: boolean;
+  status: string;
+  remainingRefundableMinor: number;
+  hasPaypalOrderId: boolean;
+}) {
+  const sample = "Sample payments cannot be targeted by financial controls.";
+  const reconcileAllowed = !input.isSample && input.hasPaypalOrderId;
+  const refundAllowed =
+    !input.isSample &&
+    ["COMPLETED", "PARTIALLY_REFUNDED"].includes(input.status) &&
+    input.remainingRefundableMinor > 0;
+  return [
+    capability(
+      "orders:reconcile",
+      reconcileAllowed,
+      input.isSample
+        ? sample
+        : "Reconciliation requires a PayPal order identifier. Provider truth is not invented locally.",
+    ),
+    capability(
+      "payments:reconcile",
+      reconcileAllowed,
+      input.isSample
+        ? sample
+        : "Reconciliation requires a PayPal order identifier. Provider truth is not invented locally.",
+    ),
+    capability(
+      "payments:refund",
+      refundAllowed,
+      input.isSample
+        ? sample
+        : "Refunds are limited to captured payments with remaining refundable amount.",
+    ),
+  ];
+}
+function refundCapabilities(input: { isSample: boolean; status: string }) {
+  const allowed = !input.isSample && ["REQUESTED", "APPROVED", "SUBMITTED"].includes(input.status);
+  return [
+    capability(
+      "refunds:refresh",
+      allowed,
+      input.isSample
+        ? "Sample refunds cannot be targeted by financial controls."
+        : "Status refresh is limited to known pending refunds.",
+    ),
+  ];
+}
+function webhookCapabilities(input: { retryEligible: boolean; paymentId: string | null }) {
+  return [
+    capability(
+      "webhooks:retry",
+      input.retryEligible,
+      "Retry is limited to verified due failures or stale processing leases under the five-attempt cap.",
+    ),
+    capability(
+      "webhooks:reconcile",
+      Boolean(input.paymentId),
+      "Linked reconciliation requires exactly one matching order or payment.",
     ),
   ];
 }
@@ -888,10 +956,15 @@ export class AdminOperationsRepository {
     const refunded = row.refunds
       .filter((refund) => refund.status === "COMPLETED")
       .reduce((sum, refund) => sum + refund.amount, 0n);
+    const held = row.refunds
+      .filter((refund) =>
+        ["REQUESTED", "APPROVED", "SUBMITTED", "COMPLETED"].includes(refund.status),
+      )
+      .reduce((sum, refund) => sum + refund.amount, 0n);
     const pending = row.refunds.some((refund) =>
       ["REQUESTED", "APPROVED", "SUBMITTED"].includes(refund.status),
     );
-    const remaining = row.amount - refunded;
+    const remaining = row.amount - held;
     const order = {
       id: row.id,
       paymentId: row.id,
@@ -927,6 +1000,12 @@ export class AdminOperationsRepository {
         : pending
           ? "pending"
           : "none") as "none" | "pending" | "refunded",
+      capabilities: paymentCapabilities({
+        isSample: order.isSample,
+        status: row.status,
+        remainingRefundableMinor: minorNumber(remaining < 0n ? 0n : remaining, "remaining"),
+        hasPaypalOrderId: Boolean(row.paypalOrderId),
+      }),
     };
   }
 
@@ -982,6 +1061,10 @@ export class AdminOperationsRepository {
       kind: row.amount === row.payment.amount ? ("FULL" as const) : ("PARTIAL" as const),
       isSample: row.isSample || row.payment.isSample,
       updatedAt: iso(row.updatedAt),
+      capabilities: refundCapabilities({
+        isSample: row.isSample || row.payment.isSample,
+        status: row.status,
+      }),
     };
   }
 
@@ -1029,14 +1112,20 @@ export class AdminOperationsRepository {
     return row ? this.webhookDto(row, asOf) : null;
   }
 
-  private async webhookDto(
-    row: Prisma.WebhookInboxGetPayload<{ select: typeof webhookSelect }>,
-    asOf: Date,
-  ) {
-    const diagnostics = webhookDiagnostics({ ...row, asOf });
-    const ids = providerIdsFromPayload(row.payload);
-    let paymentId: string | null = null;
-    let refundId: string | null = null;
+  async webhookFinancialLinks(eventId: string, asOf = new Date()) {
+    const row = await this.db.webhookInbox.findUnique({
+      where: { id: requireId(eventId, "webhook") },
+      select: webhookSelect,
+    });
+    if (!row) return null;
+    const links = await this.webhookLinks(row.payload);
+    return { webhook: await this.webhookDto(row, asOf), ...links };
+  }
+
+  private async webhookLinks(payload: Prisma.JsonValue) {
+    const ids = providerIdsFromPayload(payload);
+    const paymentIds = new Set<string>();
+    const refundIds = new Set<string>();
     for (const id of ids) {
       const [byOrder, byCapture, byRefund] = await Promise.all([
         this.db.payment.findUnique({
@@ -1049,13 +1138,32 @@ export class AdminOperationsRepository {
         }),
         this.db.refund.findUnique({
           where: { paypalRefundId: id },
-          select: { id: true, isSample: true, payment: { select: { isSample: true } } },
+          select: {
+            id: true,
+            isSample: true,
+            paymentId: true,
+            payment: { select: { isSample: true } },
+          },
         }),
       ]);
       const payment = byOrder ?? byCapture;
-      if (payment && !payment.isSample && !payment.proposal.isSample) paymentId ??= payment.id;
-      if (byRefund && !byRefund.isSample && !byRefund.payment.isSample) refundId ??= byRefund.id;
+      if (payment && !payment.isSample && !payment.proposal.isSample) paymentIds.add(payment.id);
+      if (byRefund && !byRefund.isSample && !byRefund.payment.isSample) {
+        refundIds.add(byRefund.id);
+        paymentIds.add(byRefund.paymentId);
+      }
     }
+    return { paymentIds: [...paymentIds], refundIds: [...refundIds] };
+  }
+
+  private async webhookDto(
+    row: Prisma.WebhookInboxGetPayload<{ select: typeof webhookSelect }>,
+    asOf: Date,
+  ) {
+    const diagnostics = webhookDiagnostics({ ...row, asOf });
+    const links = await this.webhookLinks(row.payload);
+    const paymentId = links.paymentIds.length === 1 ? links.paymentIds[0]! : null;
+    const refundId = links.refundIds.length === 1 ? links.refundIds[0]! : null;
     return {
       id: row.id,
       providerEventId: row.providerEventId,
@@ -1075,6 +1183,10 @@ export class AdminOperationsRepository {
       paymentId,
       orderId: paymentId,
       refundId,
+      capabilities: webhookCapabilities({
+        retryEligible: diagnostics.retryEligible,
+        paymentId,
+      }),
     };
   }
 

@@ -3,6 +3,7 @@ import {
   AdminMandateQuerySchema,
   AdminOverviewQuerySchema,
   AdminPaymentQuerySchema,
+  AdminPaymentRefundMutationSchema,
   AdminUserAccessMutationSchema,
   AdminUserDisableMutationSchema,
   AdminUserQuerySchema,
@@ -69,6 +70,29 @@ describe("admin operations contracts", () => {
     expect(
       AdminUserAccessMutationSchema.safeParse({ ...base, reason: "password=secret" }).success,
     ).toBe(false);
+    expect(
+      AdminPaymentRefundMutationSchema.safeParse({
+        reason: "Customer requested a remaining refund.",
+        confirmation: true,
+        requestKey: id,
+        expectedStatus: "PARTIALLY_REFUNDED",
+        expectedUpdatedAt: "2026-10-06T00:00:00.000Z",
+        amountMinor: null,
+        reviewedAmountMinor: 8000,
+      }).success,
+    ).toBe(false);
+    expect(
+      AdminPaymentRefundMutationSchema.parse({
+        reason: "Customer requested a remaining refund.",
+        confirmation: true,
+        requestKey: id,
+        expectedStatus: "PARTIALLY_REFUNDED",
+        expectedUpdatedAt: "2026-10-06T00:00:00.000Z",
+        amountMinor: null,
+        reviewedAmountMinor: 8000,
+        typedConfirmation: id,
+      }).reviewedAmountMinor,
+    ).toBe(8000);
     expect(
       parseAdminMutation(
         {
@@ -174,6 +198,7 @@ describe("admin operations contracts", () => {
       paymentId: null,
       orderId: null,
       refundId: null,
+      capabilities: [],
       payload: { secret: "never" },
       lastError: "password=never",
     });

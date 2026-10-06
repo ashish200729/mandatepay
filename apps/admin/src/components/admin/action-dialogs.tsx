@@ -18,6 +18,7 @@ export type ActionConfirmation = {
   reason: string | null;
   confirmation: string | null;
   requestKey: string;
+  amountConfirmation?: string | null;
 };
 export type ActionDialogProps = {
   open: boolean;
@@ -29,6 +30,8 @@ export type ActionDialogProps = {
   trigger?: ReactNode;
   /** Stable operation/version identity. Change only when starting a new verified intent. */
   intentKey?: string;
+  amountConfirmation?: { expected: string; label: string };
+  reviewItems?: readonly { label: string; value: string }[];
   onConfirm: (input: ActionConfirmation) => Promise<{ status: "success" | "pending" }>;
 };
 type Risk = "confirm" | "reason" | "high";
@@ -53,6 +56,7 @@ function ActionForm({
     lock = useRef(false);
   const [reason, setReason] = useState(previousRequest?.reason ?? ""),
     [typed, setTyped] = useState(previousRequest?.confirmation ?? ""),
+    [amount, setAmount] = useState(previousRequest?.amountConfirmation ?? ""),
     [review, setReview] = useState(false);
   const [pending, setPending] = useState(false),
     [error, setError] = useState<string | null>(null),
@@ -76,6 +80,12 @@ function ActionForm({
       <div className="mt-5 rounded-xl border bg-secondary/50 p-4 text-sm">
         <p className="font-medium">{props.target.label}</p>
         <p className="mt-1 break-all text-xs text-muted-foreground">Target: {props.target.id}</p>
+        {props.reviewItems?.map((item) => (
+          <p key={item.label} className="mt-2 text-sm">
+            <span className="text-muted-foreground">{item.label}: </span>
+            {item.value}
+          </p>
+        ))}
       </div>
       <form
         className="mt-5 space-y-4"
@@ -97,6 +107,10 @@ function ActionForm({
             showError("Type the complete target ID exactly as shown.");
             return;
           }
+          if (props.amountConfirmation && amount.trim() !== props.amountConfirmation.expected) {
+            showError("Type the reviewed amount exactly as shown.");
+            return;
+          }
           if (risk === "high" && (!fresh || Date.parse(confirmedUntil!) <= Date.now())) {
             setReauth(true);
             return;
@@ -112,9 +126,10 @@ function ActionForm({
           onBusy(true);
           setError(null);
           try {
-            const result = await props.onConfirm(
-              claimRequest(safeReason, risk === "high" ? typed : null),
-            );
+            const result = await props.onConfirm({
+              ...claimRequest(safeReason, risk === "high" ? typed : null),
+              amountConfirmation: props.amountConfirmation ? amount.trim() : null,
+            });
             if (!result || !["success", "pending"].includes(result.status)) throw new Error();
             notify(
               result.status === "pending"
@@ -198,6 +213,35 @@ function ActionForm({
               </span>
             </label>
           ))}
+        {props.amountConfirmation &&
+          (review ? (
+            <p className="text-sm">
+              Reviewed amount is{" "}
+              <span className="font-medium">{props.amountConfirmation.expected}</span> USD.
+            </p>
+          ) : (
+            <label className="block text-sm font-medium">
+              {props.amountConfirmation.label}
+              <input
+                aria-label="Amount confirmation"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                required
+                disabled={pending || submitted}
+                aria-describedby="action-amount-help"
+                className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
+              />
+              <span
+                id="action-amount-help"
+                className="mt-1 block break-words text-xs font-normal text-muted-foreground"
+              >
+                Type {props.amountConfirmation.expected} exactly. Refunds do not restore spending
+                permission.
+              </span>
+            </label>
+          ))}
         {risk === "high" && !fresh && (
           <div className="rounded-xl border bg-admin-warning p-4">
             <p className="text-sm text-admin-warning-foreground">
@@ -256,7 +300,9 @@ function ActionForm({
               pending ||
               parentBusy ||
               (risk !== "confirm" && !reason.trim()) ||
-              (risk === "high" && (typed !== props.target.id || !fresh))
+              (risk === "high" && (typed !== props.target.id || !fresh)) ||
+              (Boolean(props.amountConfirmation) &&
+                amount.trim() !== props.amountConfirmation?.expected)
             }
           >
             {pending

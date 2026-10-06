@@ -32,6 +32,78 @@ const { createPrismaClient, AdminRepository, MandateRepository, ProposalReposito
 const { createAuthRuntime } = await import("../apps/api/dist/auth.js");
 const { createApp } = await import("../apps/api/dist/app.js");
 const database = createPrismaClient(process.env.DATABASE_URL);
+function money(minor) {
+  return { currency_code: "USD", value: (Number(minor) / 100).toFixed(2) };
+}
+const paypalClient = {
+  config: { webhookId: "admin-e2e-webhook" },
+  async getOrder(id) {
+    const payment = await database.payment.findUnique({
+      where: { paypalOrderId: id },
+    });
+    if (!payment) throw Object.assign(new Error("missing order"), { unknownOutcome: true });
+    const capture = payment.paypalCaptureId
+      ? {
+          id: payment.paypalCaptureId,
+          status: "COMPLETED",
+          amount: money(payment.amount),
+          custom_id: payment.proposalId,
+          create_time: "2026-10-06T12:00:00Z",
+        }
+      : null;
+    return {
+      id,
+      status: payment.paypalCaptureId ? "COMPLETED" : "APPROVED",
+      links: [],
+      purchase_units: [
+        {
+          reference_id: payment.id,
+          custom_id: payment.proposalId,
+          amount: money(payment.amount),
+          ...(capture ? { payments: { captures: [capture] } } : {}),
+        },
+      ],
+      approvalUrl: "https://sandbox.paypal.com/checkoutnow?token=" + id,
+    };
+  },
+  async getCapture(id) {
+    const payment = await database.payment.findUnique({ where: { paypalCaptureId: id } });
+    if (!payment) throw Object.assign(new Error("missing capture"), { unknownOutcome: true });
+    return {
+      id,
+      status: "COMPLETED",
+      amount: money(payment.amount),
+      custom_id: payment.proposalId,
+      create_time: "2026-10-06T12:00:00Z",
+      supplementary_data: payment.paypalOrderId
+        ? { related_ids: { order_id: payment.paypalOrderId } }
+        : undefined,
+    };
+  },
+  async getRefund(id) {
+    const refund = await database.refund.findFirst({
+      where: { OR: [{ paypalRefundId: id }, { id: id.replace(/^REFUND-E2E-/, "") }] },
+    });
+    if (!refund) throw Object.assign(new Error("missing refund"), { unknownOutcome: true });
+    return {
+      id: refund.paypalRefundId ?? id,
+      status: refund.status === "COMPLETED" ? "COMPLETED" : "PENDING",
+      amount: money(refund.amount),
+      invoice_id: refund.id,
+      create_time: "2026-10-06T12:05:00Z",
+    };
+  },
+  async refundCapture(input) {
+    return {
+      id: "REFUND-E2E-" + input.invoiceId,
+      status: "COMPLETED",
+      amount: money(input.amountMinor),
+      invoice_id: input.invoiceId,
+      capture_id: input.captureId,
+      create_time: "2026-10-06T12:05:00Z",
+    };
+  },
+};
 await database.adminActionRequest.deleteMany();
 await database.adminPrincipal.deleteMany();
 const runtime = createAuthRuntime({
@@ -47,6 +119,8 @@ const app = await createApp({
   authRuntime: runtime,
   testAdminReadMaximum: 2000,
   testAdminMutationMaximum: 100,
+  testAdminFinancialMaximum: 50,
+  paypalClient,
   config: {
     HOST: "127.0.0.1",
     PORT: 4121,
@@ -76,8 +150,10 @@ const fixture = {
   proposedProposalId: "",
   approvalId: "",
   paymentId: "",
+  pendingPaymentId: "",
   refundId: "",
   webhookId: "",
+  retryWebhookId: "",
 };
 let principal;
 let next;
@@ -238,6 +314,30 @@ try {
     },
   });
   fixture.refundId = refund.id;
+  const pendingProposal = await new ProposalRepository(database).create({
+    userId: ownerUserId,
+    mandateId: mandate.id,
+    mandateVersionId: mandate.activeVersionId ?? "",
+    productSnapshotId: product.id,
+    quantity: 1,
+    shipping: 0n,
+    tax: 0n,
+    idempotencyKey: `admin-ops-browser-pending-${randomUUID()}`,
+  });
+  const pendingOrderId = `ORDER-ADMIN-OPS-PENDING-${randomUUID()}`;
+  const pendingPayment = await database.payment.create({
+    data: {
+      userId: ownerUserId,
+      mandateId: mandate.id,
+      proposalId: pendingProposal.id,
+      paypalOrderId: pendingOrderId,
+      amount: 10_000n,
+      currency: "USD",
+      status: "CREATED",
+      idempotencyKey: `admin-ops-browser-pending-pay-${randomUUID()}`,
+    },
+  });
+  fixture.pendingPaymentId = pendingPayment.id;
   const webhook = await database.webhookInbox.create({
     data: {
       provider: "paypal",
@@ -257,6 +357,26 @@ try {
     },
   });
   fixture.webhookId = webhook.id;
+  const retryWebhook = await database.webhookInbox.create({
+    data: {
+      provider: "paypal",
+      providerEventId: `admin-ops-browser-retry-${randomUUID()}`,
+      eventType: "PAYMENT.CAPTURE.COMPLETED",
+      signatureVerified: true,
+      payload: {
+        id: `EVT-ADMIN-OPS-${randomUUID()}`,
+        event_type: "PAYMENT.CAPTURE.COMPLETED",
+        resource: {
+          id: paypalCaptureId,
+          supplementary_data: { related_ids: { order_id: paypalOrderId } },
+        },
+      },
+      status: "FAILED",
+      attempts: 1,
+      nextAttemptAt: new Date(Date.now() - 1_000),
+    },
+  });
+  fixture.retryWebhookId = retryWebhook.id;
   await database.auditEvent.create({
     data: {
       userId: ownerUserId,

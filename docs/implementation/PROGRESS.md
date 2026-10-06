@@ -1,5 +1,11 @@
 # Phase progress and handoff
 
+## Admin Phase 6 complete — 2026-10-06
+
+Implemented financial recovery that reuses existing payment, refund and verified-inbox services. Admins can reconcile PayPal orders/payments (never capture), initiate a remaining refund through `refundPayment` with fresh auth/typed ID/amount review, refresh known refund status, retry verified due or stale-lease webhooks, and reconcile a uniquely linked payment. Same-key retries do not duplicate captures or refunds. All 25 tasks and four exits are checked; [ADMIN_PHASE_6.md](./ADMIN_PHASE_6.md) records evidence. **P6-08:** admin refund initiation is included because remaining captured funds must be recoverable when the owner cannot act.
+
+Verification: **346 unit**, **13 environment/boundary**, **90 API integration**, **eight database integration** and **eight admin browser tests** pass; affected lint/types, production admin build, source/bundle boundaries and formatting on changed files pass. Finance fixtures use an injected simulated PayPal client. No real administrator was provisioned. Phases 7–10 remain unchecked with no platform-setting mutations enabled. Isolated browser tests raise the admin read limiter to 2000, the mutation limiter to 100, and the financial limiter to 50; production remains 120/20/5. No hosted deployment or new live-provider qualification is claimed; prior unrelated formatting/schema baseline remains untouched.
+
 ## Admin Phase 5 complete — 2026-10-06
 
 Implemented operational mutations that do not alter provider truth. Admins can disable/enable users, revoke sessions, disable autonomy, add immutable notes, pause or revoke mandates through MandateRepository, and re-evaluate proposals through AgentGuard. Disabled status is enforced on sign-in, customer APIs, admin authorization and proposal evaluation. Every mutation requires a reason, concurrency token and durable action/audit row in the same transaction. All 16 tasks and three exits are checked; [ADMIN_PHASE_5.md](./ADMIN_PHASE_5.md) records evidence. **P5-07:** admin may pause and revoke; admin may not resume, edit permissions, or force-allow a proposal.
