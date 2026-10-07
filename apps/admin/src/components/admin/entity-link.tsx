@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { AdminLink as Link } from "./link";
 import { AdminResourceIdSchema } from "@mandatepay/shared";
 export function EntityLink({
   resource,
@@ -22,7 +22,7 @@ export function EntityLink({
   return (
     <Link
       href={`/${resource}/${encodeURIComponent(id)}`}
-      className="inline-flex min-h-11 items-center rounded underline underline-offset-4"
+      className="inline-flex min-h-11 max-w-full items-center rounded font-medium underline decoration-border underline-offset-4 hover:decoration-foreground [overflow-wrap:anywhere]"
     >
       {label ?? id}
     </Link>

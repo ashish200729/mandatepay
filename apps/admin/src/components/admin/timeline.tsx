@@ -7,6 +7,7 @@ import {
 } from "@mandatepay/shared";
 import { StatusBadge } from "./status-badge";
 import { EmptyState, ErrorState } from "./states";
+import { ChevronDown } from "lucide-react";
 
 export function formatUtcDate(value: string) {
   const date = new Date(value);
@@ -34,8 +35,15 @@ export function JsonViewer({
     safe = null;
   }
   return (
-    <details className="mt-3">
-      <summary className="cursor-pointer rounded py-3 text-xs font-medium">{label}</summary>
+    <details className="group mt-3 rounded-lg border bg-card">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 py-3 text-xs font-medium hover:bg-secondary/40 [&::-webkit-details-marker]:hidden">
+        {label}
+        <ChevronDown
+          size={14}
+          aria-hidden="true"
+          className="shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none"
+        />
+      </summary>
       <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-secondary p-4 text-xs">
         {safe === null ? "No state summary" : JSON.stringify(safe, null, 2)}
       </pre>
@@ -59,13 +67,9 @@ export function EventTimeline({
 }) {
   if (!events.length) return <EmptyState title="No activity" description={emptyDescription} />;
   return (
-    <ol className="space-y-0">
+    <ol className="rounded-xl border bg-card px-5 py-2 sm:px-6">
       {events.map((event) => (
-        <li key={event.id} className="relative border-l-2 border-border pb-7 pl-6 last:pb-0">
-          <span
-            aria-hidden="true"
-            className="absolute -left-[5px] top-2 size-2 rounded-full bg-foreground"
-          />
+        <li key={event.id} className="min-w-0 border-b py-5 last:border-b-0">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-medium">{event.title}</h3>
             <StatusBadge status={event.status} />
@@ -73,7 +77,9 @@ export function EventTimeline({
           <time dateTime={event.at} className="mt-2 block text-xs text-muted-foreground">
             {formatUtcDate(event.at)}
           </time>
-          <div className="mt-3 break-words text-sm leading-relaxed">{event.description}</div>
+          <div className="mt-2 text-sm leading-6 text-muted-foreground [overflow-wrap:anywhere]">
+            {event.description}
+          </div>
           {event.detail}
         </li>
       ))}

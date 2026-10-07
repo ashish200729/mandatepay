@@ -1,8 +1,16 @@
 "use client";
-import Link from "next/link";
+import { AdminLink as Link } from "./link";
 import type { ReactNode } from "react";
 import { Button } from "@mandatepay/ui/components/button";
 import { EmptyState, ErrorState, LoadingSkeleton } from "./states";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 
 export type TableColumn<T> = {
   key: string;
@@ -34,17 +42,19 @@ export function Pagination({
   return (
     <nav
       aria-label="Table pagination"
-      className="mt-4 flex flex-wrap items-center justify-between gap-3"
+      className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4"
     >
       <p role="status" className="text-xs text-muted-foreground">
         {shown} {shown === 1 ? "record" : "records"} on this page · up to {limit}
       </p>
       <div className="flex gap-2">
         <Button variant="outline" disabled={pending || !hasPrevious} onClick={onPrevious}>
+          <ChevronLeft size={15} aria-hidden="true" />
           Previous
         </Button>
         <Button variant="outline" disabled={pending || !hasNext} onClick={onNext}>
           Next
+          <ChevronRight size={15} aria-hidden="true" />
         </Button>
       </div>
     </nav>
@@ -114,9 +124,9 @@ export function DataTable<T>({
             aria-label={`${caption} table, scroll for all columns`}
             tabIndex={0}
           >
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-left text-sm tabular-nums">
               <caption className="sr-only">{caption}</caption>
-              <thead className="border-b bg-secondary/70">
+              <thead className="border-b bg-secondary/60 text-xs text-muted-foreground">
                 <tr>
                   {columns.map((column) => (
                     <th
@@ -131,7 +141,7 @@ export function DataTable<T>({
                             ? "none"
                             : undefined
                       }
-                      className="px-4 py-3 font-medium"
+                      className="px-4 py-2 font-medium"
                     >
                       {column.sortKey && onSort ? (
                         <button
@@ -141,11 +151,15 @@ export function DataTable<T>({
                         >
                           {column.label}
                           <span aria-hidden="true">
-                            {sort?.key === column.sortKey
-                              ? sort?.direction === "asc"
-                                ? "↑"
-                                : "↓"
-                              : "↕"}
+                            {sort?.key === column.sortKey ? (
+                              sort?.direction === "asc" ? (
+                                <ArrowUp size={14} />
+                              ) : (
+                                <ArrowDown size={14} />
+                              )
+                            ) : (
+                              <ArrowUpDown size={14} />
+                            )}
                           </span>
                           <span className="sr-only">
                             , sort{" "}
@@ -168,19 +182,26 @@ export function DataTable<T>({
               </thead>
               <tbody className="divide-y">
                 {state.data.map((row) => (
-                  <tr key={getRowId(row)} className="align-top hover:bg-secondary/40">
+                  <tr
+                    key={getRowId(row)}
+                    className="align-middle transition-colors hover:bg-secondary/40 focus-within:bg-secondary/40 motion-reduce:transition-none"
+                  >
                     {columns.map((column) => (
-                      <td key={column.key} className="max-w-sm break-words px-4 py-4">
+                      <td
+                        key={column.key}
+                        className="min-w-28 max-w-xs px-4 py-3 leading-6 [overflow-wrap:anywhere]"
+                      >
                         {column.render(row)}
                       </td>
                     ))}
                     {rowHref && (
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-2">
                         <Link
                           href={rowHref(row)}
-                          className="inline-flex min-h-11 items-center rounded text-xs underline underline-offset-4"
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded px-1 text-xs font-medium underline underline-offset-4"
                         >
                           View<span className="sr-only"> record {getRowId(row)}</span>
+                          <ArrowUpRight size={14} aria-hidden="true" />
                         </Link>
                       </td>
                     )}
@@ -191,21 +212,24 @@ export function DataTable<T>({
           </div>
           <ul className="space-y-3 lg:hidden">
             {state.data.map((row) => (
-              <li key={getRowId(row)} className="rounded-2xl border bg-card p-5">
-                <dl className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-x-4 gap-y-3">
+              <li key={getRowId(row)} className="overflow-hidden rounded-xl border bg-card p-5">
+                <dl className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-4 gap-y-3">
                   {columns.map((column) => (
                     <div key={column.key} className="contents">
                       <dt className="break-words text-xs text-muted-foreground">{column.label}</dt>
-                      <dd className="min-w-0 break-words text-sm">{column.render(row)}</dd>
+                      <dd className="min-w-0 text-sm leading-6 tabular-nums [overflow-wrap:anywhere]">
+                        {column.render(row)}
+                      </dd>
                     </div>
                   ))}
                 </dl>
                 {rowHref && (
                   <Link
                     href={rowHref(row)}
-                    className="mt-3 inline-flex min-h-11 items-center rounded text-sm underline"
+                    className="mt-4 inline-flex min-h-11 w-full items-center justify-between gap-2 rounded border-t pt-2 text-sm font-medium underline"
                   >
                     View record<span className="sr-only"> {getRowId(row)}</span>
+                    <ArrowUpRight size={15} aria-hidden="true" />
                   </Link>
                 )}
               </li>

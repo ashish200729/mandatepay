@@ -155,6 +155,7 @@ test("foundation tables restore URL filters, cursor pages and server sorting", a
   await expect(page.getByRole("button", { name: "Previous", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Previous", exact: true }).click();
   await expect(page).not.toHaveURL(/cursor=/u);
+  await page.getByRole("button", { name: /^Filters/u }).click();
   await page.getByLabel("Result", { exact: true }).selectOption("FAILURE");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page).toHaveURL(/status=FAILURE/u);
@@ -355,7 +356,9 @@ test("foundation tablet and mobile navigation keep full records and keyboard acc
     await drawer.getByRole("link", { name: "My Session", exact: true }).click();
     await expect(drawer).not.toBeVisible();
     await menu.click();
-    await page.mouse.click(viewport.width - 5, 200);
+    await expect(drawer.getByRole("link", { name: "My Session", exact: true })).toBeFocused();
+    // Click the scrim, leaving room for the browser's native scrollbar.
+    await page.mouse.click(viewport.width - 24, 200);
     await expect(drawer).not.toBeVisible();
     await page.goto("/ui-fixtures?limit=2");
     await expect(page.getByRole("table")).not.toBeVisible();

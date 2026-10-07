@@ -30,6 +30,7 @@ test("admin can inspect the user-to-refund operations chain", async ({
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Subsystem warnings" })).toBeVisible();
+  await page.locator("summary").filter({ hasText: "More metrics" }).click();
   await expect(
     page
       .getByRole("article")
@@ -44,7 +45,7 @@ test("admin can inspect the user-to-refund operations chain", async ({
     .click();
   await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
   await page.getByLabel("Search name or email").fill(fixture.normalEmail);
-  await page.getByRole("button", { name: "Apply filters" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(encodeURIComponent(fixture.normalEmail), "u"));
   await page.getByRole("link", { name: fixture.ownerUserId, exact: true }).first().click();
   await expect(page.getByRole("heading", { name: `User ${fixture.ownerUserId}` })).toBeVisible();

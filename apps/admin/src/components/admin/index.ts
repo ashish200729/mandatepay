@@ -1,4 +1,7 @@
 export { AdminShell, AdminSidebar, AdminTopbar } from "./admin-shell";
+export { AdminLink } from "./link";
+export { AdminWordmark } from "./wordmark";
+export { RecordIdentifier } from "./record-identifier";
 export { Breadcrumbs, PageHeader, type Breadcrumb } from "./page-header";
 export { MetricCard } from "./metric-card";
 export { OverviewRangeSelector } from "./range-selector";

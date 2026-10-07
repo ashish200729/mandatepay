@@ -13,6 +13,7 @@ import {
 import { AdminActionError, safeActionError } from "@/lib/action-error";
 import { ReauthDialog } from "./reauth-dialog";
 import { useAdminToast } from "./toasts";
+import { adminFieldClass } from "@/lib/control-styles";
 
 export type ActionConfirmation = {
   reason: string | null;
@@ -79,7 +80,9 @@ function ActionForm({
     <>
       <div className="mt-5 rounded-xl border bg-secondary/50 p-4 text-sm">
         <p className="font-medium">{props.target.label}</p>
-        <p className="mt-1 break-all text-xs text-muted-foreground">Target: {props.target.id}</p>
+        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+          Target: {props.target.id}
+        </p>
         {props.reviewItems?.map((item) => (
           <p key={item.label} className="mt-2 text-sm">
             <span className="text-muted-foreground">{item.label}: </span>
@@ -175,7 +178,7 @@ function ActionForm({
                 disabled={pending || submitted}
                 rows={3}
                 aria-describedby="action-reason-help"
-                className="mt-2 w-full rounded-xl border bg-background p-3 text-sm"
+                className={`${adminFieldClass} mt-2 min-h-24`}
               />
               <span
                 id="action-reason-help"
@@ -203,7 +206,7 @@ function ActionForm({
                 required
                 disabled={pending || submitted}
                 aria-describedby="action-typed-help"
-                className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
+                className={`${adminFieldClass} mt-2`}
               />
               <span
                 id="action-typed-help"
@@ -231,7 +234,7 @@ function ActionForm({
                 required
                 disabled={pending || submitted}
                 aria-describedby="action-amount-help"
-                className="mt-2 h-11 w-full rounded-xl border bg-background px-3 text-sm"
+                className={`${adminFieldClass} mt-2`}
               />
               <span
                 id="action-amount-help"
@@ -278,7 +281,7 @@ function ActionForm({
             Submitting this action…
           </p>
         )}
-        <div className="flex flex-wrap justify-end gap-3">
+        <div className="flex flex-wrap justify-end gap-3 border-t pt-5">
           <DialogClose asChild>
             <Button type="button" variant="outline" disabled={pending || parentBusy}>
               Cancel
@@ -362,6 +365,7 @@ function ActionDialog({
     >
       {props.trigger && <DialogTrigger asChild>{props.trigger}</DialogTrigger>}
       <DialogContent
+        className="rounded-xl border-0"
         onEscapeKeyDown={(event) => {
           if (busy) event.preventDefault();
         }}

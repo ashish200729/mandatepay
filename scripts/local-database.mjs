@@ -146,6 +146,7 @@ try {
       AUTH_SECRET: randomBytes(32).toString("base64url"),
       APP_URL: "http://localhost:3000",
       API_URL: "http://localhost:4000",
+      ADMIN_ORIGIN: "http://localhost:3001",
       OPENAI_API_KEY: "",
       OPENAI_MODEL: "",
       OPENAI_BASE_URL: "https://api.openai.com/v1",

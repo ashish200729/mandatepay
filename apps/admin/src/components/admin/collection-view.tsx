@@ -6,6 +6,7 @@ import { FilterBar } from "./filters";
 import { DataTable, type TableColumn, type TableState } from "./data-table";
 import { resourceSpecs } from "@/lib/resource-specs";
 import { columnsFor } from "./operations-columns";
+import { Download } from "lucide-react";
 
 export function CollectionView<T extends { id: string }>({
   resource,
@@ -25,14 +26,28 @@ export function CollectionView<T extends { id: string }>({
         filters={config.filters}
         fields={config.fields}
         dates={config.dates}
+        primaryFilterKey={
+          {
+            users: undefined,
+            mandates: "status",
+            proposals: "status",
+            approvals: "decision",
+            orders: "status",
+            payments: "status",
+            refunds: "status",
+            webhooks: "status",
+            audit: "result",
+          }[resource]
+        }
+        actions={
+          <Button variant="ghost" asChild>
+            <a href={`/api/admin/${resource}/export?${navigation.query.params.toString()}`}>
+              <Download size={15} aria-hidden="true" />
+              Export CSV
+            </a>
+          </Button>
+        }
       />
-      <div className="mb-4">
-        <Button variant="outline" asChild>
-          <a href={`/api/admin/${resource}/export?${navigation.query.params.toString()}`}>
-            Export CSV
-          </a>
-        </Button>
-      </div>
       <DataTable
         caption={config.caption}
         state={state}

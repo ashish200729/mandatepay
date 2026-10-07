@@ -8,6 +8,7 @@
     "pnpm": ">=10 <11"
   },
   "scripts": {
+    "dev:local": "pnpm db:local:start && pnpm --filter @mandatepay/database migrate:deploy && pnpm dev",
     "dev": "turbo run build --filter=\"./packages/*\" --ui=stream && turbo run dev --filter=\"./apps/*\"",
     "dev:web": "turbo run dev --filter=@mandatepay/web",
     "dev:admin": "turbo run dev --filter=@mandatepay/admin",

@@ -3,6 +3,7 @@ import { HealthIndicator, StatusBadge } from "@/components/admin/status-badge";
 import { HealthComponentCard, ParseAlert } from "@/components/admin/health-card";
 import { formatUtcDate } from "@/components/admin/timeline";
 import { adminApi } from "@/lib/admin-fetch";
+import { DisclosureSection } from "@/components/admin/disclosure-section";
 import {
   parseAdminDetail,
   parseAdminIntegrationHealth,
@@ -36,19 +37,19 @@ export default async function SystemHealthPage() {
     <>
       <PageHeader
         title="System health"
-        description="Readiness of the API, database, webhook worker, and integrations. Probes report status only."
+        description="Check service availability and investigate anything that needs attention."
         breadcrumbs={[{ label: "Overview", href: "/" }, { label: "System health" }]}
       />
       <div className="space-y-10">
         {!health ? (
           <ParseAlert message="System health could not be loaded." href="/system" />
         ) : (
-          <section aria-label="Overall status" className="rounded-2xl border bg-card p-5">
+          <section aria-label="Overall status" className="rounded-xl border bg-card p-5 sm:p-6">
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-sm font-medium">Overall</h2>
               <HealthIndicator status={health.data.overall} />
             </div>
-            <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+            <dl className="mt-5 grid gap-5 border-t pt-5 sm:grid-cols-2 xl:grid-cols-4">
               <div>
                 <dt className="text-xs text-muted-foreground">Environment</dt>
                 <dd className="mt-1 text-sm">{environments[health.data.environment]}</dd>
@@ -67,7 +68,9 @@ export default async function SystemHealthPage() {
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Observed</dt>
-                <dd className="mt-1 text-sm">{formatUtcDate(health.data.observedAt)}</dd>
+                <dd className="mt-1 text-sm tabular-nums">
+                  {formatUtcDate(health.data.observedAt)}
+                </dd>
               </div>
             </dl>
           </section>
@@ -85,49 +88,53 @@ export default async function SystemHealthPage() {
         ) : null}
 
         <section aria-label="Webhook worker">
-          <h2 className="mb-4 text-lg font-medium">Webhook worker</h2>
-          {!workers ? (
-            <ParseAlert message="Worker health could not be loaded." href="/system" />
-          ) : workers.data.workers.length === 0 ? (
-            <article className="rounded-2xl border bg-card p-5">
-              <HealthIndicator status="unknown" />
-              <p className="mt-3 text-sm">Liveness is unknown. No worker run has been recorded.</p>
-            </article>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <p className="text-sm text-muted-foreground sm:col-span-2">
-                A heartbeat older than {workers.data.staleAfterSeconds} seconds is stale.
-              </p>
-              {workers.data.workers.map((worker) => (
-                <WorkerCard
-                  key={worker.worker}
-                  worker={worker}
-                  observedAt={workers.data.observedAt}
-                />
-              ))}
-            </div>
-          )}
+          <DisclosureSection title="Webhook worker diagnostics">
+            {!workers ? (
+              <ParseAlert message="Worker health could not be loaded." href="/system" />
+            ) : workers.data.workers.length === 0 ? (
+              <article className="rounded-2xl border bg-card p-5">
+                <HealthIndicator status="unknown" />
+                <p className="mt-3 text-sm">
+                  Liveness is unknown. No worker run has been recorded.
+                </p>
+              </article>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <p className="text-sm text-muted-foreground sm:col-span-2">
+                  A heartbeat older than {workers.data.staleAfterSeconds} seconds is stale.
+                </p>
+                {workers.data.workers.map((worker) => (
+                  <WorkerCard
+                    key={worker.worker}
+                    worker={worker}
+                    observedAt={workers.data.observedAt}
+                  />
+                ))}
+              </div>
+            )}
+          </DisclosureSection>
         </section>
 
         <section aria-label="Integrations">
-          <h2 className="mb-4 text-lg font-medium">Integrations</h2>
-          {!integrations ? (
-            <ParseAlert message="Integration health could not be loaded." href="/system" />
-          ) : (
-            <div className="space-y-4">
-              <div className="rounded-2xl border bg-card p-5 text-sm leading-relaxed">
-                <p>{integrations.data.note}</p>
-                <p className="mt-2">Probes do not display credentials.</p>
-              </div>
-              {extraIntegrations.length > 0 ? (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {extraIntegrations.map((component) => (
-                    <HealthComponentCard key={component.id} component={component} />
-                  ))}
+          <DisclosureSection title="Integration diagnostics">
+            {!integrations ? (
+              <ParseAlert message="Integration health could not be loaded." href="/system" />
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-xl border bg-secondary/40 p-5 text-sm leading-relaxed">
+                  <p>{integrations.data.note}</p>
+                  <p className="mt-2">Probes do not display credentials.</p>
                 </div>
-              ) : null}
-            </div>
-          )}
+                {extraIntegrations.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {extraIntegrations.map((component) => (
+                      <HealthComponentCard key={component.id} component={component} />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </DisclosureSection>
         </section>
       </div>
     </>
@@ -153,13 +160,13 @@ function WorkerCard({
         now: new Date(observedAt),
       });
   return (
-    <article className="rounded-2xl border bg-card p-5 sm:col-span-2">
+    <article className="rounded-xl border bg-card p-5 sm:col-span-2 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h3 className="text-sm font-medium">PayPal webhook recovery</h3>
         <HealthIndicator status={live.status} />
       </div>
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{live.summary}</p>
-      <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+      <dl className="mt-5 grid gap-4 border-t pt-4 sm:grid-cols-2">
         <div>
           <dt className="text-xs text-muted-foreground">Last heartbeat</dt>
           <dd className="mt-1 text-sm">

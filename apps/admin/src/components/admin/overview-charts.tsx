@@ -1,8 +1,9 @@
 import type { AdminMetric } from "@mandatepay/shared";
-import Link from "next/link";
+import { AdminLink as Link } from "./link";
 import { EmptyState } from "./states";
 import { StatusBadge } from "./status-badge";
 import { chartRecordHref, CHART_RANGE_HREFS } from "@/lib/chart-hrefs";
+import { ArrowUpRight } from "lucide-react";
 
 function labelFor(key: string) {
   return key.replaceAll("_", " ").replaceAll(":", " · ");
@@ -27,7 +28,7 @@ export function OverviewChartCard({
   const recordsHref = CHART_RANGE_HREFS[metricKey]?.(range);
   if (!metric || metric.availability === "unavailable") {
     return (
-      <article className="rounded-2xl border bg-card p-5">
+      <article className="min-w-0 rounded-xl border bg-card p-5 sm:p-6">
         <h3 className="text-sm font-medium">{title}</h3>
         <div className="mt-3">
           <StatusBadge status="UNKNOWN" label="Unavailable" />
@@ -46,15 +47,16 @@ export function OverviewChartCard({
   }));
   const peak = Math.max(0, ...items.map((row) => row.value));
   return (
-    <article className="rounded-2xl border bg-card p-5">
+    <article className="min-w-0 rounded-xl border bg-card p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h3 className="text-sm font-medium">{title}</h3>
         {recordsHref ? (
           <Link
             href={recordsHref}
-            className="inline-flex min-h-11 items-center text-sm underline underline-offset-4"
+            className="inline-flex min-h-11 items-center gap-1.5 rounded text-xs font-medium underline underline-offset-4"
           >
             View records
+            <ArrowUpRight size={14} aria-hidden="true" />
           </Link>
         ) : null}
       </div>
@@ -64,6 +66,7 @@ export function OverviewChartCard({
           <EmptyState
             title="No data in range"
             description="Nothing matched this metric in the selected UTC window."
+            embedded
           />
         </div>
       ) : kind === "columns" ? (
@@ -95,16 +98,16 @@ function ColumnChart({
   return (
     <div className="mt-4">
       <div
-        role="img"
+        role="group"
         aria-label={`${title} from ${first?.label ?? ""} to ${last?.label ?? ""}`}
-        className="flex h-40 items-end gap-px overflow-x-auto"
+        className="flex h-40 items-end gap-px overflow-x-auto border-b"
       >
         {items.map((item) => {
           const height = Math.max(item.value > 0 ? 6 : 0, Math.round((item.value / peak) * 100));
           const bar = (
             <span
-              className="block w-full min-w-[4px] rounded-t bg-[color:var(--admin-chart,#C4A574)]"
-              style={{ height: `${height}%`, backgroundColor: "#C4A574" }}
+              className="block w-full min-w-[4px] rounded-t-sm bg-admin-chart"
+              style={{ height: `${height}%` }}
             />
           );
           return item.href ? (
@@ -112,7 +115,7 @@ function ColumnChart({
               key={item.key}
               href={item.href}
               title={`${item.label}: ${item.display}`}
-              className="flex h-full min-w-[6px] flex-1 flex-col justify-end"
+              className="flex h-full min-w-[6px] flex-1 flex-col justify-end rounded-t-sm hover:bg-secondary focus-visible:bg-secondary"
             >
               {bar}
               <span className="sr-only">
@@ -134,6 +137,31 @@ function ColumnChart({
         <span>{first?.label}</span>
         <span>{last?.label}</span>
       </div>
+      <details className="mt-3 text-xs">
+        <summary className="inline-flex min-h-11 cursor-pointer items-center rounded font-medium text-muted-foreground underline decoration-border">
+          View data points
+        </summary>
+        <ul className="max-h-64 overflow-y-auto divide-y border-t">
+          {items.map((item) => (
+            <li key={item.key}>
+              {item.href ? (
+                <Link
+                  href={item.href}
+                  className="flex min-h-11 items-center justify-between gap-4 rounded px-1 hover:bg-secondary"
+                >
+                  <span>{item.label}</span>
+                  <span className="tabular-nums">{item.display}</span>
+                </Link>
+              ) : (
+                <span className="flex min-h-11 items-center justify-between gap-4">
+                  <span>{item.label}</span>
+                  <span className="tabular-nums">{item.display}</span>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </details>
     </div>
   );
 }
@@ -160,15 +188,14 @@ function BarChart({
         const inner = (
           <>
             <span className="flex min-h-11 items-center justify-between gap-3 text-sm">
-              <span>{item.label}</span>
-              <span className="tabular-nums">{item.display}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{item.label}</span>
+              <span className="shrink-0 font-medium tabular-nums">{item.display}</span>
             </span>
             <span className="block h-2 rounded-full bg-secondary">
               <span
-                className="block h-2 rounded-full"
+                className="block h-2 rounded-full bg-admin-chart"
                 style={{
                   width: `${funnel ? Math.max(width, item.value > 0 ? 8 : 0) : width}%`,
-                  backgroundColor: "#C4A574",
                 }}
               />
             </span>

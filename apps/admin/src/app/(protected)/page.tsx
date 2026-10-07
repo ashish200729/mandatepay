@@ -23,7 +23,10 @@ import {
   type AdminMetric,
   type PlatformSettingKey,
 } from "@mandatepay/shared";
-import Link from "next/link";
+import { AdminLink as Link } from "@/components/admin/link";
+import { ArrowUpRight, ChevronDown } from "lucide-react";
+import { ParseAlert } from "@/components/admin/health-card";
+import { DisclosureSection } from "@/components/admin/disclosure-section";
 
 function metricValue(metric: AdminMetric | undefined) {
   if (!metric || metric.availability === "unavailable" || metric.value === null) return null;
@@ -92,11 +95,21 @@ export default async function OverviewPage({
     { key: "agentRunsByDay", title: "Agent runs", kind: "columns" },
     { key: "agentErrorClasses", title: "Agent error classes", kind: "bars" },
   ];
+  const events = (activity?.data ?? []).map((event) => ({
+    id: event.id,
+    title: event.title,
+    at: event.at,
+    status: event.status,
+    description: event.highRisk ? "High-risk operational event." : "Operational event.",
+    detail: event.href ? (
+      <EntityLink resource={event.href.resource} id={event.href.id} />
+    ) : undefined,
+  }));
   return (
     <>
       <PageHeader
         title="Operations overview"
-        description="Server-aggregated operational metrics. Unavailable telemetry is shown as an em dash, never as zero. Charts never load unbounded browser datasets."
+        description="Account activity, purchasing decisions and payment operations in one place."
         breadcrumbs={[{ label: "Overview" }]}
       />
       {health?.data.build.commitSha ? (
@@ -121,56 +134,15 @@ export default async function OverviewPage({
         restricted={controls ? restrictiveControlCount(controls) > 0 : true}
         unavailable={!controls}
       />
-      <section aria-label="Subsystem warnings" className="mb-8">
-        {!health ? (
-          <div role="alert" className="rounded-2xl border bg-card p-5 text-sm">
-            <p>System health could not be loaded.</p>
-            <Link
-              href="/system"
-              className="mt-3 inline-flex min-h-11 items-center underline underline-offset-4"
-            >
-              View system health
-            </Link>
-          </div>
-        ) : health.data.components.every((component) => component.status === "ready") ? (
-          <div className="rounded-2xl border bg-card p-5 text-sm">
-            <p>
-              Checked subsystems are ready.{" "}
-              <Link href="/system" className="underline underline-offset-4">
-                View system health
-              </Link>
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {health.data.components
-              .filter((component) => component.status !== "ready")
-              .map((component) => (
-                <article key={component.id} className="rounded-2xl border bg-card p-5">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <h2 className="text-sm font-medium">{componentLabel(component.id)}</h2>
-                    <HealthIndicator status={component.status} />
-                  </div>
-                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                    {component.summary}
-                  </p>
-                  <Link
-                    href="/system"
-                    className="mt-3 inline-flex min-h-11 items-center text-sm underline underline-offset-4"
-                  >
-                    View system health
-                  </Link>
-                </article>
-              ))}
-          </div>
-        )}
-      </section>
-      {!overview ? (
-        <p role="alert">The overview could not be loaded. Try again shortly.</p>
-      ) : (
-        <>
-          <section aria-label="Key metrics" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {cards.map((card) => {
+      {overview && (
+        <section aria-label="Key metrics" className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {cards
+            .filter((card) =>
+              ["totalUsers", "activeMandates", "capturedPayments", "refundsMinor"].includes(
+                card.key,
+              ),
+            )
+            .map((card) => {
               const metric = metrics[card.key];
               return (
                 <MetricCard
@@ -182,18 +154,172 @@ export default async function OverviewPage({
                 />
               );
             })}
-          </section>
-          <section aria-label="Operational charts" className="mt-10 grid gap-6 lg:grid-cols-2">
-            {charts.map((chart) => (
-              <OverviewChartCard
-                key={chart.key}
-                title={chart.title}
-                metricKey={chart.key}
-                metric={metrics[chart.key]}
-                range={range!}
-                kind={chart.kind}
-                formatValue={chart.money ? formatUsd : undefined}
+        </section>
+      )}
+      <section aria-label="Subsystem warnings" className="mb-8">
+        <details className="group border-y">
+          <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 py-2 [&::-webkit-details-marker]:hidden">
+            <span className="text-sm font-medium">System status</span>
+            <span className="flex items-center gap-3">
+              {health ? (
+                <HealthIndicator status={health.data.overall} />
+              ) : (
+                <span className="text-sm text-admin-danger-foreground">Unavailable</span>
+              )}
+              <ChevronDown
+                size={16}
+                aria-hidden="true"
+                className="shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none"
               />
+            </span>
+          </summary>
+          <div className="pb-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-medium">System status</h2>
+              <Link
+                href="/system"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded text-xs font-medium underline"
+              >
+                View system health
+                <ArrowUpRight size={14} aria-hidden="true" />
+              </Link>
+            </div>
+            {!health ? (
+              <div role="alert" className="rounded-2xl border bg-card p-5 text-sm">
+                <p>System health could not be loaded.</p>
+                <Link
+                  href="/system"
+                  className="mt-3 inline-flex min-h-11 items-center underline underline-offset-4"
+                >
+                  View system health
+                </Link>
+              </div>
+            ) : health.data.components.every((component) => component.status === "ready") ? (
+              <div className="rounded-2xl border bg-card p-5 text-sm">
+                <p>
+                  Checked subsystems are ready.{" "}
+                  <Link href="/system" className="underline underline-offset-4">
+                    View system health
+                  </Link>
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border bg-card divide-y">
+                {health.data.components
+                  .filter((component) => component.status !== "ready")
+                  .map((component) => (
+                    <article
+                      key={component.id}
+                      className="grid gap-x-6 gap-y-2 px-5 py-4 sm:grid-cols-[11rem_minmax(0,1fr)]"
+                    >
+                      <div className="flex flex-wrap items-center gap-3">
+                        <h2 className="text-sm font-medium">{componentLabel(component.id)}</h2>
+                        <HealthIndicator status={component.status} />
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">{component.summary}</p>
+                    </article>
+                  ))}
+              </div>
+            )}
+          </div>
+        </details>
+      </section>
+      {!overview ? (
+        <ParseAlert message="The overview could not be loaded. Try again shortly." href="/" />
+      ) : (
+        <>
+          <section aria-label="Operational metrics">
+            <DisclosureSection title="More metrics">
+              <div className="grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-3">
+                {cards
+                  .filter(
+                    (card) =>
+                      ![
+                        "totalUsers",
+                        "activeMandates",
+                        "capturedPayments",
+                        "refundsMinor",
+                      ].includes(card.key),
+                  )
+                  .map((card) => {
+                    const metric = metrics[card.key];
+                    return (
+                      <MetricCard
+                        key={card.key}
+                        label={card.label}
+                        value={metricValue(metric)}
+                        availability={metric?.availability ?? "unavailable"}
+                        description={
+                          metric?.reason ?? metric?.definition ?? "Definition unavailable."
+                        }
+                        compact
+                      />
+                    );
+                  })}
+              </div>
+            </DisclosureSection>
+          </section>
+          <section aria-label="Operational charts" className="mt-10 space-y-9">
+            <div>
+              <h2 className="mb-4 text-base font-medium">Trends</h2>
+              <div className="grid gap-5 lg:grid-cols-2">
+                {charts
+                  .filter((chart) => ["capturedGrossByDay", "newUsersByDay"].includes(chart.key))
+                  .map((chart) => (
+                    <OverviewChartCard
+                      key={chart.key}
+                      title={chart.title}
+                      metricKey={chart.key}
+                      metric={metrics[chart.key]}
+                      range={range!}
+                      kind={chart.kind}
+                      formatValue={chart.money ? formatUsd : undefined}
+                    />
+                  ))}
+              </div>
+            </div>
+            {[
+              {
+                title: "Purchasing and payments",
+                keys: [
+                  "refundsByDay",
+                  "policyDistribution",
+                  "approvalFunnel",
+                  "checkoutFunnel",
+                  "mandateStatusDistribution",
+                ],
+              },
+              {
+                title: "Customers and agents",
+                keys: ["agentRunsByDay", "agentErrorClasses"],
+              },
+              {
+                title: "Webhooks and recovery",
+                keys: [
+                  "webhookDeliveriesByDay",
+                  "webhookDeliveryOutcomes",
+                  "webhookStatusCounts",
+                  "topErrorCategories",
+                ],
+              },
+            ].map((group) => (
+              <DisclosureSection key={group.title} title={group.title}>
+                <div className="grid gap-5 lg:grid-cols-2">
+                  {charts
+                    .filter((chart) => group.keys.includes(chart.key))
+                    .map((chart) => (
+                      <OverviewChartCard
+                        key={chart.key}
+                        title={chart.title}
+                        metricKey={chart.key}
+                        metric={metrics[chart.key]}
+                        range={range!}
+                        kind={chart.kind}
+                        formatValue={chart.money ? formatUsd : undefined}
+                      />
+                    ))}
+                </div>
+              </DisclosureSection>
             ))}
           </section>
           {overview.data.warnings.length > 0 && (
@@ -207,20 +333,14 @@ export default async function OverviewPage({
             <div>
               <h2 className="mb-4 text-lg font-medium">Recent activity</h2>
               <EventTimeline
-                events={(activity?.data ?? []).map((event) => ({
-                  id: event.id,
-                  title: event.title,
-                  at: event.at,
-                  status: event.status,
-                  description: event.highRisk
-                    ? "High-risk operational event."
-                    : "Operational event.",
-                  detail: event.href ? (
-                    <EntityLink resource={event.href.resource} id={event.href.id} />
-                  ) : undefined,
-                }))}
+                events={events.slice(0, 5)}
                 emptyDescription="No recent operational events in this window."
               />
+              {events.length > 5 && (
+                <DisclosureSection title="More activity" className="mt-4">
+                  <EventTimeline events={events.slice(5)} />
+                </DisclosureSection>
+              )}
             </div>
             <nav aria-label="Quick links" className="space-y-3">
               <h2 className="text-lg font-medium">Quick links</h2>
@@ -236,9 +356,10 @@ export default async function OverviewPage({
                 <Link
                   key={href}
                   href={href}
-                  className="flex min-h-11 items-center rounded-xl border bg-card px-4 text-sm underline-offset-4 hover:underline"
+                  className="flex min-h-12 items-center justify-between gap-3 rounded-lg border bg-card px-4 text-sm transition-colors hover:bg-secondary motion-reduce:transition-none"
                 >
                   {label}
+                  <ArrowUpRight size={15} aria-hidden="true" />
                 </Link>
               ))}
             </nav>

@@ -33,11 +33,16 @@ The database helper creates an isolated loopback cluster under ignored `.local/p
 
 Alternatively, copy root `.env.example` to ignored `.env` and configure shared PostgreSQL URLs, `AUTH_SECRET` and matching `APP_URL` / `API_URL`. Optional files in `apps/api`, `apps/web` and `packages/database` override shared settings; shell/CI values have highest priority. Keep only keys you want to override in workspace files: empty values explicitly clear root settings. `TEST_DATABASE_URL` must name a dedicated database ending in `_test`; tests reject a shared development/production database. See [environment configuration](docs/development/environment.md) for mode-specific/local files and secret boundaries.
 
+On subsequent local starts, use `pnpm dev:local` to start the existing database, apply pending migrations, and launch the web, API and admin together. Stop existing development servers first so their ports are available.
+
 - Web: http://localhost:3000
+- Admin: http://localhost:3001
 - API liveness: http://localhost:4000/health
 - Database/auth readiness: http://localhost:4000/health/ready
 
 Sign up at `/signup`, open **Mandates → New mandate**, review the AI-generated rules, save the draft, then activate it explicitly. `/chat` runs the limited shopping agent under a selected active mandate; structured discovery/comparison remains available as a fallback. Prepare a proposal, review required approval, then continue to Sandbox checkout. Use a separate personal Sandbox buyer for PayPal approval. `/orders` shows server-confirmed payment/refund facts; `/dashboard` shows owned analytics, natural-language filters and policy/audit detail links. Refund chat remains available without an active purchasing mandate and prepares reviewable details only. Without database/auth configuration, protected services report unavailable.
+
+Admin access requires `ADMIN_ORIGIN=http://localhost:3001` in the API's ignored environment file, plus an existing verified account granted the singleton administrator role. Provision that role with `MANDATEPAY_ADMIN_USER_ID=<verified-user-id> pnpm --filter @mandatepay/database admin:bootstrap`, then sign in at the admin URL. Customer signup never grants administrator privileges. See [the admin security setup](docs/implementation/ADMIN_PHASE_1.md).
 
 ## AI configuration
 

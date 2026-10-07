@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { AdminLink as Link } from "@/components/admin/link";
 import { PageHeader } from "@/components/admin/page-header";
 import { MetricCard } from "@/components/admin/metric-card";
 import { OverviewRangeSelector } from "@/components/admin/range-selector";
@@ -9,6 +9,9 @@ import { OutcomeBadge, ParseAlert, errorClassLabel } from "@/components/admin/he
 import { formatUtcDate } from "@/components/admin/timeline";
 import { adminApi } from "@/lib/admin-fetch";
 import { readOverviewSearch } from "@/lib/overview-query";
+import { adminFieldClass } from "@/lib/control-styles";
+import { DisclosureSection } from "@/components/admin/disclosure-section";
+import { Button } from "@mandatepay/ui/components/button";
 import {
   AGENT_ERROR_CLASSES,
   AGENT_RUN_OUTCOMES,
@@ -60,7 +63,7 @@ export default async function AgentActivityPage({
     <>
       <PageHeader
         title="Agent activity"
-        description="Counts, timing, model ids, and tool names for shopping-agent runs."
+        description="Review shopping-agent outcomes and open a run to investigate."
         breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Agent activity" }]}
       />
       {metrics ? (
@@ -72,62 +75,85 @@ export default async function AgentActivityPage({
           keep={keepFilters(outcome, errorClass)}
         />
       ) : null}
-      <div className="mb-8 space-y-3">
-        <nav aria-label="Outcome" className="flex flex-wrap gap-2">
-          <FilterLink
-            href={agentPath(undefined, errorClass, range.search)}
-            active={!outcome}
-            label="All"
-          />
-          <FilterLink
-            href={agentPath("SUCCEEDED", errorClass, range.search)}
-            active={outcome === "SUCCEEDED"}
-            label="Succeeded"
-          />
-          <FilterLink
-            href={agentPath("FAILED", errorClass, range.search)}
-            active={outcome === "FAILED"}
-            label="Failed"
-          />
-        </nav>
-        <nav aria-label="Error class" className="flex flex-wrap gap-2">
-          <FilterLink
-            href={agentPath(outcome, undefined, range.search)}
-            active={!errorClass}
-            label="All"
-          />
-          {errorFilters.map(([value, label]) => (
-            <FilterLink
-              key={value}
-              href={agentPath(outcome, value, range.search)}
-              active={errorClass === value}
-              label={label}
-            />
-          ))}
-        </nav>
-      </div>
+      <form
+        action="/agent"
+        method="get"
+        aria-label="Agent filters"
+        className="mb-6 flex flex-wrap items-end gap-3"
+      >
+        {Array.from(new URLSearchParams(range.search)).map(([key, value]) => (
+          <input key={key} type="hidden" name={key} value={value} />
+        ))}
+        <label className="text-xs font-medium">
+          <span className="sr-only">Run outcome</span>
+          <select
+            name="outcome"
+            aria-label="Run outcome"
+            defaultValue={outcome ?? ""}
+            className={`${adminFieldClass} w-auto`}
+          >
+            <option value="">All outcomes</option>
+            <option value="SUCCEEDED">Succeeded</option>
+            <option value="FAILED">Failed</option>
+          </select>
+        </label>
+        <details open={Boolean(errorClass)} className="min-w-0">
+          <summary className="inline-flex min-h-11 cursor-pointer items-center rounded-lg border bg-card px-4 text-sm">
+            Error filter{errorClass ? ` · ${errorClassLabel(errorClass)}` : ""}
+          </summary>
+          <label className="mt-3 block text-xs">
+            <span className="mb-2 block">Error category</span>
+            <select name="errorClass" defaultValue={errorClass ?? ""} className={adminFieldClass}>
+              <option value="">All error categories</option>
+              {errorFilters.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </details>
+        <Button type="submit" variant="outline">
+          Apply
+        </Button>
+        {(outcome || errorClass) && (
+          <Link
+            href={agentPath(undefined, undefined, range.search)}
+            className="inline-flex min-h-11 items-center rounded px-3 text-sm underline"
+          >
+            Clear filters
+          </Link>
+        )}
+      </form>
       <section aria-label="Agent metrics" className="mb-10">
         <h2 className="mb-4 text-lg font-medium">Metrics</h2>
         {!metrics ? (
           <ParseAlert message="Agent metrics could not be loaded." href={pageHref} />
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {cards.map((card) => (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {cards.slice(0, 3).map((card) => (
               <AgentMetricCard key={card.label} label={card.label} metric={card.metric} />
             ))}
           </div>
         )}
       </section>
       {metrics ? (
-        <section aria-label="Agent error distribution" className="mb-10 max-w-xl">
-          <OverviewChartCard
-            title="Agent error classes"
-            metricKey="agentErrorClasses"
-            metric={metrics.data.errorClasses}
-            range={metrics.data.range}
-            kind="bars"
-          />
-        </section>
+        <DisclosureSection title="Performance and error details" className="mb-8">
+          <div className="mb-6 grid gap-4 sm:grid-cols-3">
+            {cards.slice(3).map((card) => (
+              <AgentMetricCard key={card.label} label={card.label} metric={card.metric} />
+            ))}
+          </div>
+          <section aria-label="Agent error distribution" className="max-w-xl">
+            <OverviewChartCard
+              title="Agent error classes"
+              metricKey="agentErrorClasses"
+              metric={metrics.data.errorClasses}
+              range={metrics.data.range}
+              kind="bars"
+            />
+          </section>
+        </DisclosureSection>
       ) : null}
       <section aria-label="Agent runs">
         <h2 className="mb-4 text-lg font-medium">Runs</h2>
@@ -138,7 +164,7 @@ export default async function AgentActivityPage({
         ) : (
           <ul className="space-y-3">
             {runs.data.map((run) => (
-              <li key={run.id} className="rounded-2xl border bg-card p-4 text-sm">
+              <li key={run.id} className="min-w-0 rounded-xl border bg-card p-5 text-sm">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                   <Link
                     href={`/agent/runs/${encodeURIComponent(run.id)}`}
@@ -149,12 +175,14 @@ export default async function AgentActivityPage({
                   <OutcomeBadge outcome={run.outcome} />
                   <span>{errorClassLabel(run.errorClass)}</span>
                   <span className="break-all">{run.modelId}</span>
-                  <span>{run.durationMs === null ? "—" : `${run.durationMs} ms`}</span>
+                  <span className="tabular-nums">
+                    {run.durationMs === null ? "—" : `${run.durationMs} ms`}
+                  </span>
                   <span>
                     {run.tools.length} {run.tools.length === 1 ? "tool" : "tools"}
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-x-4">
+                <div className="mt-3 flex flex-wrap gap-x-4 border-t pt-3 [overflow-wrap:anywhere]">
                   <span className="inline-flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">User</span>
                     <EntityLink resource="users" id={run.userId} />
@@ -194,20 +222,6 @@ function AgentMetricCard({
       availability={metric.availability}
       description={metric.reason ?? metric.definition}
     />
-  );
-}
-
-function FilterLink({ href, active, label }: { href: string; active: boolean; label: string }) {
-  return (
-    <Link
-      href={href}
-      aria-current={active ? "page" : undefined}
-      className={`inline-flex min-h-11 items-center rounded-xl border px-4 text-sm ${
-        active ? "bg-admin-active font-medium" : "bg-card"
-      }`}
-    >
-      {label}
-    </Link>
   );
 }
 

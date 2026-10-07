@@ -18,12 +18,12 @@ export default async function SessionPage() {
         aria-label="Session security"
         className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
       >
-        <div className="rounded-2xl border bg-card p-6 sm:p-7">
+        <div className="min-w-0 rounded-xl border bg-card p-6 sm:p-7">
           <div className="mb-6 flex items-center justify-between gap-4">
             <h2 className="text-lg font-medium">Account access</h2>
             <StatusBadge status="VERIFIED" label="Verified admin" />
           </div>
-          <dl className="space-y-3 break-words text-sm">
+          <dl className="divide-y text-sm [&>div]:py-4 [&>div:first-child]:pt-0 [&>div:last-child]:pb-0 [overflow-wrap:anywhere]">
             <div>
               <dt className="text-muted-foreground">Signed in as</dt>
               <dd className="mt-1 font-medium">{result.admin.user.email}</dd>
@@ -46,7 +46,7 @@ export default async function SessionPage() {
             </div>
           </dl>
         </div>
-        <div className="rounded-2xl border bg-card p-6 sm:p-7">
+        <div className="min-w-0 rounded-xl border bg-card p-6 sm:p-7">
           <h2 className="text-lg font-medium">Session controls</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             Password confirmation lasts ten minutes. Sensitive actions check it again before they

@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import { AdminLink as Link } from "./link";
 import { usePathname } from "next/navigation";
 import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@mandatepay/ui/components/button";
@@ -16,35 +16,56 @@ import type { AdminMe } from "@/lib/session";
 import type { AdminEnvironment } from "@/lib/environment";
 import { StatusBadge } from "./status-badge";
 import { AdminToastProvider } from "./toasts";
+import {
+  Activity,
+  BadgeCheck,
+  CircleUserRound,
+  CreditCard,
+  FileCheck2,
+  LayoutDashboard,
+  ListChecks,
+  LockKeyhole,
+  Menu,
+  ReceiptText,
+  RotateCcw,
+  Settings2,
+  ShieldCheck,
+  ShoppingBag,
+  Users,
+  Webhook,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { AdminWordmark } from "./wordmark";
 
 const groups: readonly {
   label: string;
-  items: readonly { label: string; href: string | null }[];
+  items: readonly { label: string; href: string | null; icon: LucideIcon }[];
 }[] = [
-  { label: "Workspace", items: [{ label: "Overview", href: "/" }] },
+  { label: "Workspace", items: [{ label: "Overview", href: "/", icon: LayoutDashboard }] },
   {
     label: "Operations",
     items: [
-      { label: "Users", href: "/users" },
-      { label: "Mandates", href: "/mandates" },
-      { label: "Proposals", href: "/proposals" },
-      { label: "Approvals", href: "/approvals" },
-      { label: "Orders", href: "/orders" },
-      { label: "Payments", href: "/payments" },
-      { label: "Refunds", href: "/refunds" },
+      { label: "Users", href: "/users", icon: Users },
+      { label: "Mandates", href: "/mandates", icon: FileCheck2 },
+      { label: "Proposals", href: "/proposals", icon: ListChecks },
+      { label: "Approvals", href: "/approvals", icon: BadgeCheck },
+      { label: "Orders", href: "/orders", icon: ShoppingBag },
+      { label: "Payments", href: "/payments", icon: CreditCard },
+      { label: "Refunds", href: "/refunds", icon: RotateCcw },
     ],
   },
   {
     label: "Platform",
     items: [
-      { label: "Agent Activity", href: "/agent" },
-      { label: "Webhooks", href: "/webhooks" },
-      { label: "Audit Logs", href: "/audit" },
-      { label: "System Health", href: "/system" },
-      { label: "Configuration", href: "/settings" },
+      { label: "Agent Activity", href: "/agent", icon: Activity },
+      { label: "Webhooks", href: "/webhooks", icon: Webhook },
+      { label: "Audit Logs", href: "/audit", icon: ReceiptText },
+      { label: "System Health", href: "/system", icon: ShieldCheck },
+      { label: "Configuration", href: "/settings", icon: Settings2 },
     ],
   },
-  { label: "Admin", items: [{ label: "My Session", href: "/session" }] },
+  { label: "Admin", items: [{ label: "My Session", href: "/session", icon: CircleUserRound }] },
 ];
 export function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -52,12 +73,10 @@ export function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
     return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
   }
   return (
-    <nav aria-label="Administration" className="space-y-5 px-4 py-5">
+    <nav aria-label="Administration" className="space-y-6 px-3 py-5">
       {groups.map((group) => (
         <section key={group.label}>
-          <h2 className="mb-2 px-3 text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-            {group.label}
-          </h2>
+          <h2 className="mb-2 px-3 text-xs font-medium text-muted-foreground">{group.label}</h2>
           <ul className="space-y-0.5">
             {group.items.map((item) => (
               <li key={item.label}>
@@ -66,8 +85,14 @@ export function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
                     href={item.href}
                     onClick={onNavigate}
                     aria-current={current(item.href) ? "page" : undefined}
-                    className={`flex min-h-11 items-center rounded-xl px-3 text-sm ${current(item.href) ? "bg-admin-active font-medium" : "hover:bg-secondary"}`}
+                    className={`flex min-h-11 items-center gap-3 rounded-lg border px-3 text-sm transition-colors motion-reduce:transition-none ${current(item.href) ? "border-sand-border bg-admin-active font-medium text-foreground" : "border-transparent text-muted-foreground hover:bg-card hover:text-foreground"}`}
                   >
+                    <item.icon
+                      size={17}
+                      strokeWidth={1.6}
+                      aria-hidden="true"
+                      className="shrink-0"
+                    />
                     {item.label}
                   </Link>
                 ) : (
@@ -104,11 +129,12 @@ function MobileNavigation() {
           aria-controls="admin-mobile-navigation"
           className="lg:hidden"
         >
-          ☰
+          <Menu size={19} aria-hidden="true" />
         </Button>
       </DialogTrigger>
       <DialogContent
         ref={content}
+        onOverlayPointerDown={() => setOpen(false)}
         id="admin-mobile-navigation"
         className="left-0 top-0 flex h-dvh max-h-dvh w-[min(20rem,calc(100%_-_3rem))] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none p-0 sm:p-0"
         onOpenAutoFocus={(event) => {
@@ -123,7 +149,7 @@ function MobileNavigation() {
           <DialogTitle className="text-xl">Administration</DialogTitle>
           <DialogClose asChild>
             <Button variant="ghost" size="icon" aria-label="Close administration menu">
-              ×
+              <X size={19} aria-hidden="true" />
             </Button>
           </DialogClose>
         </div>
@@ -151,13 +177,29 @@ export function AdminTopbar({
     unknown: "Environment unknown",
   };
   return (
-    <header className="sticky top-0 z-40 flex min-h-[72px] flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-3 sm:px-7">
+    <header className="sticky top-0 z-40 flex min-h-[72px] items-center justify-between gap-3 border-b bg-background px-4 py-3 sm:px-7 lg:px-9">
       <div className="flex min-w-0 items-center gap-3">
         <MobileNavigation key={pathname} />
         <Link href="/" className="rounded text-sm font-medium lg:hidden">
-          MandatePay Admin
+          <span className="sm:hidden">
+            <AdminWordmark compact />
+          </span>
+          <span className="hidden sm:inline">
+            <AdminWordmark />
+          </span>
+          <span className="sr-only">Admin</span>
         </Link>
-        <span className="hidden text-sm text-muted-foreground lg:block">Administration</span>
+        <span className="hidden text-sm font-medium lg:block">
+          {groups
+            .flatMap((group) => group.items)
+            .find(
+              (item) =>
+                item.href &&
+                (item.href === "/"
+                  ? pathname === "/"
+                  : pathname === item.href || pathname.startsWith(`${item.href}/`)),
+            )?.label ?? "Administration"}
+        </span>
         <StatusBadge
           status={environment}
           label={labels[environment]}
@@ -170,15 +212,33 @@ export function AdminTopbar({
           }
         />
       </div>
-      <div className="min-w-0 text-right">
-        <p
-          className="max-w-[180px] truncate text-xs font-medium sm:max-w-[240px]"
-          title={admin.user.email}
+      <Link
+        href="/session"
+        aria-label={`Admin session for ${admin.user.name ?? admin.user.email}`}
+        className="flex min-h-11 min-w-0 items-center gap-3 rounded-lg px-2 transition-colors hover:bg-secondary motion-reduce:transition-none"
+      >
+        <div className="hidden min-w-0 text-right sm:block">
+          <p
+            className="max-w-[180px] truncate text-sm font-medium sm:max-w-[240px]"
+            title={admin.user.email}
+          >
+            {admin.user.name ?? admin.user.email}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Main administrator</p>
+        </div>
+        <span
+          aria-hidden="true"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full border border-sand-border bg-accent text-xs font-medium"
         >
-          {admin.user.name ?? admin.user.email}
-        </p>
-        <p className="mt-1 text-[11px] text-muted-foreground">Main administrator</p>
-      </div>
+          {(admin.user.name ?? admin.user.email)
+            .trim()
+            .split(/\s+/)
+            .map((part) => part[0])
+            .slice(0, 2)
+            .join("")
+            .toUpperCase()}
+        </span>
+      </Link>
     </header>
   );
 }
@@ -199,21 +259,22 @@ export function AdminShell({
         <aside className="sticky top-0 hidden h-dvh min-h-0 flex-col border-r bg-admin-sidebar lg:flex">
           <Link
             href="/"
-            className="flex min-h-[72px] shrink-0 items-center px-7 font-editorial text-xl"
+            aria-label="MandatePay Admin overview"
+            className="flex min-h-[72px] shrink-0 items-center px-5"
           >
-            MandatePay <span className="ml-2 font-sans text-xs">Admin</span>
+            <AdminWordmark />
           </Link>
           <Separator />
           <div className="min-h-0 flex-1 overflow-y-auto">
             <AdminSidebar />
           </div>
-          <div className="shrink-0 border-t px-7 py-5 text-xs text-muted-foreground">
-            Restricted access
-            <br />
-            <span className="mt-1 block">Activity is audited.</span>
-            {commitSha ? (
-              <span className="mt-1 block">Build {commitSha.slice(0, 7)}</span>
-            ) : null}
+          <div className="shrink-0 border-t px-5 py-5 text-xs text-muted-foreground">
+            <p className="flex items-center gap-2 font-medium text-foreground">
+              <LockKeyhole size={14} aria-hidden="true" />
+              Restricted access
+            </p>
+            <span className="mt-1.5 block">Activity is audited.</span>
+            {commitSha ? <span className="mt-1 block">Build {commitSha.slice(0, 7)}</span> : null}
           </div>
         </aside>
         <div className="min-w-0">
@@ -221,7 +282,7 @@ export function AdminShell({
           <main
             id="main"
             tabIndex={-1}
-            className="mx-auto max-w-[1440px] px-4 py-6 outline-none sm:px-7 sm:py-8 lg:px-9"
+            className="mx-auto max-w-[1440px] px-4 py-6 outline-none sm:px-7 sm:py-8 lg:px-9 lg:py-9"
           >
             {children}
           </main>

@@ -10,6 +10,7 @@ import {
 import { postAdminControl } from "@/lib/admin-action";
 import { formatUsd } from "@/lib/money";
 import { parseAdminMe } from "@/lib/session";
+import { adminFieldClass } from "@/lib/control-styles";
 import {
   requireAdminReason,
   type AdminEntityCapability,
@@ -34,13 +35,18 @@ function blockedReason(
 }
 
 async function freshAuthUntil() {
-  const response = await fetch("/api/admin/me", {
-    credentials: "same-origin",
-    cache: "no-store",
-    signal: AbortSignal.timeout(15_000),
-  });
-  const admin = parseAdminMe(await response.json().catch(() => null));
-  return admin?.session.freshAuthUntil;
+  try {
+    const response = await fetch("/api/admin/me", {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
+    const admin = parseAdminMe(await response.json().catch(() => null));
+    return admin?.session.freshAuthUntil;
+  } catch {
+    // No cached proof survives a failed read. The dialog requires password confirmation.
+    return undefined;
+  }
 }
 
 export function UserControls({ user }: { user: AdminUser }) {
@@ -184,7 +190,7 @@ export function UserNotes({
       <ul className="space-y-2 text-sm">
         {notes.map((note) => (
           <li key={note.id} className="rounded-xl border bg-card p-4">
-            <p className="whitespace-pre-wrap">{note.body}</p>
+            <p className="whitespace-pre-wrap leading-6 [overflow-wrap:anywhere]">{note.body}</p>
             <p className="mt-2 text-xs text-muted-foreground">
               {note.authorName ?? "Administrator"} · {note.createdAt}
             </p>
@@ -192,63 +198,68 @@ export function UserNotes({
         ))}
         {!notes.length && <li>No admin notes yet.</li>}
       </ul>
-      <form
-        className="space-y-3 rounded-2xl border p-4"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (pending) return;
-          setPending(true);
-          setError(null);
-          try {
-            const safeReason = requireAdminReason(reason);
-            await postAdminControl(`users/${encodeURIComponent(userId)}/notes`, {
-              reason: safeReason,
-              requestKey,
-              body: body.trim(),
-            });
-            setBody("");
-            setReason("");
-            router.refresh();
-          } catch (failure) {
-            setError(
-              failure instanceof Error && failure.message
-                ? "Provide a reason and note without credential material."
-                : "The note could not be saved. Check the current state before retrying.",
-            );
-          } finally {
-            setPending(false);
-          }
-        }}
-      >
-        <label className="block text-sm">
-          Reason
-          <input
-            className="mt-2 w-full rounded-xl border bg-background p-3"
-            maxLength={255}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            required
-          />
-        </label>
-        <label className="block text-sm">
-          Note
-          <textarea
-            className="mt-2 min-h-24 w-full rounded-xl border bg-background p-3"
-            maxLength={2000}
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            required
-          />
-        </label>
-        {error && (
-          <p role="alert" className="text-sm">
-            {error}
-          </p>
-        )}
-        <Button type="submit" disabled={pending || !body.trim() || !reason.trim()}>
-          {pending ? "Saving…" : "Add note"}
-        </Button>
-      </form>
+      <details className="rounded-xl border bg-card p-5">
+        <summary className="inline-flex min-h-11 cursor-pointer items-center rounded text-sm font-medium">
+          Add a note
+        </summary>
+        <form
+          className="mt-4 space-y-4"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (pending) return;
+            setPending(true);
+            setError(null);
+            try {
+              const safeReason = requireAdminReason(reason);
+              await postAdminControl(`users/${encodeURIComponent(userId)}/notes`, {
+                reason: safeReason,
+                requestKey,
+                body: body.trim(),
+              });
+              setBody("");
+              setReason("");
+              router.refresh();
+            } catch (failure) {
+              setError(
+                failure instanceof Error && failure.message
+                  ? "Provide a reason and note without credential material."
+                  : "The note could not be saved. Check the current state before retrying.",
+              );
+            } finally {
+              setPending(false);
+            }
+          }}
+        >
+          <label className="block text-sm">
+            Reason
+            <input
+              className={`${adminFieldClass} mt-2`}
+              maxLength={255}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              required
+            />
+          </label>
+          <label className="block text-sm">
+            Note
+            <textarea
+              className={`${adminFieldClass} mt-2 min-h-24`}
+              maxLength={2000}
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              required
+            />
+          </label>
+          {error && (
+            <p role="alert" className="text-sm">
+              {error}
+            </p>
+          )}
+          <Button type="submit" disabled={pending || !body.trim() || !reason.trim()}>
+            {pending ? "Saving…" : "Add note"}
+          </Button>
+        </form>
+      </details>
     </section>
   );
 }

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@mandatepay/ui/components/button";
 import { ReauthDialog } from "./admin/reauth-dialog";
 import { useAdminToast } from "./admin/toasts";
+import { KeyRound, LogOut } from "lucide-react";
 
 export function SessionControls() {
   const router = useRouter(),
@@ -51,8 +52,13 @@ export function SessionControls() {
         open={reauth}
         onOpenChange={setReauth}
         trigger={
-          <Button variant="outline" disabled={pending} className="w-full">
+          <Button
+            variant="outline"
+            disabled={pending}
+            className="w-full justify-between rounded-lg"
+          >
             Confirm password
+            <KeyRound size={16} aria-hidden="true" />
           </Button>
         }
         onConfirmed={() =>
@@ -63,8 +69,14 @@ export function SessionControls() {
           })
         }
       />
-      <Button type="button" disabled={pending} className="w-full" onClick={() => void signOut()}>
+      <Button
+        type="button"
+        disabled={pending}
+        className="w-full justify-between rounded-lg"
+        onClick={() => void signOut()}
+      >
         {pending ? "Signing out…" : "Sign out"}
+        <LogOut size={16} aria-hidden="true" />
       </Button>
       {error && (
         <p role="alert" className="rounded-xl border p-3 text-sm">

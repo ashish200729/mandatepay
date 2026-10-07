@@ -9,9 +9,15 @@ const tones: Record<StatusTone, string> = {
   info: "bg-admin-info text-admin-info-foreground",
 };
 export function statusTone(status: string): StatusTone {
-  if (["SUCCESS", "ACTIVE", "COMPLETED", "PROCESSED", "ready", "VERIFIED", "ENABLED"].includes(status))
+  if (
+    ["SUCCESS", "ACTIVE", "COMPLETED", "PROCESSED", "ready", "VERIFIED", "ENABLED"].includes(status)
+  )
     return "success";
-  if (["FAILURE", "FAILED", "DENIED", "BLOCKED", "unavailable", "REVOKED", "DISABLED"].includes(status))
+  if (
+    ["FAILURE", "FAILED", "DENIED", "BLOCKED", "unavailable", "REVOKED", "DISABLED"].includes(
+      status,
+    )
+  )
     return "danger";
   if (
     [
@@ -38,7 +44,7 @@ export function StatusBadge({
   return (
     <Badge
       variant="outline"
-      className={`${tones[tone ?? statusTone(status)]} border-transparent px-2.5 py-1 text-xs`}
+      className={`${tones[tone ?? statusTone(status)]} max-w-full whitespace-normal border-transparent px-2.5 py-1 text-xs font-medium leading-4 [overflow-wrap:anywhere]`}
     >
       {label ?? status.toLowerCase().replaceAll("_", " ")}
     </Badge>

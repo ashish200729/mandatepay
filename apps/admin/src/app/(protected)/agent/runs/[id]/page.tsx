@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { AdminLink as Link } from "@/components/admin/link";
 import { PageHeader } from "@/components/admin/page-header";
 import { DefinitionList } from "@/components/admin/definition-list";
 import { EntityLink } from "@/components/admin/entity-link";
@@ -15,7 +15,7 @@ export default async function AgentRunPage({ params }: { params: Promise<{ id: s
   const breadcrumbs = [
     { label: "Overview", href: "/" },
     { label: "Agent activity", href: "/agent" },
-    { label: detail ? detail.data.id : "Run" },
+    { label: "Run details" },
   ];
   if (response.status === 404) {
     return (
@@ -58,6 +58,7 @@ export default async function AgentRunPage({ params }: { params: Promise<{ id: s
       <PageHeader
         title="Agent run"
         description="Timing, outcome, and tool names for this run."
+        recordId={run.id}
         breadcrumbs={breadcrumbs}
       />
       <DefinitionList
@@ -93,44 +94,76 @@ export default async function AgentRunPage({ params }: { params: Promise<{ id: s
         {run.tools.length === 0 ? (
           <EmptyState title="No tool calls" description="This run did not record any tool calls." />
         ) : (
-          <div className="overflow-x-auto rounded-2xl border bg-card">
-            <table className="w-full min-w-[36rem] text-left text-sm">
-              <caption className="sr-only">Tool calls</caption>
-              <thead className="border-b text-xs text-muted-foreground">
-                <tr>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Name
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Outcome
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Error class
-                  </th>
-                  <th scope="col" className="px-4 py-3 font-medium">
-                    Duration
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {run.tools.map((tool, index) => (
-                  <tr
-                    key={`${tool.name}-${tool.startedAt}-${index}`}
-                    className="border-b last:border-b-0"
-                  >
-                    <td className="px-4 py-3">{tool.name}</td>
-                    <td className="px-4 py-3">
-                      <OutcomeBadge outcome={tool.outcome} />
-                    </td>
-                    <td className="px-4 py-3">{errorClassLabel(tool.errorClass)}</td>
-                    <td className="px-4 py-3">
-                      {tool.durationMs === null ? "—" : `${tool.durationMs} ms`}
-                    </td>
+          <>
+            <div
+              className="hidden overflow-x-auto rounded-xl border bg-card sm:block"
+              role="region"
+              aria-label="Tool calls table, scroll for all columns"
+              tabIndex={0}
+            >
+              <table className="w-full min-w-[36rem] text-left text-sm">
+                <caption className="sr-only">Tool calls</caption>
+                <thead className="border-b bg-secondary/40 text-xs text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Name
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Outcome
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Error class
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-medium">
+                      Duration
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {run.tools.map((tool, index) => (
+                    <tr
+                      key={`${tool.name}-${tool.startedAt}-${index}`}
+                      className="border-b last:border-b-0"
+                    >
+                      <td className="px-4 py-3">{tool.name}</td>
+                      <td className="px-4 py-3">
+                        <OutcomeBadge outcome={tool.outcome} />
+                      </td>
+                      <td className="px-4 py-3">{errorClassLabel(tool.errorClass)}</td>
+                      <td className="px-4 py-3">
+                        {tool.durationMs === null ? "—" : `${tool.durationMs} ms`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <ul className="divide-y overflow-hidden rounded-xl border bg-card sm:hidden">
+              {run.tools.map((tool, index) => (
+                <li key={`${tool.name}-${index}`} className="p-5">
+                  <h3 className="text-sm font-medium [overflow-wrap:anywhere]">{tool.name}</h3>
+                  <dl className="mt-3 space-y-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <dt className="text-xs text-muted-foreground">Outcome</dt>
+                      <dd>
+                        <OutcomeBadge outcome={tool.outcome} />
+                      </dd>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <dt className="text-xs text-muted-foreground">Error class</dt>
+                      <dd>{errorClassLabel(tool.errorClass)}</dd>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <dt className="text-xs text-muted-foreground">Duration</dt>
+                      <dd className="tabular-nums">
+                        {tool.durationMs === null ? "—" : `${tool.durationMs} ms`}
+                      </dd>
+                    </div>
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
     </>

@@ -13,6 +13,7 @@
   --color-admin-danger-foreground: var(--admin-danger-foreground);
   --color-admin-info: var(--admin-info);
   --color-admin-info-foreground: var(--admin-info-foreground);
+  --color-admin-chart: var(--admin-chart);
 }
 :root {
   --admin-success: #eaf2e8;
@@ -23,6 +24,7 @@
   --admin-danger-foreground: #8b3029;
   --admin-info: #e9f1f5;
   --admin-info-foreground: #31596c;
+  --admin-chart: #927047;
 }
 
 @layer base {
@@ -32,8 +34,33 @@
   body {
     @apply bg-background text-foreground font-sans antialiased;
   }
+  ::selection {
+    background: var(--sand);
+    color: var(--foreground);
+  }
+  input,
+  textarea {
+    caret-color: var(--foreground);
+  }
+  * {
+    scrollbar-color: var(--sand-border) transparent;
+    scrollbar-width: thin;
+  }
+  a {
+    text-underline-offset: 4px;
+  }
+  button:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
   :focus-visible {
     outline: 2px solid var(--foreground);
     outline-offset: 4px;
+  }
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--admin-chart);
+    outline-offset: -2px;
   }
 }

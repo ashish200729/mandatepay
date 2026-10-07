@@ -11,6 +11,7 @@ import {
   DialogClose,
 } from "@mandatepay/ui/components/dialog";
 import { parseAdminMe, type AdminMe } from "@/lib/session";
+import { adminFieldClass } from "@/lib/control-styles";
 
 function ReauthForm({
   onConfirmed,
@@ -82,7 +83,7 @@ function ReauthForm({
         required
         maxLength={128}
         disabled={pending}
-        className="h-12 w-full rounded-xl border bg-background px-3"
+        className={`${adminFieldClass} h-12`}
         aria-describedby={error ? "reauth-error" : undefined}
         aria-invalid={Boolean(error)}
       />
@@ -102,7 +103,7 @@ function ReauthForm({
           Confirming your password…
         </p>
       )}
-      <div className="flex flex-wrap justify-end gap-3">
+      <div className="flex flex-wrap justify-end gap-3 border-t pt-5">
         <DialogClose asChild>
           <Button type="button" variant="outline" disabled={pending}>
             Cancel
@@ -136,6 +137,7 @@ export function ReauthDialog({
     >
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent
+        className="rounded-xl border-0"
         onEscapeKeyDown={(event) => {
           if (busy) event.preventDefault();
         }}

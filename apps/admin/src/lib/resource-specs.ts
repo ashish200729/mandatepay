@@ -15,7 +15,10 @@ const trueFalse = [
   { value: "false", label: "No" },
 ];
 function enums(values: readonly string[]): SelectFilter["options"] {
-  return values.map((value) => ({ value, label: value.replaceAll("_", " ") }));
+  return values.map((value) => {
+    const label = value.toLowerCase().replaceAll("_", " ");
+    return { value, label: label.charAt(0).toUpperCase() + label.slice(1) };
+  });
 }
 
 export const resourceSpecs = {

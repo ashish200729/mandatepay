@@ -15,13 +15,17 @@ test("admin dashboard charts use a time range and drill into filtered lists", as
   await expect(page.getByRole("region", { name: "Operational charts" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "User growth" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Payment volume" })).toBeVisible();
+  await page.locator("summary").filter({ hasText: "Purchasing and payments" }).click();
   await expect(page.getByRole("heading", { name: "Approval funnel" })).toBeVisible();
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Last 30 days" })).toBeVisible();
-  await page.getByRole("button", { name: "Last 7 days" }).click();
+  await expect(page.getByLabel("Time period").locator("option:checked")).toHaveText("Last 30 days");
+  await page.getByLabel("Time period").selectOption({ label: "Last 7 days" });
   await expect(page).toHaveURL(/from=/u);
+  await page.locator("summary").filter({ hasText: "Purchasing and payments" }).click();
+  await page.locator("summary").filter({ hasText: "Webhooks and recovery" }).click();
+  await page.locator("summary").filter({ hasText: "Customers and agents" }).click();
   await expect(page.getByRole("heading", { name: "AgentGuard decisions" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Top error categories" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Mandate status" })).toBeVisible();

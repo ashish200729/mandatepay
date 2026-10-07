@@ -5,16 +5,20 @@ export function MetricCard({
   value,
   description,
   availability = "available",
+  compact = false,
 }: {
   label: string;
   value: string | number | null;
   description: string;
   availability?: "available" | "unavailable";
+  compact?: boolean;
 }) {
   return (
-    <article className="min-w-0 rounded-2xl border bg-card p-5">
-      <h2 className="text-sm font-medium">{label}</h2>
-      <p className="mt-3 break-words text-3xl font-medium tabular-nums">
+    <article className={`min-w-0 bg-card p-5 ${compact ? "" : "rounded-xl border"}`}>
+      <h2 className="text-sm font-medium text-muted-foreground">{label}</h2>
+      <p
+        className={`mt-2 break-words font-medium tracking-tight tabular-nums ${compact ? "text-2xl" : "text-3xl"}`}
+      >
         {availability === "unavailable" || value === null ? "—" : value}
       </p>
       {(availability === "unavailable" || value === null) && (
@@ -22,7 +26,7 @@ export function MetricCard({
           <StatusBadge status="UNKNOWN" label="Unavailable" />
         </div>
       )}
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{description}</p>
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">{description}</p>
     </article>
   );
 }

@@ -1,13 +1,12 @@
 import { notFound } from "next/navigation";
-import { PageHeader } from "@/components/admin/page-header";
-import { DefinitionList } from "@/components/admin/definition-list";
-import { EntityLink } from "@/components/admin/entity-link";
-import { StatusBadge } from "@/components/admin/status-badge";
-import { JsonViewer } from "@/components/admin/timeline";
-import { EventTimeline, formatUtcDate } from "@/components/admin/timeline";
-import { adminApi } from "@/lib/admin-fetch";
-import { formatUsd } from "@/lib/money";
-import { resourceSpecs } from "@/lib/resource-specs";
+import { PageHeader } from "./page-header";
+import { DefinitionList } from "./definition-list";
+import { EntityLink } from "./entity-link";
+import { StatusBadge } from "./status-badge";
+import { JsonViewer, EventTimeline, formatUtcDate } from "./timeline";
+import { adminApi } from "../../lib/admin-fetch";
+import { formatUsd } from "../../lib/money";
+import { resourceSpecs } from "../../lib/resource-specs";
 import {
   parseAdminApproval,
   parseAdminAuditEvent,
@@ -26,7 +25,9 @@ import {
   parseAdminWebhook,
   type AdminAuditTarget,
 } from "@mandatepay/shared";
-import Link from "next/link";
+import { AdminLink as Link } from "./link";
+import { ArrowUpRight } from "lucide-react";
+import { ParseAlert } from "./health-card";
 import {
   UserControls,
   UserNotes,
@@ -50,11 +51,10 @@ export async function OperationsDetail({
   );
   if (response.status === 404) notFound();
   const data = parseDetail(resource, response.json);
-  if (!data) notFound();
   return (
     <>
       <PageHeader
-        title={`${
+        title={
           {
             users: "User",
             mandates: "Mandate",
@@ -66,15 +66,23 @@ export async function OperationsDetail({
             webhooks: "Webhook event",
             audit: "Audit event",
           }[resource]
-        } ${id}`}
-        description="Operational record. Access and mandate controls cannot rewrite PayPal or AgentGuard truth."
+        }
+        recordId={id}
+        description="Review this record, its current state and related activity."
         breadcrumbs={[
           { label: "Overview", href: "/" },
           { label: config.caption, href: config.path },
-          { label: id },
+          { label: "Details" },
         ]}
       />
-      {renderDetail(resource, data)}
+      {!data || response.status >= 400 ? (
+        <ParseAlert
+          message="This record could not be loaded. Reload to try again."
+          href={`${config.path}/${encodeURIComponent(id)}`}
+        />
+      ) : (
+        renderDetail(resource, data)
+      )}
     </>
   );
 }
@@ -174,7 +182,7 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
           label="Safe mandate summary"
         />
         {row.rules && (
-          <pre className="overflow-auto rounded-2xl bg-secondary p-4 text-xs">
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-xl border bg-secondary/40 p-5 text-xs leading-6">
             {JSON.stringify(row.rules, null, 2)}
           </pre>
         )}
@@ -339,14 +347,15 @@ function renderDetail(resource: keyof typeof resourceSpecs, data: unknown) {
 
 function Related({ links }: { links: readonly { href: string; label: string }[] }) {
   return (
-    <nav aria-label="Related records" className="flex flex-wrap gap-3">
+    <nav aria-label="Related records" className="flex flex-wrap gap-3 border-y py-4">
       {links.map((link) => (
         <Link
           key={link.href}
           href={link.href}
-          className="inline-flex min-h-11 items-center rounded-xl border px-4 text-sm underline-offset-4 hover:underline"
+          className="inline-flex min-h-11 items-center gap-2 rounded-lg border bg-card px-4 text-sm font-medium transition-colors hover:bg-secondary motion-reduce:transition-none"
         >
           {link.label}
+          <ArrowUpRight size={14} aria-hidden="true" />
         </Link>
       ))}
     </nav>
@@ -364,35 +373,56 @@ async function UserExtras({ userId }: { userId: string }) {
   const noteRows = parseAdminList(notes.json, parseAdminNote);
   return (
     <>
-      <UserNotes userId={userId} notes={noteRows?.data ?? []} />
+      {noteRows ? (
+        <UserNotes userId={userId} notes={noteRows.data} />
+      ) : (
+        <ParseAlert
+          message="Admin notes could not be loaded."
+          href={`/users/${encodeURIComponent(userId)}`}
+        />
+      )}
       <section>
         <h2 className="mb-3 text-lg font-medium">Sessions</h2>
         <p className="mb-4 text-sm text-muted-foreground">
           Live or expired sessions for this user. Tokens, IP addresses and user agents are not
           shown.
         </p>
-        <ul className="space-y-2 text-sm">
-          {(sessionRows?.data ?? []).map((session) => (
-            <li key={session.id} className="rounded-xl border bg-card p-4">
-              Created {formatUtcDate(session.createdAt)} · expires{" "}
-              {formatUtcDate(session.expiresAt)} · {session.isCurrent ? "current" : "expired"}
-            </li>
-          ))}
-          {!sessionRows?.data.length && <li>No sessions on this page.</li>}
-        </ul>
+        {sessionRows ? (
+          <ul className="space-y-2 text-sm">
+            {(sessionRows?.data ?? []).map((session) => (
+              <li key={session.id} className="rounded-xl border bg-card p-4">
+                Created {formatUtcDate(session.createdAt)} · expires{" "}
+                {formatUtcDate(session.expiresAt)} · {session.isCurrent ? "current" : "expired"}
+              </li>
+            ))}
+            {!sessionRows?.data.length && <li>No sessions on this page.</li>}
+          </ul>
+        ) : (
+          <ParseAlert
+            message="User sessions could not be loaded."
+            href={`/users/${encodeURIComponent(userId)}`}
+          />
+        )}
       </section>
       <section>
         <h2 className="mb-3 text-lg font-medium">Domain audit</h2>
-        <EventTimeline
-          events={(auditRows?.data ?? []).map((event) => ({
-            id: event.id,
-            title: event.eventType,
-            at: event.createdAt,
-            status: event.entityType,
-            description: `${event.entityType} ${event.entityId}`,
-          }))}
-          emptyDescription="No domain audit events for this user."
-        />
+        {auditRows ? (
+          <EventTimeline
+            events={(auditRows?.data ?? []).map((event) => ({
+              id: event.id,
+              title: event.eventType,
+              at: event.createdAt,
+              status: event.entityType,
+              description: `${event.entityType} ${event.entityId}`,
+            }))}
+            emptyDescription="No domain audit events for this user."
+          />
+        ) : (
+          <ParseAlert
+            message="Domain audit could not be loaded."
+            href={`/users/${encodeURIComponent(userId)}`}
+          />
+        )}
       </section>
     </>
   );

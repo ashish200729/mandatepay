@@ -19,19 +19,16 @@ import {
 
 const descriptions: Record<keyof typeof resourceSpecs, string> = {
   users:
-    "Inspect accounts, verification, autonomy and observed activity. Disablement is not available yet.",
-  mandates:
-    "Inspect canonical permissions, validity and related proposals. Original prompts are not shown.",
-  proposals:
-    "Inspect AgentGuard decisions, product snapshots and checkout eligibility without executing payment.",
+    "Review accounts, verification, purchasing permissions and observed activity. Open a user to manage access.",
+  mandates: "Review purchasing permissions, limits and validity.",
+  proposals: "Review proposed purchases and AgentGuard decisions.",
   approvals:
-    "Inspect human approval records. Administrators cannot approve purchases on a user's behalf.",
-  orders: "Orders are payment records that have a PayPal order identifier.",
-  payments:
-    "Inspect capture, refund and reconciliation diagnostics. Provider payloads are not exposed.",
-  refunds: "Inspect refunds. Completing a refund does not restore gross spending permission.",
-  webhooks: "Inspect verified inbox diagnostics. Raw provider payloads are not shown.",
-  audit: "Immutable administrator audit events. These records cannot be edited or deleted.",
+    "Review customer approvals and their deadlines. Only the customer can approve a purchase.",
+  orders: "Track PayPal orders and their payment status.",
+  payments: "Review payments, refunds and amounts available to refund.",
+  refunds: "Track refund amounts and completion status.",
+  webhooks: "Review payment events and processing failures.",
+  audit: "Review who changed what and when. Audit records cannot be edited or deleted.",
 };
 
 export async function OperationsCollection({

@@ -13,6 +13,7 @@ export default async function ProtectedLayout({ children }: { children: React.Re
       <AuthSurface
         title="Administration unavailable"
         description="We could not verify your admin session. Try again shortly."
+        environment={adminEnvironment(process.env.ADMIN_ENVIRONMENT, process.env.ADMIN_ORIGIN)}
       >
         <form action="/" method="get">
           <button

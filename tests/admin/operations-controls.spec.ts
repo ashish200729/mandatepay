@@ -32,6 +32,7 @@ test("admin can intervene in user access without rewriting provider or policy tr
 
   await page.goto(`/users/${fixture.ownerUserId}`);
   await expect(page.getByRole("heading", { name: `User ${fixture.ownerUserId}` })).toBeVisible();
+  await page.locator("summary").filter({ hasText: "Add a note" }).click();
   const notes = page
     .locator("form")
     .filter({ has: page.getByRole("button", { name: "Add note" }) });
