@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { PayPalClient, WebhookProcessingResult } from "@mandatepay/paypal";
-import type { DatabaseClient } from "@mandatepay/database";
+import { ObservabilityRepository, type DatabaseClient } from "@mandatepay/database";
+import type { WorkerRunCounts } from "@mandatepay/shared";
 import { webhookProcessingOpen } from "./platform-controls.js";
 import {
   PrismaWebhookInboxStore,
@@ -48,9 +50,44 @@ export class PayPalWebhookRecoveryWorker {
   }
 
   async runOnce(now = this.options.now ?? new Date()): Promise<WebhookRecoveryRunResult> {
+    const runId = randomUUID();
+    const heartbeats = new ObservabilityRepository(this.database);
+    const empty: WorkerRunCounts = {
+      scanned: 0,
+      claimed: 0,
+      processed: 0,
+      ignored: 0,
+      pending: 0,
+      exhausted: 0,
+    };
+    await heartbeats.beginWorkerRun({ runId, at: now });
+    try {
+      return await this.recover(now, runId, heartbeats, empty);
+    } catch {
+      try {
+        await heartbeats.finishWorkerRun({
+          runId,
+          at: new Date(),
+          outcome: "FAILED",
+          counts: empty,
+        });
+      } catch {
+        // The recovery failure is reported without a second error or any payload.
+      }
+      throw new Error("Webhook recovery failed.");
+    }
+  }
+
+  private async recover(
+    now: Date,
+    runId: string,
+    heartbeats: ObservabilityRepository,
+    empty: WorkerRunCounts,
+  ): Promise<WebhookRecoveryRunResult> {
     // Maintenance does not reach this worker. Only an explicit stored false stops it.
     if (!(await webhookProcessingOpen(this.database))) {
-      return { scanned: 0, claimed: 0, processed: 0, ignored: 0, pending: 0, exhausted: 0 };
+      await heartbeats.finishWorkerRun({ runId, at: now, outcome: "SKIPPED", counts: empty });
+      return empty;
     }
     const maxAttempts = this.options.maxAttempts ?? WEBHOOK_RECOVERY_MAX_ATTEMPTS;
     const leaseMs = this.options.leaseMs ?? WEBHOOK_RECOVERY_LEASE_MS;
@@ -118,6 +155,12 @@ export class PayPalWebhookRecoveryWorker {
         if (claimed.attempts >= maxAttempts) result.exhausted += 1;
       }
     }
+    await heartbeats.finishWorkerRun({
+      runId,
+      at: new Date(),
+      outcome: "SUCCEEDED",
+      counts: result,
+    });
     return result;
   }
 

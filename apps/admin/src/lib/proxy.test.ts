@@ -278,4 +278,117 @@ describe("admin BFF security", () => {
       ).status,
     ).toBe(404);
   });
+  it("allowlists system and agent reads without forwarding secrets, and rejects unknown paths before fetch", async () => {
+    vi.restoreAllMocks();
+    vi.stubEnv("ADMIN_ORIGIN", "http://localhost:3001");
+    vi.stubEnv("API_URL", "http://localhost:4000");
+    const requestId = "11111111-1111-4111-8111-111111111111";
+    const fetcher = vi.spyOn(globalThis, "fetch");
+    expect(
+      (
+        await proxyAdmin(new Request("http://localhost:3001/api/admin/agent/runs/not-an-id"), {
+          path: ["agent", "runs", "not-an-id"],
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await proxyAdmin(new Request("http://localhost:3001/api/admin/system/secrets"), {
+          path: ["system", "secrets"],
+        })
+      ).status,
+    ).toBe(404);
+    expect(fetcher).not.toHaveBeenCalled();
+    const component = {
+      id: "api",
+      status: "ready",
+      configured: null,
+      enabled: null,
+      summary: "The API process answered this readiness request.",
+      latencyMs: null,
+      lastSuccessAt: "2026-10-07T00:00:00.000Z",
+      backlog: null,
+      failed: null,
+      retrying: null,
+    };
+    const metric = {
+      value: 0,
+      availability: "available",
+      reason: null,
+      definition: "Recorded operational count.",
+    };
+    const bodies: Record<string, unknown> = {
+      "system/health": {
+        data: {
+          observedAt: "2026-10-07T00:00:00.000Z",
+          environment: "test",
+          build: { commitSha: null, version: null },
+          overall: "ready",
+          components: [component],
+        },
+        requestId,
+        token: "private-token",
+      },
+      "system/workers": {
+        data: {
+          observedAt: "2026-10-07T00:00:00.000Z",
+          staleAfterSeconds: 900,
+          workers: [],
+        },
+        requestId,
+        token: "private-token",
+      },
+      "system/integrations": {
+        data: {
+          observedAt: "2026-10-07T00:00:00.000Z",
+          note: "Provider probes are read-only and do not include credentials.",
+          components: [],
+        },
+        requestId,
+        token: "private-token",
+      },
+      "agent/metrics": {
+        data: {
+          asOf: "2026-10-07T00:00:00.000Z",
+          range: { from: "2026-09-07T00:00:00.000Z", to: "2026-10-07T00:00:00.000Z" },
+          requests: metric,
+          successfulRuns: metric,
+          failedRuns: metric,
+          latencyMs: metric,
+          toolErrors: metric,
+          refundDrafts: metric,
+          errorClasses: metric,
+        },
+        requestId,
+        token: "private-token",
+      },
+      "agent/runs": {
+        data: [],
+        page: { limit: 50, nextCursor: null },
+        requestId,
+        token: "private-token",
+      },
+    };
+    fetcher.mockImplementation(async (input) => {
+      const url = String(input);
+      const key = Object.keys(bodies).find((path) => url.endsWith(`/api/admin/${path}`));
+      return new Response(JSON.stringify(key ? bodies[key] : { token: "private-token" }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    for (const path of [
+      "system/health",
+      "system/workers",
+      "system/integrations",
+      "agent/metrics",
+      "agent/runs",
+    ]) {
+      const response = await proxyAdmin(new Request(`http://localhost:3001/api/admin/${path}`), {
+        path: path.split("/"),
+      });
+      expect(response.status, path).toBe(200);
+      expect(await response.text(), path).not.toContain("private-token");
+      expect(String(fetcher.mock.calls.at(-1)?.[0])).toContain(`/api/admin/${path}`);
+    }
+  });
 });

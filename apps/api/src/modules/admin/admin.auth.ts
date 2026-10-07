@@ -161,6 +161,8 @@ export function adminMe(identity: AdminIdentity) {
       "refunds:refresh",
       "webhooks:retry",
       "webhooks:reconcile",
+      "system:read",
+      "agent:read",
     ],
   };
 }

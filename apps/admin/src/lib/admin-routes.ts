@@ -14,9 +14,12 @@ import {
   AdminProposalQuerySchema,
   AdminRefundQuerySchema,
   AdminResourceIdSchema,
+  AdminTraceIdSchema,
   AdminUserQuerySchema,
   AdminUserSessionQuerySchema,
   AdminWebhookQuerySchema,
+  AdminAgentMetricsQuerySchema,
+  AdminAgentRunQuerySchema,
   parseAdminActivityEvent,
   parseAdminApproval,
   parseAdminDetail,
@@ -38,6 +41,11 @@ import {
   parseAdminUser,
   parseAdminUserSession,
   parseAdminWebhook,
+  parseAdminSystemHealth,
+  parseAdminWorkerHealth,
+  parseAdminIntegrationHealth,
+  parseAdminAgentMetrics,
+  parseAdminAgentRun,
   isPlatformSettingKey,
   type AdminExportResource,
 } from "@mandatepay/shared";
@@ -58,6 +66,10 @@ export type AdminProxyMatch = {
 
 function id(value: string | undefined) {
   return value !== undefined && AdminResourceIdSchema.safeParse(value).success;
+}
+
+function runId(value: string | undefined) {
+  return value !== undefined && AdminTraceIdSchema.safeParse(value).success;
 }
 
 export function matchAdminProxy(
@@ -119,6 +131,46 @@ export function matchAdminProxy(
     return json("overview/activity", AdminActivityQuerySchema, (value) =>
       parseAdminList(value, parseAdminActivityEvent),
     );
+  if (path.length === 2 && a === "system" && b === "health")
+    return {
+      methods: GET,
+      kind: "json",
+      allowSearch: false,
+      upstreamPath: "system/health",
+      parseJson: (value) => parseAdminDetail(value, parseAdminSystemHealth),
+    };
+  if (path.length === 2 && a === "system" && b === "workers")
+    return {
+      methods: GET,
+      kind: "json",
+      allowSearch: false,
+      upstreamPath: "system/workers",
+      parseJson: (value) => parseAdminDetail(value, parseAdminWorkerHealth),
+    };
+  if (path.length === 2 && a === "system" && b === "integrations")
+    return {
+      methods: GET,
+      kind: "json",
+      allowSearch: false,
+      upstreamPath: "system/integrations",
+      parseJson: (value) => parseAdminDetail(value, parseAdminIntegrationHealth),
+    };
+  if (path.length === 2 && a === "agent" && b === "metrics")
+    return json("agent/metrics", AdminAgentMetricsQuerySchema, (value) =>
+      parseAdminDetail(value, parseAdminAgentMetrics),
+    );
+  if (path.length === 2 && a === "agent" && b === "runs")
+    return json("agent/runs", AdminAgentRunQuerySchema, (value) =>
+      parseAdminList(value, parseAdminAgentRun),
+    );
+  if (path.length === 3 && a === "agent" && b === "runs" && runId(c))
+    return {
+      methods: GET,
+      kind: "json",
+      allowSearch: false,
+      upstreamPath: `agent/runs/${c}`,
+      parseJson: (value) => parseAdminDetail(value, parseAdminAgentRun),
+    };
   if (path.length === 2 && b === "export") return exportRoute(a);
   if (path.length === 2 && a === "audit" && id(b))
     return {

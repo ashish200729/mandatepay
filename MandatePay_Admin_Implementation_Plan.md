@@ -1761,30 +1761,30 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 ### TODO
 
-- [ ] **P8-01** Add API readiness aggregation.
-- [ ] **P8-02** Add database health metric.
-- [ ] **P8-03** Add worker heartbeat mechanism if missing.
-- [ ] **P8-04** Add webhook queue/backlog metrics.
-- [ ] **P8-05** Add failed/retrying webhook counts.
-- [ ] **P8-06** Add last-success timestamps.
-- [ ] **P8-07** Add PayPal Sandbox status probe that does not expose credentials.
-- [ ] **P8-08** Add Channel3 health.
-- [ ] **P8-09** Add Demo Catalog health.
-- [ ] **P8-10** Add agent run operational telemetry.
-- [ ] **P8-11** Add agent tool-call metrics.
-- [ ] **P8-12** Add agent error classification.
-- [ ] **P8-13** Add `/system` page.
-- [ ] **P8-14** Add `/agent` page.
-- [ ] **P8-15** Add dashboard warning cards for degraded subsystems.
-- [ ] **P8-16** Add commit SHA/build version display.
-- [ ] **P8-17** Verify telemetry does not store secrets or chain-of-thought.
+- [x] **P8-01** Add API readiness aggregation.
+- [x] **P8-02** Add database health metric.
+- [x] **P8-03** Add worker heartbeat mechanism if missing.
+- [x] **P8-04** Add webhook queue/backlog metrics.
+- [x] **P8-05** Add failed/retrying webhook counts.
+- [x] **P8-06** Add last-success timestamps.
+- [x] **P8-07** Add PayPal Sandbox status probe that does not expose credentials.
+- [x] **P8-08** Add Channel3 health.
+- [x] **P8-09** Add Demo Catalog health.
+- [x] **P8-10** Add agent run operational telemetry.
+- [x] **P8-11** Add agent tool-call metrics.
+- [x] **P8-12** Add agent error classification.
+- [x] **P8-13** Add `/system` page.
+- [x] **P8-14** Add `/agent` page.
+- [x] **P8-15** Add dashboard warning cards for degraded subsystems.
+- [x] **P8-16** Add commit SHA/build version display.
+- [x] **P8-17** Verify telemetry does not store secrets or chain-of-thought.
 
 ### Exit criteria
 
-- [ ] Admin can identify which subsystem is degraded.
-- [ ] Admin can distinguish API, DB, PayPal, webhook, discovery, and AI failures.
-- [ ] Worker liveness/backlog is visible.
-- [ ] No sensitive model/provider data is leaked.
+- [x] Admin can identify which subsystem is degraded.
+- [x] Admin can distinguish API, DB, PayPal, webhook, discovery, and AI failures.
+- [x] Worker liveness/backlog is visible.
+- [x] No sensitive model/provider data is leaked.
 
 **Feeds into:** Phase 9.
 

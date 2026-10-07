@@ -74,9 +74,16 @@ export interface RawPayPalWebhookRequest {
   readonly headers: Record<string, string | string[] | undefined>;
 }
 
+export interface WebhookDeliveryFact {
+  readonly outcome: "REJECTED" | "ACCEPTED" | "DUPLICATE";
+  readonly eventType: string | null;
+  readonly inboxId: string | null;
+}
+
 export interface WebhookServiceResponse {
   readonly statusCode: 200 | 202 | 400 | 401 | 413 | 415 | 503;
   readonly body: Record<string, unknown>;
+  readonly delivery: WebhookDeliveryFact;
 }
 
 function header(headers: RawPayPalWebhookRequest["headers"], name: string): string | undefined {
@@ -165,20 +172,49 @@ function relatedCaptureId(resource: Record<string, unknown>): string | null {
   );
 }
 
+function delivery(
+  outcome: WebhookDeliveryFact["outcome"],
+  eventType: string | null,
+  inboxId: string | null,
+): WebhookDeliveryFact {
+  return { outcome, eventType, inboxId };
+}
+
 function providerErrorResponse(error: unknown): WebhookServiceResponse {
+  const rejected = delivery("REJECTED", null, null);
   if (error instanceof PayPalWebhookError) {
     if (error.code === "INVALID_WEBHOOK_INPUT") {
-      return { statusCode: 400, body: { error: "Webhook signature input is invalid." } };
+      return {
+        statusCode: 400,
+        body: { error: "Webhook signature input is invalid." },
+        delivery: rejected,
+      };
     }
     if (error.code === "MISSING_WEBHOOK_ID") {
-      return { statusCode: 503, body: { error: "Webhook verification is unavailable." } };
+      return {
+        statusCode: 503,
+        body: { error: "Webhook verification is unavailable." },
+        delivery: rejected,
+      };
     }
-    return { statusCode: 503, body: { error: "Webhook verification is unavailable." } };
+    return {
+      statusCode: 503,
+      body: { error: "Webhook verification is unavailable." },
+      delivery: rejected,
+    };
   }
   if (error instanceof PayPalProviderError || error instanceof PayPalError) {
-    return { statusCode: 503, body: { error: "PayPal webhook verification is unavailable." } };
+    return {
+      statusCode: 503,
+      body: { error: "PayPal webhook verification is unavailable." },
+      delivery: rejected,
+    };
   }
-  return { statusCode: 503, body: { error: "Webhook processing is temporarily unavailable." } };
+  return {
+    statusCode: 503,
+    body: { error: "Webhook processing is temporarily unavailable." },
+    delivery: rejected,
+  };
 }
 
 export class PayPalWebhookService {
@@ -194,16 +230,21 @@ export class PayPalWebhookService {
   }
 
   async handle(request: RawPayPalWebhookRequest): Promise<WebhookServiceResponse> {
+    const rejected = delivery("REJECTED", null, null);
     if (typeof request.rawBody !== "string") {
-      return { statusCode: 400, body: { error: "Webhook body must be raw JSON text." } };
+      return { statusCode: 400, body: { error: "Webhook body must be raw JSON text." }, delivery: rejected };
     }
     if (Buffer.byteLength(request.rawBody, "utf8") > this.bodyLimitBytes) {
-      return { statusCode: 413, body: { error: "Webhook body is too large." } };
+      return { statusCode: 413, body: { error: "Webhook body is too large." }, delivery: rejected };
     }
 
     const headers = webhookHeaders(request);
     if (!headers) {
-      return { statusCode: 400, body: { error: "Required PayPal webhook headers are missing." } };
+      return {
+        statusCode: 400,
+        body: { error: "Required PayPal webhook headers are missing." },
+        delivery: rejected,
+      };
     }
 
     let verified: boolean;
@@ -213,12 +254,12 @@ export class PayPalWebhookService {
       return providerErrorResponse(error);
     }
     if (!verified) {
-      return { statusCode: 401, body: { error: "PayPal webhook signature is invalid." } };
+      return { statusCode: 401, body: { error: "PayPal webhook signature is invalid." }, delivery: rejected };
     }
 
     const event = parseEvent(request.rawBody);
     if (!event) {
-      return { statusCode: 400, body: { error: "PayPal webhook event is invalid." } };
+      return { statusCode: 400, body: { error: "PayPal webhook event is invalid." }, delivery: rejected };
     }
 
     const claim = await this.inbox.claim({
@@ -229,29 +270,43 @@ export class PayPalWebhookService {
     });
     if (!claim.shouldProcess) {
       if (claim.status === "PROCESSING") {
-        return { statusCode: 503, body: { error: "Webhook processing is already in progress." } };
+        return {
+          statusCode: 503,
+          body: { error: "Webhook processing is already in progress." },
+          delivery: delivery("DUPLICATE", event.event_type, claim.id),
+        };
       }
       return {
         statusCode: claim.status === "PENDING" ? 202 : 200,
         body: { status: claim.status === "PENDING" ? "pending" : "duplicate" },
+        delivery: delivery(
+          claim.status === "PENDING" ? "ACCEPTED" : "DUPLICATE",
+          event.event_type,
+          claim.id,
+        ),
       };
     }
 
+    const accepted = delivery("ACCEPTED", event.event_type, claim.id);
     try {
       const outcome = await this.replayVerified({ inboxId: claim.id, event });
       if (outcome === "processed") {
         await this.inbox.markProcessed(claim.id);
-        return { statusCode: 200, body: { status: "processed" } };
+        return { statusCode: 200, body: { status: "processed" }, delivery: accepted };
       }
       if (outcome === "ignored") {
         await this.inbox.markIgnored(claim.id, "Unsupported or unmatched verified PayPal event.");
-        return { statusCode: 200, body: { status: "ignored" } };
+        return { statusCode: 200, body: { status: "ignored" }, delivery: accepted };
       }
       await this.inbox.markPending(claim.id, "Payment binding or provider state is not ready.");
-      return { statusCode: 202, body: { status: "pending" } };
+      return { statusCode: 202, body: { status: "pending" }, delivery: accepted };
     } catch {
       await this.inbox.markPending(claim.id, "Provider state could not be reconciled.");
-      return { statusCode: 503, body: { error: "Webhook processing is temporarily unavailable." } };
+      return {
+        statusCode: 503,
+        body: { error: "Webhook processing is temporarily unavailable." },
+        delivery: accepted,
+      };
     }
   }
 

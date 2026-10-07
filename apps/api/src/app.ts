@@ -15,7 +15,15 @@ import {
   parseAnalyticsQuery,
   runShoppingAgent,
 } from "@mandatepay/agent";
-import { Channel3Client, parseChannel3Config, lookupDemoProduct } from "@mandatepay/channel3";
+import {
+  Channel3Client,
+  Channel3ConfigurationError,
+  Channel3ProviderError,
+  isChannel3Error,
+  parseChannel3Config,
+  lookupDemoProduct,
+} from "@mandatepay/channel3";
+import { ObservabilityRepository } from "@mandatepay/database";
 import type { PayPalClient } from "@mandatepay/paypal";
 import { registerMandateRoutes } from "./routes/mandates.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
@@ -59,6 +67,18 @@ export interface CreateAppOptions {
   testAdminMutationMaximum?: number;
   /** Isolated admin tests can raise the financial recovery bucket without changing production limits. */
   testAdminFinancialMaximum?: number;
+  /** Replaces the live PayPal Sandbox probe. HTTP clients cannot set this. */
+  probePaypal?: () => Promise<{
+    status: "ready" | "degraded" | "unavailable";
+    code: string;
+    latencyMs: number;
+  }>;
+  /** Replaces the live Channel3 probe. HTTP clients cannot set this. */
+  probeChannel3?: () => Promise<{
+    status: "ready" | "degraded" | "unavailable";
+    code: string;
+    latencyMs: number;
+  }>;
 }
 
 type RateLimitEntry = {
@@ -327,12 +347,61 @@ export async function createApp(options: CreateAppOptions = {}) {
     exposedHeaders: ["x-request-id", "x-correlation-id"],
   });
 
+  const probePaypal =
+    options.probePaypal ??
+    (paypal && typeof paypal.probeSandbox === "function"
+      ? () => paypal.probeSandbox()
+      : undefined);
+  const probeChannel3 =
+    options.probeChannel3 ??
+    (config.CHANNEL3_API_KEY
+      ? async () => {
+          const started = Date.now();
+          try {
+            await new Channel3Client(
+              parseChannel3Config({
+                apiKey: config.CHANNEL3_API_KEY,
+                timeoutMs: 5_000,
+                maxRetries: 0,
+                fallbackMode: "disabled",
+              }),
+            ).probeConnectivity();
+            return {
+              status: "ready" as const,
+              code: "CHANNEL3_REACHABLE",
+              latencyMs: Date.now() - started,
+            };
+          } catch (error) {
+            const latencyMs = Date.now() - started;
+            if (error instanceof Channel3ProviderError) {
+              const degraded =
+                error.code === "UPSTREAM_TIMEOUT" ||
+                error.code === "UPSTREAM_ABORTED" ||
+                error.code === "UPSTREAM_UNAVAILABLE" ||
+                error.status === 429;
+              return {
+                status: degraded ? ("degraded" as const) : ("unavailable" as const),
+                code: error.status === 429 ? "UPSTREAM_UNAVAILABLE" : error.code,
+                latencyMs,
+              };
+            }
+            if (isChannel3Error(error) && !(error instanceof Channel3ConfigurationError)) {
+              return { status: "unavailable" as const, code: error.code, latencyMs };
+            }
+            return { status: "unavailable" as const, code: "PROBE_FAILED", latencyMs };
+          }
+        }
+      : undefined);
   registerAdminRoutes(app, {
     runtime,
     appUrl: config.APP_URL,
     adminOrigin: config.ADMIN_ORIGIN,
     nodeEnv: config.NODE_ENV,
     discoveryMode: config.PRODUCT_DISCOVERY_MODE,
+    paypalConfigured: paypal !== null,
+    channel3Configured: Boolean(config.CHANNEL3_API_KEY),
+    probePaypal,
+    probeChannel3,
     readMaximum: options.testAdminReadMaximum,
     mutationMaximum: options.testAdminMutationMaximum,
     financialMaximum: options.testAdminFinancialMaximum,
@@ -581,7 +650,10 @@ export async function createApp(options: CreateAppOptions = {}) {
     });
     registerRefundRoutes(app, { ...protectedContext, paypal });
     if (paypal) {
-      registerPayPalWebhookRoutes(app, createPayPalWebhookService(runtime.database, paypal));
+      registerPayPalWebhookRoutes(app, createPayPalWebhookService(runtime.database, paypal), {
+        recordDelivery: (fact) =>
+          new ObservabilityRepository(runtime.database).recordWebhookDelivery(fact),
+      });
     } else {
       app.post("/api/webhooks/paypal", async (_request, reply) =>
         reply.status(503).send({ error: "PayPal webhooks are not configured." }),

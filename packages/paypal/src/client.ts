@@ -7,6 +7,7 @@ import {
   PayPalProviderError,
   PayPalResponseError,
   PayPalWebhookError,
+  isPayPalError,
 } from "./errors.js";
 import {
   OrderIdSchema,
@@ -152,6 +153,44 @@ export class PayPalClient {
 
   invalidateAccessToken(): void {
     this.cachedToken = null;
+  }
+
+  /**
+   * Confirms Sandbox OAuth reachability. The access token is discarded and
+   * never returned, logged, or copied into the result.
+   */
+  async probeSandbox(): Promise<{
+    status: "ready" | "degraded" | "unavailable";
+    code: string;
+    latencyMs: number;
+  }> {
+    const started = Date.now();
+    try {
+      const token = await this.getAccessToken();
+      if (typeof token !== "string" || token.length === 0) {
+        return { status: "unavailable", code: "MALFORMED_RESPONSE", latencyMs: Date.now() - started };
+      }
+      return { status: "ready", code: "PAYPAL_REACHABLE", latencyMs: Date.now() - started };
+    } catch (error) {
+      const latencyMs = Date.now() - started;
+      if (error instanceof PayPalProviderError) {
+        if (
+          error.code === "UPSTREAM_TIMEOUT" ||
+          error.code === "UPSTREAM_ABORTED" ||
+          error.code === "UPSTREAM_UNAVAILABLE" ||
+          error.status === 429
+        ) {
+          return {
+            status: "degraded",
+            code: error.status === 429 ? "UPSTREAM_UNAVAILABLE" : error.code,
+            latencyMs,
+          };
+        }
+        return { status: "unavailable", code: error.code, latencyMs };
+      }
+      if (isPayPalError(error)) return { status: "unavailable", code: error.code, latencyMs };
+      return { status: "unavailable", code: "PROBE_FAILED", latencyMs };
+    }
   }
 
   async getAccessToken(): Promise<string> {

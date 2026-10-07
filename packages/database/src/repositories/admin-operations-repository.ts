@@ -16,6 +16,7 @@ import {
   resolvePlatformControls,
   safeAdminText,
   webhookErrorCode,
+  workerLiveness,
   type AdminActivityQuery,
   type AdminApprovalQuery,
   type AdminDomainAuditQuery,
@@ -33,6 +34,7 @@ import {
 import { Prisma } from "../generated/prisma/client.js";
 import { getPrismaClient } from "../client.js";
 import { DatabaseError } from "../errors.js";
+import { ObservabilityRepository } from "./observability-repository.js";
 import {
   activeMandateWhere,
   decodeCursor,
@@ -1486,6 +1488,12 @@ export class AdminOperationsRepository {
     `);
     const capturedGrossMinor = capturedGross._sum.amount ?? 0n;
     const refundsMinor = refundsCompleted._sum.amount ?? 0n;
+    const telemetry = await new ObservabilityRepository(this.db).overviewTelemetry(from, to, asOf);
+    const liveness = workerLiveness({
+      heartbeatAt: telemetry.worker.row?.heartbeatAt ?? null,
+      outcome: telemetry.worker.row?.outcome ?? null,
+      now: asOf,
+    });
     const warnings = [
       ...(refundsMissingSettlement
         ? ["Completed refunds without settlement timestamps are excluded from dated refund totals."]
@@ -1641,18 +1649,40 @@ export class AdminOperationsRepository {
           agentProposals,
           "PRODUCT_SELECTED audits with model_selected_server_validated_product in range, labelled as recorded agent selections.",
         ),
-        agentRequests: unavailable(
-          "Complete agent request counts.",
-          "Unavailable until Phase 8 AgentRun telemetry exists.",
+        agentRequests: metric(
+          telemetry.requests,
+          "Agent runs started in the selected range. This is recorded operational telemetry, not chat text.",
         ),
-        successfulRuns: unavailable(
-          "Successful agent runs.",
-          "Unavailable until Phase 8 AgentRun telemetry exists.",
+        successfulRuns: metric(telemetry.successfulRuns, "Agent runs that completed successfully in range."),
+        failedRuns: metric(telemetry.failedRuns, "Agent runs that failed in range."),
+        latency: {
+          value: telemetry.latencyMs,
+          availability: "available" as const,
+          reason: telemetry.latencyMs === null ? "No completed runs in range." : "Average duration in milliseconds.",
+          definition: "Average recorded agent-run duration in the selected range.",
+        },
+        toolErrors: metric(telemetry.toolErrors, "Agent tool calls that failed in range."),
+        refundDrafts: metric(
+          telemetry.refundDrafts,
+          "Agent runs that prepared a refund-draft payment identifier in range.",
         ),
-        failedRuns: unavailable(
-          "Failed agent runs.",
-          "Unavailable until Phase 8 AgentRun telemetry exists.",
+        rejectedWebhookDeliveries: metric(
+          telemetry.rejected,
+          "Webhook delivery attempts rejected before or during verification, in range.",
         ),
+        duplicateDeliveries: metric(
+          telemetry.duplicate,
+          "Repeated webhook deliveries for an event that was already accepted, in range.",
+        ),
+        lastSuccessfulReconcile: {
+          value: null,
+          availability: "available" as const,
+          reason: telemetry.reconcile
+            ? iso(telemetry.reconcile)
+            : "No successful admin payment or webhook reconciliation is recorded.",
+          definition:
+            "Latest successful admin reconciliation audit. This is not a historical provider-health series.",
+        },
         disabledUsers: metric(
           disabledUsers,
           "User rows with disabledAt set. As-of count, including test/demo accounts because no User sample marker exists.",
@@ -1670,9 +1700,20 @@ export class AdminOperationsRepository {
             )
           : unavailable("Configured product discovery mode.", "Discovery mode is not configured."),
         platformControls: await platformControlMetric(this.db),
-        workerLive: unavailable(
-          "Worker liveness.",
-          "Unavailable until Phase 8 heartbeat telemetry exists.",
+        workerLive:
+          liveness.status === "unknown"
+            ? {
+                value: null,
+                availability: "available" as const,
+                reason: liveness.summary,
+                definition: "Webhook worker liveness from the latest heartbeat. Absence is unknown, not healthy.",
+              }
+            : metric(liveness.status === "ready" ? 1 : 0, "Webhook worker liveness from the latest heartbeat.", {
+                reason: liveness.summary,
+              }),
+        providerHealthHistory: unavailable(
+          "Provider health history.",
+          "Only the latest bounded probe is available on system health. A historical series is not stored.",
         ),
       },
       warnings,

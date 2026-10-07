@@ -29,7 +29,12 @@ test("admin can inspect the user-to-refund operations chain", async ({
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
-  await expect(page.getByText("Unavailable until Phase 8", { exact: false })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Subsystem warnings" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("article")
+      .filter({ has: page.getByRole("heading", { name: "Agent requests" }) }),
+  ).toContainText("Agent runs started");
   await expect(page.locator("body")).not.toContainText(fixture.originalPrompt);
   await page.screenshot({ path: testInfo.outputPath("desktop-overview.png"), fullPage: true });
 

@@ -90,6 +90,23 @@ function bodyOf(call: { init: RequestInit | undefined }): Record<string, unknown
 }
 
 describe("PayPal Sandbox client", () => {
+  it("reports sandbox reachability without returning the access token or client secret", async () => {
+    const { fetcher } = queueFetch(() =>
+      jsonResponse({
+        access_token: "super-secret-probe-token",
+        token_type: "Bearer",
+        expires_in: 3600,
+      }),
+    );
+    const client = new PayPalClient(sandboxConfig(), { fetch: fetcher });
+    const probe = await client.probeSandbox();
+    expect(probe.status).toBe("ready");
+    expect(probe.code).toBe("PAYPAL_REACHABLE");
+    expect(JSON.stringify(probe)).not.toContain("super-secret-probe-token");
+    expect(JSON.stringify(probe)).not.toContain("secret-test-value");
+    expect(JSON.stringify(probe)).not.toContain("client-test-secret");
+  });
+
   it("rejects live environments and arbitrary base URL fields", () => {
     expect(() =>
       parsePayPalConfig({ environment: "live", clientId: "id", clientSecret: "secret" }),

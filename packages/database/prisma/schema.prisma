@@ -282,6 +282,7 @@ model User {
   adminPrincipal                    AdminPrincipal?
   disabledByAdmin                   AdminPrincipal?    @relation("UserDisabledBy", fields: [disabledByAdminId], references: [id], onDelete: SetNull)
   adminNotes                        AdminNote[]
+  agentRuns                         AgentRunMetric[]
 
   @@index([createdAt])
   @@index([disabledAt])
@@ -731,4 +732,104 @@ model AuditEvent {
   @@index([userId, createdAt])
   @@index([entityType, entityId, createdAt])
   @@index([eventType, createdAt])
+}
+
+enum WorkerRunOutcome {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum AgentRunOutcome {
+  SUCCEEDED
+  FAILED
+}
+
+enum AgentErrorClass {
+  NONE
+  TIMEOUT
+  PROVIDER_UNAVAILABLE
+  INVALID_RESPONSE
+  TOOL_FAILURE
+  RATE_LIMITED
+  CANCELLED
+  UNKNOWN
+}
+
+enum WebhookDeliveryOutcome {
+  REJECTED
+  ACCEPTED
+  DUPLICATE
+}
+
+// One-shot recovery cron liveness. A missing or stale heartbeat is not healthy.
+model WorkerHeartbeat {
+  id          String           @id @default(uuid())
+  worker      String           @db.VarChar(64)
+  runId       String           @unique @db.VarChar(36)
+  startedAt   DateTime
+  heartbeatAt DateTime
+  completedAt DateTime?
+  outcome     WorkerRunOutcome
+  errorCode   String?          @db.VarChar(64)
+  scanned     Int              @default(0)
+  claimed     Int              @default(0)
+  processed   Int              @default(0)
+  ignored     Int              @default(0)
+  pending     Int              @default(0)
+  exhausted   Int              @default(0)
+
+  @@index([worker, heartbeatAt, id])
+}
+
+// Operational shopping-agent facts only. No transcript, tool arguments, or model reasoning.
+model AgentRunMetric {
+  id            String          @id @default(uuid())
+  requestId     String          @db.VarChar(64)
+  userId        String
+  modelId       String          @db.VarChar(64)
+  startedAt     DateTime
+  completedAt   DateTime?
+  durationMs    Int?
+  outcome       AgentRunOutcome
+  errorClass    AgentErrorClass
+  proposalId    String?         @db.VarChar(255)
+  refundDraftId String?         @db.VarChar(255)
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tools         AgentToolMetric[]
+
+  @@index([startedAt, id])
+  @@index([userId, startedAt, id])
+  @@index([outcome, errorClass, startedAt, id])
+  @@index([modelId, startedAt, id])
+}
+
+model AgentToolMetric {
+  id          String          @id @default(uuid())
+  runId       String
+  name        String          @db.VarChar(64)
+  startedAt   DateTime
+  completedAt DateTime?
+  durationMs  Int?
+  outcome     AgentRunOutcome
+  errorClass  AgentErrorClass
+  run         AgentRunMetric  @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, startedAt, id])
+  @@index([name, outcome, startedAt])
+}
+
+// Delivery attempts, including rejections that never become inbox rows.
+model WebhookDeliveryMetric {
+  id         String                 @id @default(uuid())
+  requestId  String                 @db.VarChar(64)
+  receivedAt DateTime               @default(now())
+  provider   String                 @db.VarChar(32)
+  eventType  String?                @db.VarChar(64)
+  outcome    WebhookDeliveryOutcome
+  inboxId    String?
+
+  @@index([receivedAt, id])
+  @@index([outcome, receivedAt, id])
 }

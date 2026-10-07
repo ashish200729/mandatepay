@@ -8,6 +8,7 @@ export {
 } from "./currency.js";
 export * from "./admin-audit.js";
 export * from "./admin-operations.js";
+export * from "./admin-observability.js";
 export * from "./platform-settings.js";
 export { DOMAIN_ERROR_CODES, DomainError, isDomainError, type DomainErrorCode } from "./errors.js";
 export {

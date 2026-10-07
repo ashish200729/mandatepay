@@ -8,6 +8,8 @@ export {
 } from "./admin-audit-repository.js";
 export { AdminOperationsRepository } from "./admin-operations-repository.js";
 export { compareAndSetPlatformSetting } from "./platform-setting-repository.js";
+export { ObservabilityRepository } from "./observability-repository.js";
+export type { AgentRunWrite, ObservabilityClient } from "./observability-repository.js";
 export type {
   ComparedPlatformSetting,
   StoredPlatformSetting,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   DEFAULT_WEBHOOK_BODY_LIMIT,
@@ -36,6 +37,14 @@ function routeReply(reply: FastifyReply): WebhookRouteReply {
 export function registerPayPalWebhookRoutes(
   app: FastifyInstance,
   service: PayPalWebhookService,
+  options: {
+    recordDelivery?: (fact: {
+      requestId: string;
+      eventType: string | null;
+      outcome: "REJECTED" | "ACCEPTED" | "DUPLICATE";
+      inboxId: string | null;
+    }) => Promise<void>;
+  } = {},
 ): void {
   app.register(async (scope) => {
     scope.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
@@ -47,9 +56,15 @@ export function registerPayPalWebhookRoutes(
       url: PAYPAL_WEBHOOK_PATH,
       bodyLimit: DEFAULT_WEBHOOK_BODY_LIMIT,
       handler: async (request, reply) => {
-        return service
-          .handle(routeRequest(request as RawRequest))
-          .then((result) => routeReply(reply).status(result.statusCode).send(result.body));
+        const result = await service.handle(routeRequest(request as RawRequest));
+        if (options.recordDelivery) {
+          try {
+            await options.recordDelivery({ requestId: randomUUID(), ...result.delivery });
+          } catch {
+            request.log.warn({ code: "WEBHOOK_DELIVERY_METRIC_FAILED" }, "Webhook delivery metric was not stored");
+          }
+        }
+        return routeReply(reply).status(result.statusCode).send(result.body);
       },
     });
   });

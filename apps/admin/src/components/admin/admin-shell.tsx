@@ -17,7 +17,10 @@ import type { AdminEnvironment } from "@/lib/environment";
 import { StatusBadge } from "./status-badge";
 import { AdminToastProvider } from "./toasts";
 
-const groups = [
+const groups: readonly {
+  label: string;
+  items: readonly { label: string; href: string | null }[];
+}[] = [
   { label: "Workspace", items: [{ label: "Overview", href: "/" }] },
   {
     label: "Operations",
@@ -34,15 +37,15 @@ const groups = [
   {
     label: "Platform",
     items: [
-      { label: "Agent Activity", href: null },
+      { label: "Agent Activity", href: "/agent" },
       { label: "Webhooks", href: "/webhooks" },
       { label: "Audit Logs", href: "/audit" },
-      { label: "System Health", href: null },
+      { label: "System Health", href: "/system" },
       { label: "Configuration", href: "/settings" },
     ],
   },
   { label: "Admin", items: [{ label: "My Session", href: "/session" }] },
-] as const;
+];
 export function AdminSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   function current(href: string) {
@@ -124,9 +127,7 @@ function MobileNavigation() {
             </Button>
           </DialogClose>
         </div>
-        <DialogDescription className="sr-only">
-          Choose an admin destination. Future modules are unavailable.
-        </DialogDescription>
+        <DialogDescription className="sr-only">Choose an administration section.</DialogDescription>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <AdminSidebar onNavigate={() => setOpen(false)} />
         </div>
@@ -185,10 +186,12 @@ export function AdminShell({
   children,
   admin,
   environment,
+  commitSha,
 }: {
   children: ReactNode;
   admin: AdminMe;
   environment: AdminEnvironment;
+  commitSha?: string | null;
 }) {
   return (
     <AdminToastProvider>
@@ -208,6 +211,9 @@ export function AdminShell({
             Restricted access
             <br />
             <span className="mt-1 block">Activity is audited.</span>
+            {commitSha ? (
+              <span className="mt-1 block">Build {commitSha.slice(0, 7)}</span>
+            ) : null}
           </div>
         </aside>
         <div className="min-w-0">

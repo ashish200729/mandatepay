@@ -57,5 +57,6 @@ export {
   type VerifiedWebhookReplayInput,
   type WebhookRouteApp,
   type WebhookRouteReply,
+  type WebhookDeliveryFact,
   type WebhookServiceResponse,
 } from "./webhooks.js";

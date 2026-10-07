@@ -16,6 +16,7 @@ import {
   parseDecimalToMinorUnits,
   formatMinorUnits,
   toMinorUnits,
+  type AgentToolFact,
   type CanonicalMandate,
 } from "@mandatepay/shared";
 import {
@@ -38,6 +39,13 @@ import {
   serializePayment,
   type PaymentReceipt,
 } from "../services/payments.js";
+import {
+  agentFailureClass,
+  persistAgentRun,
+  proposalIdFrom,
+  refundDraftIdFrom,
+  traceShoppingTools,
+} from "../services/agent-telemetry.js";
 import {
   shoppingProductSchema,
   signShoppingProducts,
@@ -786,11 +794,42 @@ export function registerShoppingAgentRoutes(
           return refundDraft;
         },
       };
-      const result = await context.runner(
-        { message: body.data.message, now: new Date().toISOString() },
-        tools,
-      );
+      const agentStarted = new Date();
+      const toolFacts: AgentToolFact[] = [];
+      let result: Awaited<ReturnType<typeof context.runner>>;
+      try {
+        result = await context.runner(
+          { message: body.data.message, now: agentStarted.toISOString() },
+          traceShoppingTools(tools, toolFacts),
+        );
+      } catch (cause) {
+        await persistAgentRun(context.database, {
+          requestId: body.data.requestKey,
+          userId: user.id,
+          modelId: context.modelId,
+          startedAt: agentStarted,
+          completedAt: new Date(),
+          outcome: "FAILED",
+          errorClass: agentFailureClass(cause),
+          proposalId: proposalIdFrom(proposals),
+          refundDraftId: refundDraftIdFrom(refundDraft),
+          tools: toolFacts,
+        });
+        throw cause;
+      }
       const failedOperation = operationFailures[0];
+      await persistAgentRun(context.database, {
+        requestId: body.data.requestKey,
+        userId: user.id,
+        modelId: context.modelId,
+        startedAt: agentStarted,
+        completedAt: new Date(),
+        outcome: failedOperation ? "FAILED" : "SUCCEEDED",
+        errorClass: failedOperation ? "TOOL_FAILURE" : "NONE",
+        proposalId: proposalIdFrom(proposals),
+        refundDraftId: refundDraftIdFrom(refundDraft),
+        tools: toolFacts,
+      });
       if (failedOperation)
         return reply
           .status(failedOperation.status)

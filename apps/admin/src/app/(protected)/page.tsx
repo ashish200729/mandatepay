@@ -3,6 +3,8 @@ import { PageHeader } from "@/components/admin/page-header";
 import { MetricCard } from "@/components/admin/metric-card";
 import { EventTimeline } from "@/components/admin/timeline";
 import { EntityLink } from "@/components/admin/entity-link";
+import { HealthIndicator } from "@/components/admin/status-badge";
+import { componentLabel } from "@/components/admin/health-card";
 import { adminApi } from "@/lib/admin-fetch";
 import { formatUsd } from "@/lib/money";
 import {
@@ -11,6 +13,7 @@ import {
   parseAdminOverview,
   parseAdminActivityEvent,
   parseAdminPlatformSetting,
+  parseAdminSystemHealth,
   describePlatformMode,
   PLATFORM_SETTING_DEFAULTS,
   restrictiveControlCount,
@@ -25,14 +28,16 @@ function metricValue(metric: AdminMetric | undefined) {
 }
 
 export default async function OverviewPage() {
-  const [overviewResponse, activityResponse, settingsResponse] = await Promise.all([
+  const [overviewResponse, activityResponse, settingsResponse, healthResponse] = await Promise.all([
     adminApi("/api/admin/overview"),
     adminApi("/api/admin/overview/activity?limit=20"),
     adminApi("/api/admin/settings"),
+    adminApi("/api/admin/system/health"),
   ]);
   const overview = parseAdminDetail(overviewResponse.json, parseAdminOverview);
   const activity = parseAdminList(activityResponse.json, parseAdminActivityEvent);
   const settings = parseAdminList(settingsResponse.json, parseAdminPlatformSetting);
+  const health = parseAdminDetail(healthResponse.json, parseAdminSystemHealth);
   const controls = settings
     ? (Object.fromEntries(settings.data.map((item) => [item.key, item.value])) as Record<
         PlatformSettingKey,
@@ -65,11 +70,60 @@ export default async function OverviewPage() {
         description="Read-only snapshot of MandatePay operations. Unavailable telemetry is shown as an em dash, never as zero."
         breadcrumbs={[{ label: "Overview" }]}
       />
+      {health?.data.build.commitSha ? (
+        <p className="-mt-4 mb-7 text-sm text-muted-foreground">
+          API commit {health.data.build.commitSha}
+        </p>
+      ) : null}
       <ControlBanner
         mode={mode}
         restricted={controls ? restrictiveControlCount(controls) > 0 : true}
         unavailable={!controls}
       />
+      <section aria-label="Subsystem warnings" className="mb-8">
+        {!health ? (
+          <div role="alert" className="rounded-2xl border bg-card p-5 text-sm">
+            <p>System health could not be loaded.</p>
+            <Link
+              href="/system"
+              className="mt-3 inline-flex min-h-11 items-center underline underline-offset-4"
+            >
+              View system health
+            </Link>
+          </div>
+        ) : health.data.components.every((component) => component.status === "ready") ? (
+          <div className="rounded-2xl border bg-card p-5 text-sm">
+            <p>
+              Checked subsystems are ready.{" "}
+              <Link href="/system" className="underline underline-offset-4">
+                View system health
+              </Link>
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {health.data.components
+              .filter((component) => component.status !== "ready")
+              .map((component) => (
+                <article key={component.id} className="rounded-2xl border bg-card p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <h2 className="text-sm font-medium">{componentLabel(component.id)}</h2>
+                    <HealthIndicator status={component.status} />
+                  </div>
+                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                    {component.summary}
+                  </p>
+                  <Link
+                    href="/system"
+                    className="mt-3 inline-flex min-h-11 items-center text-sm underline underline-offset-4"
+                  >
+                    View system health
+                  </Link>
+                </article>
+              ))}
+          </div>
+        )}
+      </section>
       {!overview ? (
         <p role="alert">The overview could not be loaded. Try again shortly.</p>
       ) : (

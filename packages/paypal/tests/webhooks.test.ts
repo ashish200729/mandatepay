@@ -145,7 +145,15 @@ describe("PayPal webhook service", () => {
     const context = service();
     const result = await context.service.handle({ rawBody: captureEvent(), headers });
 
-    expect(result).toEqual({ statusCode: 200, body: { status: "processed" } });
+    expect(result).toEqual({
+      statusCode: 200,
+      body: { status: "processed" },
+      delivery: {
+        outcome: "ACCEPTED",
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+        inboxId: "inbox-1",
+      },
+    });
     expect(context.paypal.verifyWebhook).toHaveBeenCalledWith({
       rawBody: captureEvent(),
       headers: expect.any(Object),
@@ -169,7 +177,15 @@ describe("PayPal webhook service", () => {
     const context = service(fakePayPal(), inbox);
     const result = await context.service.handle({ rawBody: captureEvent(), headers });
 
-    expect(result).toEqual({ statusCode: 200, body: { status: "duplicate" } });
+    expect(result).toEqual({
+      statusCode: 200,
+      body: { status: "duplicate" },
+      delivery: {
+        outcome: "DUPLICATE",
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+        inboxId: "inbox-1",
+      },
+    });
     expect(context.paypal.getCapture).not.toHaveBeenCalled();
     expect(context.inbox.markProcessed).not.toHaveBeenCalled();
   });
@@ -264,7 +280,11 @@ describe("PayPal webhook service", () => {
     const event = JSON.stringify({ id: "WH-UNKNOWN", event_type: "SOME.NEW.EVENT", resource: {} });
     const result = await context.service.handle({ rawBody: event, headers });
 
-    expect(result).toEqual({ statusCode: 200, body: { status: "ignored" } });
+    expect(result).toEqual({
+      statusCode: 200,
+      body: { status: "ignored" },
+      delivery: { outcome: "ACCEPTED", eventType: "SOME.NEW.EVENT", inboxId: "inbox-1" },
+    });
     expect(context.inbox.markIgnored).toHaveBeenCalledWith("inbox-1", expect.any(String));
     expect(context.paypal.getOrder).not.toHaveBeenCalled();
     expect(context.paypal.getCapture).not.toHaveBeenCalled();

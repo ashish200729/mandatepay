@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { Channel3InputError, Channel3ProviderError, isChannel3Error } from "./errors.js";
+import {
+  Channel3ConfigurationError,
+  Channel3InputError,
+  Channel3ProviderError,
+  isChannel3Error,
+} from "./errors.js";
 import { lookupDemoProduct, searchDemoCatalog } from "./demo.js";
 import { normalizeProduct, type NormalizedProduct } from "./product.js";
 import { parseChannel3Config, type Channel3Config } from "./config.js";
@@ -155,6 +160,17 @@ export class Channel3Client {
   ): readonly NormalizedProduct[] {
     if (this.config.fallbackMode !== "demo") throw error;
     return searchDemoCatalog(request.query, request.limit);
+  }
+
+  /**
+   * Bounded connectivity check. The response body is discarded so a health
+   * probe cannot leak catalog payloads or the API key.
+   */
+  async probeConnectivity(): Promise<void> {
+    if (this.config.apiKey === null) {
+      throw new Channel3ConfigurationError("MISSING_API_KEY");
+    }
+    await this.post("search", { query: "health", limit: 1, filters: {} });
   }
 
   async searchProducts(input: unknown): Promise<readonly NormalizedProduct[]> {

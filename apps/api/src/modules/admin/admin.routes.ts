@@ -8,6 +8,7 @@ import {
   type AppendAdminAuditEventInput,
 } from "@mandatepay/database";
 import type { PayPalClient } from "@mandatepay/paypal";
+import type { IntegrationProbe } from "../../services/system-health.js";
 import { AdminTraceIdSchema } from "@mandatepay/shared";
 import type { AuthRuntime } from "../../auth.js";
 import { originsFor, trustedOrigin } from "../../origins.js";
@@ -17,6 +18,7 @@ import { registerAdminOperationRoutes } from "./admin.operations.js";
 import { registerAdminControlRoutes } from "./admin.controls.js";
 import { registerAdminFinanceRoutes } from "./admin.finance.js";
 import { registerAdminSettingRoutes } from "./admin.settings.js";
+import { registerAdminObservabilityRoutes } from "./admin.observability.js";
 
 const signInSchema = z
   .object({ email: z.email().max(320), password: z.string().min(1).max(128) })
@@ -32,6 +34,10 @@ export function registerAdminRoutes(
     adminOrigin?: string;
     nodeEnv: "development" | "test" | "production";
     discoveryMode?: string;
+    paypalConfigured?: boolean;
+    channel3Configured?: boolean;
+    probePaypal?: () => Promise<IntegrationProbe>;
+    probeChannel3?: () => Promise<IntegrationProbe>;
     readMaximum?: number;
     mutationMaximum?: number;
     financialMaximum?: number;
@@ -159,6 +165,17 @@ export function registerAdminRoutes(
         getPaypal: () => options.getPaypal?.() ?? null,
         runtime: () => options.runtime!,
         identity: (request) => identities.get(request)!,
+        sendError,
+        trace,
+      });
+      registerAdminObservabilityRoutes(scope, {
+        getDatabase: () => options.runtime!.database,
+        getSecret: () => options.runtime!.auth.options.secret,
+        environment: options.nodeEnv,
+        paypalConfigured: options.paypalConfigured ?? false,
+        channel3Configured: options.channel3Configured ?? false,
+        probePaypal: options.probePaypal,
+        probeChannel3: options.probeChannel3,
         sendError,
         trace,
       });
