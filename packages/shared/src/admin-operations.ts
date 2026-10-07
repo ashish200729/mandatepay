@@ -365,8 +365,12 @@ export const AdminRefundQuerySchema = withDates({
   status: z.enum(ADMIN_REFUND_STATUSES).optional(),
   paypalRefundId: providerId.optional(),
   includeSamples: booleanQuery.optional(),
-  sort: z.enum(["createdAt"]).optional(),
+  dateBasis: z.enum(["created", "settled"]).optional(),
+  sort: z.enum(["createdAt", "settledAt"]).optional(),
   direction: z.enum(["asc", "desc"]).optional(),
+}).superRefine((value, ctx) => {
+  if (value.dateBasis === "settled" && value.sort === "createdAt")
+    ctx.addIssue({ code: "custom", message: "Settled-date views sort by settlement time." });
 });
 export type AdminRefundQuery = z.infer<typeof AdminRefundQuerySchema>;
 

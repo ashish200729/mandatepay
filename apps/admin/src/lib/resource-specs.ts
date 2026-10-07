@@ -171,14 +171,19 @@ export const resourceSpecs = {
   refunds: {
     spec: {
       dates: true,
-      filters: { status: [...ADMIN_REFUND_STATUSES], includeSamples: ["true", "false"] },
+      filters: {
+        status: [...ADMIN_REFUND_STATUSES],
+        includeSamples: ["true", "false"],
+        dateBasis: ["created", "settled"],
+      },
       ids: ["userId", "paymentId"],
       tokens: ["paypalRefundId"],
-      sortKeys: ["createdAt"],
+      sortKeys: ["createdAt", "settledAt"],
     } satisfies TableQuerySpec,
     filters: [
       { key: "status", label: "Status", options: enums(ADMIN_REFUND_STATUSES) },
       { key: "includeSamples", label: "Include samples", options: trueFalse },
+      { key: "dateBasis", label: "Date basis", options: enums(["created", "settled"]) },
     ] satisfies SelectFilter[],
     fields: [
       { key: "userId", label: "Owner user ID" },

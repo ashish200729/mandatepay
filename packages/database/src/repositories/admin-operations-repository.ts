@@ -1,11 +1,14 @@
 import {
   ADMIN_CSV_MAX_ROWS,
+  ADMIN_METRIC_DEFINITIONS,
   ACTIVE_PROPOSAL_STATUSES,
   CAPTURED_PAYMENT_STATUSES,
   HIGH_RISK_ADMIN_ACTIONS,
   HIGH_RISK_DOMAIN_EVENTS,
+  boundChartSeries,
   checkoutEligibility,
   describePlatformMode,
+  fillUtcDaySeries,
   normalizeFailureCode,
   parseCanonicalRules,
   parseDomainFacts,
@@ -54,6 +57,7 @@ import {
   WEBHOOK_LEASE_MS,
   WEBHOOK_MAX_ATTEMPTS,
 } from "./admin-query.js";
+import { loadOverviewAnalytics } from "./admin-analytics-queries.js";
 
 type Store = Prisma.TransactionClient | ReturnType<typeof getPrismaClient>;
 const captured = [...CAPTURED_PAYMENT_STATUSES];
@@ -92,7 +96,7 @@ function metric(
     reason: extra.reason ?? null,
     definition,
     ...(extra.unit ? { unit: extra.unit } : {}),
-    ...(extra.series ? { series: extra.series } : {}),
+    ...(extra.series ? { series: extra.series.slice(0, 400) } : {}),
   };
 }
 function unavailable(definition: string, reason: string) {
@@ -275,12 +279,13 @@ export class AdminOperationsRepository {
       expiresAt?: Date | null;
       receivedAt?: Date | null;
       capturedAt?: Date | null;
+      settledAt?: Date | null;
     },
   >(
     rows: T[],
     limit: number,
     binding: string,
-    field: "createdAt" | "expiresAt" | "receivedAt" | "capturedAt",
+    field: "createdAt" | "expiresAt" | "receivedAt" | "capturedAt" | "settledAt",
   ) {
     const page = rows.slice(0, limit);
     const last = page.at(-1);
@@ -1035,6 +1040,9 @@ export class AdminOperationsRepository {
 
   async listRefunds(query: AdminRefundQuery) {
     const { cursor, ...filters } = query;
+    const dateBasis = query.dateBasis === "settled" ? "settledAt" : "createdAt";
+    const sortField =
+      query.sort === "settledAt" || dateBasis === "settledAt" ? "settledAt" : "createdAt";
     const binding = queryBinding({ ...filters, resource: "refunds" });
     const direction = directionOf(query.direction);
     const includeSamples = query.includeSamples === true;
@@ -1045,16 +1053,19 @@ export class AdminOperationsRepository {
       ...(query.paymentId ? { paymentId: query.paymentId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.paypalRefundId ? { paypalRefundId: query.paypalRefundId } : {}),
-      ...(query.from ? { createdAt: { gte: new Date(query.from), lt: new Date(query.to!) } } : {}),
-      ...timestampPage("createdAt", direction, this.boundary(cursor, binding)),
+      ...(sortField === "settledAt" ? { settledAt: { not: null } } : {}),
+      ...(query.from
+        ? { [dateBasis]: { gte: new Date(query.from), lt: new Date(query.to!) } }
+        : {}),
+      ...timestampPage(sortField, direction, this.boundary(cursor, binding)),
     };
     const rows = await this.db.refund.findMany({
       where,
       select: refundSelect,
-      orderBy: [{ createdAt: direction }, { id: direction }],
+      orderBy: [{ [sortField]: direction }, { id: direction }],
       take: query.limit + 1,
     });
-    const { page, nextCursor, limit } = this.page(rows, query.limit, binding, "createdAt");
+    const { page, nextCursor, limit } = this.page(rows, query.limit, binding, sortField);
     return { data: page.map((row) => this.refundDto(row)), page: { limit, nextCursor } };
   }
 
@@ -1472,10 +1483,15 @@ export class AdminOperationsRepository {
       }),
       this.db.adminAuditEvent.count({ where: { createdAt: inRange } }),
     ]);
-    const newUserSeries = newUsers.map((row) => ({
-      key: iso(row.day).slice(0, 10),
-      value: Number(row.count),
-    }));
+    const newUserSeries = fillUtcDaySeries(
+      newUsers.map((row) => ({
+        key: iso(row.day).slice(0, 10),
+        value: Number(row.count),
+      })),
+      from,
+      to,
+    );
+    const charts = await loadOverviewAnalytics(this.db, from, to, asOf);
     const refundsByDay = await this.db.$queryRaw<Array<{ day: Date; amount: bigint }>>(Prisma.sql`
       SELECT date_trunc('day', r."settledAt") AS day, SUM(r.amount)::bigint AS amount
       FROM "Refund" r
@@ -1508,171 +1524,160 @@ export class AdminOperationsRepository {
       range: { from: iso(from), to: iso(to) },
       currency: "USD" as const,
       metrics: {
-        totalUsers: metric(
-          totalUsers,
-          "All user accounts as of the snapshot, including demo accounts.",
-        ),
-        verifiedUsers: metric(verifiedUsers, "Users with verified email as of the snapshot."),
-        autonomousUsers: metric(
-          autonomousUsers,
-          "Users with global autonomous purchasing enabled as of the snapshot.",
-        ),
+        totalUsers: metric(totalUsers, ADMIN_METRIC_DEFINITIONS.totalUsers),
+        verifiedUsers: metric(verifiedUsers, ADMIN_METRIC_DEFINITIONS.verifiedUsers),
+        autonomousUsers: metric(autonomousUsers, ADMIN_METRIC_DEFINITIONS.autonomousUsers),
         newUsersByDay: metric(
           newUserSeries.reduce((sum, row) => sum + row.value, 0),
-          "Users created in the selected UTC range.",
-          {
-            series: newUserSeries,
-          },
+          ADMIN_METRIC_DEFINITIONS.newUsersByDay,
+          { series: newUserSeries },
         ),
-        activeMandates: metric(
-          activeMandates,
-          "Mandates stored ACTIVE whose validity window includes the snapshot time.",
-        ),
+        activeMandates: metric(activeMandates, ADMIN_METRIC_DEFINITIONS.activeMandates),
         mandateStatusDistribution: metric(
           mandateGroups.reduce((sum, row) => sum + row._count, 0),
-          "Stored mandate status counts plus a separately labelled effectively-expired count.",
+          ADMIN_METRIC_DEFINITIONS.mandateStatusDistribution,
           {
-            series: [
+            series: boundChartSeries([
               ...mandateGroups.map((row) => ({ key: row.status, value: row._count })),
               { key: "EFFECTIVELY_EXPIRED", value: effectivelyExpired },
-            ],
+            ]),
           },
         ),
-        activeProposals: metric(
-          activeProposalCount,
-          "Non-sample proposals in in-flight states whose expiry is null or still in the future.",
-        ),
+        activeProposals: metric(activeProposalCount, ADMIN_METRIC_DEFINITIONS.activeProposals),
         approvalRequiredProposals: metric(
           approvalRequired[0]?.count ?? 0n,
-          "Non-sample proposals created in range whose latest policy decision is REQUIRE_APPROVAL.",
+          ADMIN_METRIC_DEFINITIONS.approvalRequiredProposals,
         ),
-        pendingApprovals: metric(
-          pendingApprovals,
-          "Non-sample pending approvals whose deadline is still after the snapshot.",
-        ),
-        overdueApprovals: metric(
-          overdueApprovals,
-          "Non-sample pending approvals whose deadline is at or before the snapshot.",
-        ),
-        ordersCreated: metric(
-          ordersCreated,
-          "Non-sample payments with a PayPal order ID created in range, labelled by internal creation time.",
-        ),
-        capturedPayments: metric(
-          capturedPayments,
-          "Non-sample captured payments (completed or refunded) whose capture time falls in range.",
-        ),
+        pendingApprovals: metric(pendingApprovals, ADMIN_METRIC_DEFINITIONS.pendingApprovals),
+        overdueApprovals: metric(overdueApprovals, ADMIN_METRIC_DEFINITIONS.overdueApprovals),
+        ordersCreated: metric(ordersCreated, ADMIN_METRIC_DEFINITIONS.ordersCreated),
+        capturedPayments: metric(capturedPayments, ADMIN_METRIC_DEFINITIONS.capturedPayments),
         capturedGrossMinor: metric(
           capturedGrossMinor,
-          "Original captured amount in range. Refunds do not reduce this gross.",
+          ADMIN_METRIC_DEFINITIONS.capturedGrossMinor,
           {
             unit: "minor",
           },
         ),
-        paymentFailures: metric(
-          paymentFailures,
-          "Non-sample DENIED or FAILED payments created in range. CAPTURE_PENDING is not a failure.",
+        capturedGrossByDay: metric(
+          capturedGrossMinor,
+          ADMIN_METRIC_DEFINITIONS.capturedGrossByDay,
+          { unit: "minor", series: charts.capturedGrossByDay },
         ),
-        refundsMinor: metric(
-          refundsMinor,
-          "Completed non-sample refund amounts with settlement time in range.",
-          {
-            unit: "minor",
-          },
-        ),
-        refundsByDay: metric(
-          refundsMinor,
-          "Completed refund amounts bucketed by UTC settlement day.",
-          {
-            unit: "minor",
-            series: refundsByDay.map((row) => ({
+        paymentFailures: metric(paymentFailures, ADMIN_METRIC_DEFINITIONS.paymentFailures),
+        refundsMinor: metric(refundsMinor, ADMIN_METRIC_DEFINITIONS.refundsMinor, {
+          unit: "minor",
+        }),
+        refundsByDay: metric(refundsMinor, ADMIN_METRIC_DEFINITIONS.refundsByDay, {
+          unit: "minor",
+          series: fillUtcDaySeries(
+            refundsByDay.map((row) => ({
               key: iso(row.day).slice(0, 10),
               value: minorNumber(row.amount, "refunds"),
             })),
-          },
-        ),
+            from,
+            to,
+          ),
+        }),
         netCapturedMinor: {
           value: Number(capturedGrossMinor - refundsMinor),
           availability: "available" as const,
           reason: null,
-          definition:
-            "Captured gross minus completed refunds for this window. This is cash flow, not restored mandate allowance.",
+          definition: ADMIN_METRIC_DEFINITIONS.netCapturedMinor,
           unit: "minor" as const,
         },
         policyDistribution: metric(
           policyRows.reduce((sum, row) => sum + Number(row.count), 0),
-          "One latest policy decision per non-sample proposal created in range.",
+          ADMIN_METRIC_DEFINITIONS.policyDistribution,
           {
-            series: policyRows.map((row) => ({
-              key: row.decision,
-              value: minorNumber(row.count, "policy"),
-            })),
+            series: boundChartSeries(
+              policyRows.map((row) => ({
+                key: row.decision,
+                value: minorNumber(row.count, "policy"),
+              })),
+            ),
           },
+        ),
+        approvalFunnel: metric(
+          charts.approvalFunnel[0]?.value ?? 0,
+          ADMIN_METRIC_DEFINITIONS.approvalFunnel,
+          { series: charts.approvalFunnel },
+        ),
+        checkoutFunnel: metric(
+          charts.checkoutFunnel[0]?.value ?? 0,
+          ADMIN_METRIC_DEFINITIONS.checkoutFunnel,
+          { series: charts.checkoutFunnel },
         ),
         webhookFailures: metric(
           webhookGroups.find((row) => row.status === "FAILED")?._count ?? 0,
-          "Verified durable inbox rows currently in FAILED status.",
+          ADMIN_METRIC_DEFINITIONS.webhookFailures,
         ),
         webhookStatusCounts: metric(
           webhookGroups.reduce((sum, row) => sum + row._count, 0),
-          "Verified durable inbox rows grouped by persisted status.",
-          { series: webhookGroups.map((row) => ({ key: row.status, value: row._count })) },
+          ADMIN_METRIC_DEFINITIONS.webhookStatusCounts,
+          {
+            series: boundChartSeries(
+              webhookGroups.map((row) => ({ key: row.status, value: row._count })),
+            ),
+          },
         ),
-        recoveryQueueDepth: metric(
-          recoveryDepth,
-          "Verified PayPal rows eligible now: due FAILED or stale PROCESSING, attempts under five.",
+        webhookDeliveriesByDay: metric(
+          charts.webhookDeliveriesByDay.reduce((sum, row) => sum + row.value, 0),
+          ADMIN_METRIC_DEFINITIONS.webhookDeliveriesByDay,
+          { series: charts.webhookDeliveriesByDay },
         ),
-        scheduledRetries: metric(
-          scheduledRetries,
-          "Verified FAILED rows with a future retry schedule and attempts under five.",
+        webhookDeliveryOutcomes: metric(
+          charts.webhookDeliveryOutcomes.reduce((sum, row) => sum + row.value, 0),
+          ADMIN_METRIC_DEFINITIONS.webhookDeliveryOutcomes,
+          { series: charts.webhookDeliveryOutcomes },
         ),
-        staleLeases: metric(
-          staleLeases,
-          "Verified PROCESSING rows whose lease is older than five minutes.",
+        topErrorCategories: metric(
+          charts.topErrorCategories.reduce((sum, row) => sum + row.value, 0),
+          ADMIN_METRIC_DEFINITIONS.topErrorCategories,
+          { series: charts.topErrorCategories },
         ),
-        exhausted: metric(
-          exhausted,
-          "Verified FAILED rows that have reached five recovery attempts.",
-        ),
+        recoveryQueueDepth: metric(recoveryDepth, ADMIN_METRIC_DEFINITIONS.recoveryQueueDepth),
+        scheduledRetries: metric(scheduledRetries, ADMIN_METRIC_DEFINITIONS.scheduledRetries),
+        staleLeases: metric(staleLeases, ADMIN_METRIC_DEFINITIONS.staleLeases),
+        exhausted: metric(exhausted, ADMIN_METRIC_DEFINITIONS.exhausted),
         lastWebhookProcessedAt: {
           value: null,
-          availability: lastProcessed._max.processedAt
-            ? ("available" as const)
-            : ("available" as const),
+          availability: "available" as const,
           reason: lastProcessed._max.processedAt
             ? iso(lastProcessed._max.processedAt)
             : "No processed inbox row.",
-          definition:
-            "Latest processedAt among PROCESSED inbox rows. This is not a worker heartbeat.",
+          definition: ADMIN_METRIC_DEFINITIONS.lastWebhookProcessedAt,
         },
-        agentProposalCount: metric(
-          agentProposals,
-          "PRODUCT_SELECTED audits with model_selected_server_validated_product in range, labelled as recorded agent selections.",
+        agentProposalCount: metric(agentProposals, ADMIN_METRIC_DEFINITIONS.agentProposalCount),
+        agentRequests: metric(telemetry.requests, ADMIN_METRIC_DEFINITIONS.agentRequests),
+        agentRunsByDay: metric(telemetry.requests, ADMIN_METRIC_DEFINITIONS.agentRunsByDay, {
+          series: charts.agentRunsByDay,
+        }),
+        agentErrorClasses: metric(
+          charts.agentErrorClasses.reduce((sum, row) => sum + row.value, 0),
+          ADMIN_METRIC_DEFINITIONS.agentErrorClasses,
+          { series: charts.agentErrorClasses },
         ),
-        agentRequests: metric(
-          telemetry.requests,
-          "Agent runs started in the selected range. This is recorded operational telemetry, not chat text.",
-        ),
-        successfulRuns: metric(telemetry.successfulRuns, "Agent runs that completed successfully in range."),
-        failedRuns: metric(telemetry.failedRuns, "Agent runs that failed in range."),
+        successfulRuns: metric(telemetry.successfulRuns, ADMIN_METRIC_DEFINITIONS.successfulRuns),
+        failedRuns: metric(telemetry.failedRuns, ADMIN_METRIC_DEFINITIONS.failedRuns),
         latency: {
           value: telemetry.latencyMs,
           availability: "available" as const,
-          reason: telemetry.latencyMs === null ? "No completed runs in range." : "Average duration in milliseconds.",
-          definition: "Average recorded agent-run duration in the selected range.",
+          reason:
+            telemetry.latencyMs === null
+              ? "No completed runs in range."
+              : "Average duration in milliseconds.",
+          definition: ADMIN_METRIC_DEFINITIONS.latency,
         },
-        toolErrors: metric(telemetry.toolErrors, "Agent tool calls that failed in range."),
-        refundDrafts: metric(
-          telemetry.refundDrafts,
-          "Agent runs that prepared a refund-draft payment identifier in range.",
-        ),
+        toolErrors: metric(telemetry.toolErrors, ADMIN_METRIC_DEFINITIONS.toolErrors),
+        refundDrafts: metric(telemetry.refundDrafts, ADMIN_METRIC_DEFINITIONS.refundDrafts),
         rejectedWebhookDeliveries: metric(
           telemetry.rejected,
-          "Webhook delivery attempts rejected before or during verification, in range.",
+          ADMIN_METRIC_DEFINITIONS.rejectedWebhookDeliveries,
         ),
         duplicateDeliveries: metric(
           telemetry.duplicate,
-          "Repeated webhook deliveries for an event that was already accepted, in range.",
+          ADMIN_METRIC_DEFINITIONS.duplicateDeliveries,
         ),
         lastSuccessfulReconcile: {
           value: null,
@@ -1680,14 +1685,10 @@ export class AdminOperationsRepository {
           reason: telemetry.reconcile
             ? iso(telemetry.reconcile)
             : "No successful admin payment or webhook reconciliation is recorded.",
-          definition:
-            "Latest successful admin reconciliation audit. This is not a historical provider-health series.",
+          definition: ADMIN_METRIC_DEFINITIONS.lastSuccessfulReconcile,
         },
-        disabledUsers: metric(
-          disabledUsers,
-          "User rows with disabledAt set. As-of count, including test/demo accounts because no User sample marker exists.",
-        ),
-        adminActions: metric(adminActions, "Admin audit events created in the selected range."),
+        disabledUsers: metric(disabledUsers, ADMIN_METRIC_DEFINITIONS.disabledUsers),
+        adminActions: metric(adminActions, ADMIN_METRIC_DEFINITIONS.adminActions),
       },
       controls: {
         discoveryMode: discovery
@@ -1706,11 +1707,16 @@ export class AdminOperationsRepository {
                 value: null,
                 availability: "available" as const,
                 reason: liveness.summary,
-                definition: "Webhook worker liveness from the latest heartbeat. Absence is unknown, not healthy.",
+                definition:
+                  "Webhook worker liveness from the latest heartbeat. Absence is unknown, not healthy.",
               }
-            : metric(liveness.status === "ready" ? 1 : 0, "Webhook worker liveness from the latest heartbeat.", {
-                reason: liveness.summary,
-              }),
+            : metric(
+                liveness.status === "ready" ? 1 : 0,
+                "Webhook worker liveness from the latest heartbeat.",
+                {
+                  reason: liveness.summary,
+                },
+              ),
         providerHealthHistory: unavailable(
           "Provider health history.",
           "Only the latest bounded probe is available on system health. A historical series is not stored.",

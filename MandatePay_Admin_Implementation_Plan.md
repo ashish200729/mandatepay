@@ -1798,28 +1798,28 @@ Verified locally on 2026-10-05. Implementation, safe collection rules, transacti
 
 ### TODO
 
-- [ ] **P9-01** Add time-range selector.
-- [ ] **P9-02** Add user growth chart.
-- [ ] **P9-03** Add payment volume chart.
-- [ ] **P9-04** Add refund volume chart.
-- [ ] **P9-05** Add AgentGuard decision distribution.
-- [ ] **P9-06** Add approval funnel.
-- [ ] **P9-07** Add checkout funnel.
-- [ ] **P9-08** Add webhook health chart.
-- [ ] **P9-09** Add top error categories.
-- [ ] **P9-10** Add mandate-status distribution.
-- [ ] **P9-11** Add agent-run metrics.
-- [ ] **P9-12** Add drill-down from charts to filtered list pages.
-- [ ] **P9-13** Validate metric definitions.
-- [ ] **P9-14** Add query performance tests.
-- [ ] **P9-15** Add indexes/materialized aggregation only if actual query profiles require them.
+- [x] **P9-01** Add time-range selector.
+- [x] **P9-02** Add user growth chart.
+- [x] **P9-03** Add payment volume chart.
+- [x] **P9-04** Add refund volume chart.
+- [x] **P9-05** Add AgentGuard decision distribution.
+- [x] **P9-06** Add approval funnel.
+- [x] **P9-07** Add checkout funnel.
+- [x] **P9-08** Add webhook health chart.
+- [x] **P9-09** Add top error categories.
+- [x] **P9-10** Add mandate-status distribution.
+- [x] **P9-11** Add agent-run metrics.
+- [x] **P9-12** Add drill-down from charts to filtered list pages.
+- [x] **P9-13** Validate metric definitions.
+- [x] **P9-14** Add query performance tests.
+- [x] **P9-15** Add indexes/materialized aggregation only if actual query profiles require them.
 
 ### Exit criteria
 
-- [ ] Dashboard metrics have explicit definitions.
-- [ ] Charts link to underlying records.
-- [ ] Metrics are performant at expected MVP scale.
-- [ ] No chart is based on unbounded browser-side datasets.
+- [x] Dashboard metrics have explicit definitions.
+- [x] Charts link to underlying records.
+- [x] Metrics are performant at expected MVP scale.
+- [x] No chart is based on unbounded browser-side datasets.
 
 ---
 

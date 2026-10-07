@@ -8,12 +8,18 @@ import {
   AdminActionRepository,
   MandateRepository,
   ProposalRepository,
+  explainCapturedVolumeSql,
   MandateStatus,
   MandateRuleType,
   RuleOperator,
   ProductCondition,
   PolicyDecisionType,
 } from "@mandatepay/database";
+import {
+  ADMIN_CHART_SERIES_MAX,
+  ADMIN_METRIC_DEFINITIONS,
+  ADMIN_OVERVIEW_CHART_METRIC_KEYS,
+} from "@mandatepay/shared";
 import type { PayPalCapture, PayPalClient, PayPalOrder, PayPalRefund } from "@mandatepay/paypal";
 import { createAuthRuntime } from "./auth.js";
 import { PayPalWebhookRecoveryWorker } from "./services/webhook-recovery.js";
@@ -946,6 +952,50 @@ describe("admin security with persisted Better Auth sessions", () => {
     const captured = await getOk("/api/admin/overview");
     expect(captured.json().data.metrics.capturedPayments.value).toBeGreaterThan(0);
     expect(captured.json().data.metrics.disabledUsers.availability).toBe("available");
+    const analytics = captured.json().data as {
+      range: { from: string; to: string };
+      metrics: Record<
+        string,
+        { definition: string; series?: Array<{ key: string; value: number }>; value: number | null }
+      >;
+    };
+    for (const key of Object.keys(ADMIN_METRIC_DEFINITIONS) as Array<
+      keyof typeof ADMIN_METRIC_DEFINITIONS
+    >) {
+      expect(analytics.metrics[key]?.definition, key).toBe(ADMIN_METRIC_DEFINITIONS[key]);
+    }
+    for (const key of ADMIN_OVERVIEW_CHART_METRIC_KEYS) {
+      expect(analytics.metrics[key]?.series, key).toBeDefined();
+      expect(analytics.metrics[key]!.series!.length, key).toBeLessThanOrEqual(
+        ADMIN_CHART_SERIES_MAX,
+      );
+    }
+    expect(
+      analytics.metrics.approvalFunnel?.series?.find((row) => row.key === "APPROVED")?.value,
+    ).toBeGreaterThan(0);
+    expect(
+      analytics.metrics.checkoutFunnel?.series?.find((row) => row.key === "CAPTURED")?.value,
+    ).toBeGreaterThan(0);
+    expect(
+      analytics.metrics.policyDistribution?.series?.some((row) => row.key === "REQUIRE_APPROVAL"),
+    ).toBe(true);
+    expect(analytics.metrics.capturedGrossByDay?.series?.some((row) => row.value > 0)).toBe(true);
+    const settled = await getOk(
+      `/api/admin/refunds?status=COMPLETED&dateBasis=settled&from=${encodeURIComponent(analytics.range.from)}&to=${encodeURIComponent(analytics.range.to)}`,
+    );
+    expect(settled.json().data.some((row: { id: string }) => row.id === refund.id)).toBe(true);
+    const started = Date.now();
+    const timed = await getOk(
+      `/api/admin/overview?from=${encodeURIComponent(analytics.range.from)}&to=${encodeURIComponent(analytics.range.to)}`,
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(timed.json().data.metrics.newUsersByDay.series?.length ?? 0).toBeLessThanOrEqual(
+      ADMIN_CHART_SERIES_MAX,
+    );
+    const plan = await database.$queryRaw(
+      explainCapturedVolumeSql(new Date(analytics.range.from), new Date(analytics.range.to)),
+    );
+    expect(JSON.stringify(plan)).toMatch(/Aggregate|GroupAggregate|Seq Scan|Index Scan/iu);
   });
 
   it("applies safe user and domain controls without bypassing policy or leaving unaudited mutations", async () => {
@@ -2323,9 +2373,9 @@ describe("admin security with persisted Better Auth sessions", () => {
       }),
     });
     try {
-      expect((await probed.inject({ method: "GET", url: "/api/admin/system/health" })).statusCode).toBe(
-        401,
-      );
+      expect(
+        (await probed.inject({ method: "GET", url: "/api/admin/system/health" })).statusCode,
+      ).toBe(401);
       const health = await probed.inject({
         method: "GET",
         url: "/api/admin/system/health",
@@ -2344,18 +2394,18 @@ describe("admin security with persisted Better Auth sessions", () => {
         "demoCatalog",
         "agent",
       ]);
-      expect(body.data.components.find((item: { id: string }) => item.id === "database").status).toBe(
-        "ready",
-      );
+      expect(
+        body.data.components.find((item: { id: string }) => item.id === "database").status,
+      ).toBe("ready");
       expect(body.data.components.find((item: { id: string }) => item.id === "paypal").status).toBe(
         "ready",
       );
-      expect(body.data.components.find((item: { id: string }) => item.id === "channel3").configured).toBe(
-        false,
-      );
-      expect(body.data.components.find((item: { id: string }) => item.id === "demoCatalog").status).toBe(
-        "ready",
-      );
+      expect(
+        body.data.components.find((item: { id: string }) => item.id === "channel3").configured,
+      ).toBe(false);
+      expect(
+        body.data.components.find((item: { id: string }) => item.id === "demoCatalog").status,
+      ).toBe("ready");
       expect(health.body).not.toContain(secretProbe);
       expect(health.body).not.toContain(password);
       expect(health.body).not.toContain("clientSecret");

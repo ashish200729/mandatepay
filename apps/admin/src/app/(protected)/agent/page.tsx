@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { PageHeader } from "@/components/admin/page-header";
 import { MetricCard } from "@/components/admin/metric-card";
+import { OverviewRangeSelector } from "@/components/admin/range-selector";
+import { OverviewChartCard } from "@/components/admin/overview-charts";
 import { EmptyState } from "@/components/admin/states";
 import { EntityLink } from "@/components/admin/entity-link";
 import { OutcomeBadge, ParseAlert, errorClassLabel } from "@/components/admin/health-card";
 import { formatUtcDate } from "@/components/admin/timeline";
 import { adminApi } from "@/lib/admin-fetch";
+import { readOverviewSearch } from "@/lib/overview-query";
 import {
   AGENT_ERROR_CLASSES,
   AGENT_RUN_OUTCOMES,
@@ -30,15 +33,18 @@ export default async function AgentActivityPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const query = await searchParams;
+  const range = readOverviewSearch(query);
   const outcome = allowed(single(query.outcome), AGENT_RUN_OUTCOMES);
   const errorClass = allowed(single(query.errorClass), AGENT_ERROR_CLASSES);
   const [metricsResponse, runsResponse] = await Promise.all([
-    adminApi("/api/admin/agent/metrics"),
-    adminApi(runsPath(outcome, errorClass)),
+    adminApi(
+      range.search ? `/api/admin/agent/metrics?${range.search}` : "/api/admin/agent/metrics",
+    ),
+    adminApi(runsPath(outcome, errorClass, range.search)),
   ]);
   const metrics = parseAdminDetail(metricsResponse.json, parseAdminAgentMetrics);
   const runs = parseAdminList(runsResponse.json, parseAdminAgentRun);
-  const pageHref = agentPath(outcome, errorClass);
+  const pageHref = agentPath(outcome, errorClass, range.search);
   const cards = metrics
     ? [
         { label: "Requests", metric: metrics.data.requests },
@@ -57,26 +63,43 @@ export default async function AgentActivityPage({
         description="Counts, timing, model ids, and tool names for shopping-agent runs."
         breadcrumbs={[{ label: "Overview", href: "/" }, { label: "Agent activity" }]}
       />
+      {metrics ? (
+        <OverviewRangeSelector
+          from={metrics.data.range.from}
+          to={metrics.data.range.to}
+          asOf={metrics.data.asOf}
+          path="/agent"
+          keep={keepFilters(outcome, errorClass)}
+        />
+      ) : null}
       <div className="mb-8 space-y-3">
         <nav aria-label="Outcome" className="flex flex-wrap gap-2">
-          <FilterLink href={agentPath(undefined, errorClass)} active={!outcome} label="All" />
           <FilterLink
-            href={agentPath("SUCCEEDED", errorClass)}
+            href={agentPath(undefined, errorClass, range.search)}
+            active={!outcome}
+            label="All"
+          />
+          <FilterLink
+            href={agentPath("SUCCEEDED", errorClass, range.search)}
             active={outcome === "SUCCEEDED"}
             label="Succeeded"
           />
           <FilterLink
-            href={agentPath("FAILED", errorClass)}
+            href={agentPath("FAILED", errorClass, range.search)}
             active={outcome === "FAILED"}
             label="Failed"
           />
         </nav>
         <nav aria-label="Error class" className="flex flex-wrap gap-2">
-          <FilterLink href={agentPath(outcome, undefined)} active={!errorClass} label="All" />
+          <FilterLink
+            href={agentPath(outcome, undefined, range.search)}
+            active={!errorClass}
+            label="All"
+          />
           {errorFilters.map(([value, label]) => (
             <FilterLink
               key={value}
-              href={agentPath(outcome, value)}
+              href={agentPath(outcome, value, range.search)}
               active={errorClass === value}
               label={label}
             />
@@ -95,6 +118,17 @@ export default async function AgentActivityPage({
           </div>
         )}
       </section>
+      {metrics ? (
+        <section aria-label="Agent error distribution" className="mb-10 max-w-xl">
+          <OverviewChartCard
+            title="Agent error classes"
+            metricKey="agentErrorClasses"
+            metric={metrics.data.errorClasses}
+            range={metrics.data.range}
+            kind="bars"
+          />
+        </section>
+      ) : null}
       <section aria-label="Agent runs">
         <h2 className="mb-4 text-lg font-medium">Runs</h2>
         {!runs ? (
@@ -185,16 +219,25 @@ function allowed<T extends string>(value: string | undefined, options: readonly 
   return value && (options as readonly string[]).includes(value) ? (value as T) : undefined;
 }
 
-function agentPath(outcome?: string, errorClass?: string) {
+function keepFilters(outcome?: string, errorClass?: string) {
   const params = new URLSearchParams();
   if (outcome) params.set("outcome", outcome);
   if (errorClass) params.set("errorClass", errorClass);
+  return params.toString();
+}
+
+function agentPath(outcome?: string, errorClass?: string, rangeSearch = "") {
+  const params = new URLSearchParams(rangeSearch);
+  if (outcome) params.set("outcome", outcome);
+  else params.delete("outcome");
+  if (errorClass) params.set("errorClass", errorClass);
+  else params.delete("errorClass");
   const text = params.toString();
   return text ? `/agent?${text}` : "/agent";
 }
 
-function runsPath(outcome?: string, errorClass?: string) {
-  const params = new URLSearchParams();
+function runsPath(outcome?: string, errorClass?: string, rangeSearch = "") {
+  const params = new URLSearchParams(rangeSearch);
   params.set("limit", "50");
   if (outcome) params.set("outcome", outcome);
   if (errorClass) params.set("errorClass", errorClass);

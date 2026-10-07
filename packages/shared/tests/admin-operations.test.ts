@@ -4,6 +4,7 @@ import {
   AdminOverviewQuerySchema,
   AdminPaymentQuerySchema,
   AdminPaymentRefundMutationSchema,
+  AdminRefundQuerySchema,
   AdminUserAccessMutationSchema,
   AdminUserDisableMutationSchema,
   AdminUserQuerySchema,
@@ -35,6 +36,10 @@ describe("admin operations contracts", () => {
     expect(AdminMandateQuerySchema.safeParse({ status: "UNKNOWN" }).success).toBe(false);
     expect(AdminPaymentQuerySchema.safeParse({ amountMin: 20, amountMax: 10 }).success).toBe(false);
     expect(AdminWebhookQuerySchema.safeParse({ eventType: "lowercase" }).success).toBe(false);
+    expect(
+      AdminRefundQuerySchema.safeParse({ dateBasis: "settled", sort: "createdAt" }).success,
+    ).toBe(false);
+    expect(AdminRefundQuerySchema.parse({ dateBasis: "settled" }).dateBasis).toBe("settled");
   });
 
   it("neutralizes formula-leading CSV cells and reports truncation", () => {

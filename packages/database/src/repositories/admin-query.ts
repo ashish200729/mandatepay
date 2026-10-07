@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { AdminResourceIdSchema } from "@mandatepay/shared";
+import { ADMIN_OVERVIEW_DEFAULT_DAYS, AdminResourceIdSchema } from "@mandatepay/shared";
 import { Prisma } from "../generated/prisma/client.js";
 import { DatabaseError } from "../errors.js";
 import { assertMinorUnits } from "../money.js";
@@ -141,7 +141,7 @@ export function providerIdsFromPayload(payload: Prisma.JsonValue) {
 }
 
 export function defaultOverviewRange(asOf: Date) {
-  return { from: new Date(asOf.getTime() - 30 * 86400_000), to: asOf };
+  return { from: new Date(asOf.getTime() - ADMIN_OVERVIEW_DEFAULT_DAYS * 86400_000), to: asOf };
 }
 
 export function activeMandateWhere(asOf: Date): Prisma.MandateWhereInput {

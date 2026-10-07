@@ -1,12 +1,15 @@
 import { ControlBanner } from "@/components/admin/control-banner";
 import { PageHeader } from "@/components/admin/page-header";
 import { MetricCard } from "@/components/admin/metric-card";
+import { OverviewRangeSelector } from "@/components/admin/range-selector";
+import { OverviewChartCard } from "@/components/admin/overview-charts";
 import { EventTimeline } from "@/components/admin/timeline";
 import { EntityLink } from "@/components/admin/entity-link";
 import { HealthIndicator } from "@/components/admin/status-badge";
 import { componentLabel } from "@/components/admin/health-card";
 import { adminApi } from "@/lib/admin-fetch";
 import { formatUsd } from "@/lib/money";
+import { activityApiPath, overviewApiPath, readOverviewSearch } from "@/lib/overview-query";
 import {
   parseAdminDetail,
   parseAdminList,
@@ -27,10 +30,15 @@ function metricValue(metric: AdminMetric | undefined) {
   return metric.unit === "minor" ? formatUsd(metric.value) : metric.value;
 }
 
-export default async function OverviewPage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const parsed = readOverviewSearch(await searchParams);
   const [overviewResponse, activityResponse, settingsResponse, healthResponse] = await Promise.all([
-    adminApi("/api/admin/overview"),
-    adminApi("/api/admin/overview/activity?limit=20"),
+    adminApi(overviewApiPath(parsed.search)),
+    adminApi(activityApiPath(parsed.search)),
     adminApi("/api/admin/settings"),
     adminApi("/api/admin/system/health"),
   ]);
@@ -48,6 +56,7 @@ export default async function OverviewPage() {
     ? describePlatformMode({ ...PLATFORM_SETTING_DEFAULTS, ...controls })
     : "Platform mode could not be loaded. Treat customer checkout, capture, and new refunds as unavailable until the controls load.";
   const metrics = overview?.data.metrics ?? {};
+  const range = overview?.data.range;
   const cards: { key: string; label: string }[] = [
     { key: "totalUsers", label: "Total users" },
     { key: "verifiedUsers", label: "Verified users" },
@@ -63,17 +72,49 @@ export default async function OverviewPage() {
     { key: "agentRequests", label: "Agent requests" },
     { key: "autonomousUsers", label: "Autonomous users" },
   ];
+  const charts: {
+    key: string;
+    title: string;
+    kind: "columns" | "bars" | "funnel";
+    money?: boolean;
+  }[] = [
+    { key: "newUsersByDay", title: "User growth", kind: "columns" },
+    { key: "capturedGrossByDay", title: "Payment volume", kind: "columns", money: true },
+    { key: "refundsByDay", title: "Refund volume", kind: "columns", money: true },
+    { key: "policyDistribution", title: "AgentGuard decisions", kind: "bars" },
+    { key: "approvalFunnel", title: "Approval funnel", kind: "funnel" },
+    { key: "checkoutFunnel", title: "Checkout funnel", kind: "funnel" },
+    { key: "webhookDeliveriesByDay", title: "Webhook deliveries", kind: "columns" },
+    { key: "webhookDeliveryOutcomes", title: "Webhook health", kind: "bars" },
+    { key: "webhookStatusCounts", title: "Inbox status", kind: "bars" },
+    { key: "topErrorCategories", title: "Top error categories", kind: "bars" },
+    { key: "mandateStatusDistribution", title: "Mandate status", kind: "bars" },
+    { key: "agentRunsByDay", title: "Agent runs", kind: "columns" },
+    { key: "agentErrorClasses", title: "Agent error classes", kind: "bars" },
+  ];
   return (
     <>
       <PageHeader
         title="Operations overview"
-        description="Read-only snapshot of MandatePay operations. Unavailable telemetry is shown as an em dash, never as zero."
+        description="Server-aggregated operational metrics. Unavailable telemetry is shown as an em dash, never as zero. Charts never load unbounded browser datasets."
         breadcrumbs={[{ label: "Overview" }]}
       />
       {health?.data.build.commitSha ? (
         <p className="-mt-4 mb-7 text-sm text-muted-foreground">
           API commit {health.data.build.commitSha}
         </p>
+      ) : null}
+      {parsed.error ? (
+        <p role="alert" className="mb-6 text-sm">
+          {parsed.error} Showing the default 30-day window.
+        </p>
+      ) : null}
+      {overview ? (
+        <OverviewRangeSelector
+          from={overview.data.range.from}
+          to={overview.data.range.to}
+          asOf={overview.data.asOf}
+        />
       ) : null}
       <ControlBanner
         mode={mode}
@@ -141,6 +182,19 @@ export default async function OverviewPage() {
                 />
               );
             })}
+          </section>
+          <section aria-label="Operational charts" className="mt-10 grid gap-6 lg:grid-cols-2">
+            {charts.map((chart) => (
+              <OverviewChartCard
+                key={chart.key}
+                title={chart.title}
+                metricKey={chart.key}
+                metric={metrics[chart.key]}
+                range={range!}
+                kind={chart.kind}
+                formatValue={chart.money ? formatUsd : undefined}
+              />
+            ))}
           </section>
           {overview.data.warnings.length > 0 && (
             <ul className="mt-6 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
