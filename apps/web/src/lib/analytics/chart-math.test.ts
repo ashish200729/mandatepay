@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { capturedSpendByCategory, decisionCounts } from "./chart-math";
+import {
+  capturedSpendByCategory,
+  decisionCounts,
+  isCapturedRow,
+  paymentStatusLabel,
+  refundStatusLabel,
+} from "./chart-math";
 import type { TransactionRow } from "./types";
 
 const row = (overrides: Partial<TransactionRow>): TransactionRow => ({
@@ -34,6 +40,44 @@ describe("analytics chart math", () => {
         row({ id: "refunded", amountMinor: 2_000, category: "Office", paypalStatus: "REFUNDED" }),
       ]),
     ).toEqual([{ label: "Office", amountMinor: 12_000 }]);
+  });
+
+  it("keeps a PayPal-reversed payment in gross captured spend", () => {
+    expect(
+      capturedSpendByCategory([
+        row({ amountMinor: 10_000, category: "Headphones", paypalStatus: "COMPLETED" }),
+        row({
+          id: "reversed",
+          amountMinor: 16_900,
+          category: "Headphones",
+          paypalStatus: "REVERSED",
+        }),
+        row({
+          id: "pending",
+          amountMinor: 5_000,
+          category: "Headphones",
+          paypalStatus: "CAPTURE_PENDING",
+        }),
+      ]),
+    ).toEqual([{ label: "Headphones", amountMinor: 26_900 }]);
+    expect(isCapturedRow({ capturedAt: "2026-10-03T12:00:00Z", paypalStatus: "REVERSED" })).toBe(
+      true,
+    );
+    expect(isCapturedRow({ capturedAt: null, paypalStatus: "REVERSED" })).toBe(false);
+    expect(isCapturedRow({ capturedAt: "2026-10-03T12:00:00Z", paypalStatus: "DENIED" })).toBe(
+      false,
+    );
+  });
+
+  it("labels refunds and reversals for the transaction table", () => {
+    expect(refundStatusLabel("REFUNDED")).toBe("Refunded");
+    expect(refundStatusLabel("PARTIALLY_REFUNDED")).toBe("Partial refund");
+    expect(refundStatusLabel("REVERSED")).toBe("Reversed by PayPal");
+    expect(refundStatusLabel("COMPLETED")).toBe("—");
+    expect(refundStatusLabel(null)).toBe("—");
+    expect(paymentStatusLabel("REVERSED")).toBe("Reversed by PayPal");
+    expect(paymentStatusLabel("CAPTURE_PENDING")).toBe("CAPTURE PENDING");
+    expect(paymentStatusLabel(null)).toBe("Not recorded");
   });
 
   it("groups decisions without inventing missing values", () => {

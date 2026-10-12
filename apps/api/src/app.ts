@@ -26,21 +26,49 @@ import {
 import { ObservabilityRepository } from "@mandatepay/database";
 import type { PayPalClient } from "@mandatepay/paypal";
 import { registerMandateRoutes } from "./routes/mandates.js";
-import { registerCatalogRoutes } from "./routes/catalog.js";
+import { registerSimulatorRoutes } from "./routes/simulator.js";
+import {
+  channel3FallbackMode,
+  createChannel3CatalogClient,
+  registerCatalogRoutes,
+} from "./routes/catalog.js";
 import { registerProposalRoutes } from "./routes/proposals.js";
 import { registerPayPalRoutes } from "./routes/paypal.js";
 import { registerRefundRoutes } from "./routes/refunds.js";
+import { registerPaymentMethodRoutes } from "./routes/payment-methods.js";
+import { registerCredentialRoutes, registerPublicCredentialRoutes } from "./routes/credentials.js";
+import { configureMandateSigning } from "./services/mandate-credentials.js";
+import { createVaultCipher } from "./services/vault-crypto.js";
 import { createPayPalClientFromEnvironment } from "./services/payments.js";
 import { PlatformControlDenied, assertRegistrationOpen } from "./services/platform-controls.js";
 import { createPayPalWebhookService } from "./services/webhooks.js";
 import { registerPayPalWebhookRoutes } from "./routes/webhooks.js";
 import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerShoppingAgentRoutes } from "./routes/agent.js";
+import { registerAgentTokenRoutes } from "./routes/agent-tokens.js";
+import { registerAgentGatewayRoutes } from "./routes/agent-gateway.js";
 import {
+  GATEWAY_PRINCIPAL_HEADER,
+  createGatewayPrincipals,
+  deriveAgentTokenKey,
+  type GatewayPrincipals,
+} from "./services/agent-tokens.js";
+import {
+  createFixedWindowRateLimiter,
   createMutationRateLimiter,
+  credentialAttemptEmail,
   isFinancialMutation,
   safeRequestPath,
 } from "./services/rate-limits.js";
+import {
+  apiSecurityHeaders,
+  applySecurityHeaders,
+  deriveProductContextSecret,
+  pinClientIp,
+  sendNotFound,
+  sendUnhandledError,
+  trustProxyHops,
+} from "./request-security.js";
 
 const settingsSchema = z
   .object({
@@ -50,6 +78,11 @@ const settingsSchema = z
 
 const authPostWindowMs = 60_000;
 const authPostMaxRequests = 30;
+const authPostCapacity = 4_096;
+// Credential attempts against one account, independent of the caller's address.
+const credentialEmailWindowMs = 15 * 60_000;
+const credentialEmailMaxRequests = 10;
+const credentialEmailCapacity = 10_000;
 
 type RuntimeConfig = typeof env;
 
@@ -81,11 +114,6 @@ export interface CreateAppOptions {
   }>;
 }
 
-type RateLimitEntry = {
-  count: number;
-  resetAt: number;
-};
-
 function isTrustedOrigin(origin: string | undefined, config: RuntimeConfig): boolean {
   return trustedOrigin(origin, [
     ...originsFor(config.APP_URL, config.NODE_ENV),
@@ -108,6 +136,8 @@ function safeLoggerConfig(config: RuntimeConfig) {
         "req.headers.cookie",
         "req.headers.set-cookie",
         "req.headers.x-api-key",
+        "req.headers.x-mandatepay-proxy-secret",
+        "req.headers.x-mandatepay-gateway-principal",
         "req.body.password",
         "req.body.clientSecret",
         "req.body.paypalClientSecret",
@@ -161,7 +191,34 @@ async function readAuthenticatedUser(
       await reply.status(401).send({ error: "Unauthorized", code: "UNAUTHORIZED" });
       return null;
     }
+    return await readActiveUser(userId, runtime, reply);
+  } catch {
+    await sendUnavailable(reply);
+    return null;
+  }
+}
 
+/**
+ * The agent gateway's internal calls (Fastify inject) name the token owner with a
+ * single-use in-process nonce instead of a session cookie. Any unknown, reused or
+ * expired value is rejected; it never falls back to cookies.
+ */
+async function readGatewayPrincipalUser(
+  request: FastifyRequest,
+  runtime: AuthRuntime,
+  reply: FastifyReply,
+  principals: GatewayPrincipals,
+) {
+  const userId = principals.consume(request.headers[GATEWAY_PRINCIPAL_HEADER]);
+  if (!userId) {
+    await reply.status(401).send({ error: "Unauthorized", code: "UNAUTHORIZED" });
+    return null;
+  }
+  return readActiveUser(userId, runtime, reply);
+}
+
+async function readActiveUser(userId: string, runtime: AuthRuntime, reply: FastifyReply) {
+  try {
     const user = await runtime.database.user.findUnique({
       where: { id: userId },
       select: {
@@ -320,11 +377,45 @@ export async function createApp(options: CreateAppOptions = {}) {
       : options.paypalClient !== undefined
         ? options.paypalClient
         : createPayPalClientFromEnvironment(config);
-  const authPostRateLimits = new Map<string, RateLimitEntry>();
+  const consumeAuthPost = createFixedWindowRateLimiter({
+    maximum: maximumAuthRequests,
+    windowMs: authPostWindowMs,
+    capacity: authPostCapacity,
+  });
+  const consumeCredentialEmail = createFixedWindowRateLimiter({
+    maximum: options.testAuthPostMaximum ?? credentialEmailMaxRequests,
+    windowMs: credentialEmailWindowMs,
+    capacity: credentialEmailCapacity,
+  });
   const app = Fastify({
     logger: safeLoggerConfig(config),
     genReqId: () => randomUUID(),
+    // Direct traffic only (for example a platform load balancer); BFF traffic uses the proxy secret.
+    trustProxy: trustProxyHops(config.TRUST_PROXY),
   });
+  const securityHeaders = apiSecurityHeaders(config.NODE_ENV === "production");
+
+  // Registered before any scope so admin, webhook and auth routes all inherit them.
+  app.addHook("onRequest", async (request) => {
+    pinClientIp(request, config.INTERNAL_PROXY_SECRET);
+  });
+  app.addHook("onSend", async (_request, reply, payload) => {
+    applySecurityHeaders(reply, securityHeaders);
+    return payload;
+  });
+  app.setErrorHandler(sendUnhandledError);
+  app.setNotFoundHandler(sendNotFound);
+  // Fails boot in production without MANDATE_SIGNING_KEY; dev/test warn once and use a temporary key.
+  await configureMandateSigning(
+    {
+      signingKey: config.MANDATE_SIGNING_KEY,
+      previousJwks: config.MANDATE_SIGNING_PREVIOUS_JWKS,
+      issuer: config.API_URL,
+      nodeEnv: config.NODE_ENV,
+    },
+    app.log,
+  );
+  registerPublicCredentialRoutes(app);
 
   await app.register(cors, {
     origin: [
@@ -349,9 +440,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 
   const probePaypal =
     options.probePaypal ??
-    (paypal && typeof paypal.probeSandbox === "function"
-      ? () => paypal.probeSandbox()
-      : undefined);
+    (paypal && typeof paypal.probeSandbox === "function" ? () => paypal.probeSandbox() : undefined);
   const probeChannel3 =
     options.probeChannel3 ??
     (config.CHANNEL3_API_KEY
@@ -447,29 +536,15 @@ export async function createApp(options: CreateAppOptions = {}) {
     preHandler: async (request, reply) => {
       if (request.method !== "POST") return;
       const now = Date.now();
-      for (const [address, entry] of authPostRateLimits) {
-        if (entry.resetAt <= now) authPostRateLimits.delete(address);
-      }
-      if (authPostRateLimits.size >= 4096 && !authPostRateLimits.has(request.ip)) {
-        return reply.status(429).send({
-          error: "Too many authentication attempts. Try again shortly.",
-          code: "AUTH_RATE_LIMITED",
-        });
-      }
-      const key = request.ip || "unknown";
-      const current = authPostRateLimits.get(key);
-      if (!current || current.resetAt <= now) {
-        authPostRateLimits.set(key, { count: 1, resetAt: now + authPostWindowMs });
-        return;
-      }
-      if (current.count >= maximumAuthRequests) {
-        reply.header("retry-after", Math.ceil((current.resetAt - now) / 1000).toString());
-        return reply.status(429).send({
-          error: "Too many authentication attempts. Try again shortly.",
-          code: "AUTH_RATE_LIMITED",
-        });
-      }
-      current.count += 1;
+      const email = credentialAttemptEmail(request.method, request.url, request.body);
+      const addressRate = consumeAuthPost(request.ip || "unknown", now);
+      const rate = addressRate.allowed && email ? consumeCredentialEmail(email, now) : addressRate;
+      if (rate.allowed) return;
+      reply.header("retry-after", rate.retryAfter.toString());
+      return reply.status(429).send({
+        error: "Too many authentication attempts. Try again shortly.",
+        code: "AUTH_RATE_LIMITED",
+      });
     },
     handler: async (request, reply) => {
       if (!runtime) return sendUnavailable(reply);
@@ -608,10 +683,14 @@ export async function createApp(options: CreateAppOptions = {}) {
         OPENAI_REASONING_EFFORT: process.env.OPENAI_REASONING_EFFORT,
         OPENAI_MAX_RETRIES: "0",
       });
+    const gatewayPrincipals = createGatewayPrincipals();
     const protectedContext = {
       database: runtime.database,
       requireUser: async (request: FastifyRequest, reply: FastifyReply) => {
-        const user = await readAuthenticatedUser(request, runtime, reply);
+        const user =
+          request.headers[GATEWAY_PRINCIPAL_HEADER] === undefined
+            ? await readAuthenticatedUser(request, runtime, reply)
+            : await readGatewayPrincipalUser(request, runtime, reply, gatewayPrincipals);
         if (!user || !isFinancialMutation(request.method, request.url)) return user;
         const rate = consumeMutation(user.id);
         if (rate.allowed) return user;
@@ -629,8 +708,11 @@ export async function createApp(options: CreateAppOptions = {}) {
       app,
       appUrl: config.APP_URL,
       modelId: config.OPENAI_MODEL,
-      productContextSecret: config.AUTH_SECRET,
-      runner: (input, tools) => runShoppingAgent(input, { config: modelConfig(), tools }),
+      productContextSecret: config.AUTH_SECRET
+        ? deriveProductContextSecret(config.AUTH_SECRET)
+        : undefined,
+      runner: (input, tools, options) =>
+        runShoppingAgent(input, { config: modelConfig(), tools, ...options }),
     });
     registerAnalyticsRoutes(app, {
       ...protectedContext,
@@ -644,16 +726,35 @@ export async function createApp(options: CreateAppOptions = {}) {
       lookupDemoProduct: async (externalId) => lookupDemoProduct(externalId),
       paypalStatus: {
         configured: paypal !== null,
-        environment: "sandbox",
+        environment: paypal?.config.environment ?? config.PAYPAL_ENV,
         webhookConfigured: Boolean(paypal?.config.webhookId),
       },
     });
     registerRefundRoutes(app, { ...protectedContext, paypal });
+    // Saved PayPal (Vault) stays off unless TOKEN_ENCRYPTION_KEY is a valid 32-byte key.
+    const vaultCipher = createVaultCipher(config.TOKEN_ENCRYPTION_KEY);
+    if (paypal && !vaultCipher) {
+      app.log.warn(
+        { event: "paypal_vault_disabled" },
+        "Saved PayPal payments are disabled: TOKEN_ENCRYPTION_KEY is missing or not 32 bytes.",
+      );
+    }
+    registerPaymentMethodRoutes(app, {
+      ...protectedContext,
+      paypal,
+      vault: vaultCipher,
+      appUrl: config.APP_URL,
+      lookupDemoProduct: async (externalId) => lookupDemoProduct(externalId),
+    });
     if (paypal) {
-      registerPayPalWebhookRoutes(app, createPayPalWebhookService(runtime.database, paypal), {
-        recordDelivery: (fact) =>
-          new ObservabilityRepository(runtime.database).recordWebhookDelivery(fact),
-      });
+      registerPayPalWebhookRoutes(
+        app,
+        createPayPalWebhookService(runtime.database, paypal, { vaultCipher }),
+        {
+          recordDelivery: (fact) =>
+            new ObservabilityRepository(runtime.database).recordWebhookDelivery(fact),
+        },
+      );
     } else {
       app.post("/api/webhooks/paypal", async (_request, reply) =>
         reply.status(503).send({ error: "PayPal webhooks are not configured." }),
@@ -663,9 +764,11 @@ export async function createApp(options: CreateAppOptions = {}) {
       ...protectedContext,
       mode: config.PRODUCT_DISCOVERY_MODE,
       channel3:
-        config.PRODUCT_DISCOVERY_MODE === "channel3" && config.CHANNEL3_API_KEY
-          ? new Channel3Client(parseChannel3Config({ apiKey: config.CHANNEL3_API_KEY }))
+        config.PRODUCT_DISCOVERY_MODE === "channel3"
+          ? createChannel3CatalogClient(config.CHANNEL3_API_KEY)
           : undefined,
+      // Labeled Demo Catalog results when live discovery is missing, failing or timing out.
+      channel3Fallback: channel3FallbackMode(process.env.CHANNEL3_FALLBACK_MODE),
       rank: (mandate, products) =>
         rankProducts({ mandate, candidates: products }, { config: modelConfig() }),
     });
@@ -675,6 +778,47 @@ export async function createApp(options: CreateAppOptions = {}) {
         parseMandate(request, {
           config: modelConfig(),
         }),
+    });
+    registerSimulatorRoutes(app, protectedContext);
+    registerCredentialRoutes(app, protectedContext);
+    const agentTokenKey = config.AUTH_SECRET ? deriveAgentTokenKey(config.AUTH_SECRET) : null;
+    registerAgentTokenRoutes(app, {
+      ...protectedContext,
+      tokenKey: agentTokenKey,
+      apiUrl: config.API_URL,
+    });
+    // External agents (MCP) authenticate with a bearer agent token only; no cookies are read.
+    registerAgentGatewayRoutes(app, {
+      database: runtime.database,
+      tokenKey: agentTokenKey,
+      appUrl: config.APP_URL,
+      payments: {
+        database: runtime.database,
+        paypal,
+        appUrl: config.APP_URL,
+        lookupDemoProduct: async (externalId) => lookupDemoProduct(externalId),
+        vault: vaultCipher,
+      },
+      internal: async (userId, { url, payload, headers = {} }) => {
+        const response = await app.inject({
+          method: "POST",
+          url,
+          headers: {
+            ...headers,
+            origin: config.APP_URL,
+            "content-type": "application/json",
+            [GATEWAY_PRINCIPAL_HEADER]: gatewayPrincipals.issue(userId),
+          },
+          payload: JSON.stringify(payload),
+        });
+        let body: unknown = null;
+        try {
+          body = JSON.parse(response.body) as unknown;
+        } catch {
+          body = null;
+        }
+        return { statusCode: response.statusCode, body };
+      },
     });
     app.addHook("onClose", async () => {
       await runtime.close();

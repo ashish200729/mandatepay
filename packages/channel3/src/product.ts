@@ -72,6 +72,8 @@ export interface NormalizeProductOptions {
 
 type JsonRecord = Record<string, unknown>;
 
+const MAX_DESCRIPTION_LENGTH = 6_000;
+
 function record(value: unknown): JsonRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonRecord)
@@ -244,6 +246,14 @@ export function normalizeProduct(
 
   const metadata = rawMetadata(raw.metadata);
   if (source === "channel3") metadata.categoryPath = [...new Set(categoryPath)];
+  // Seller-supplied copy is kept as untrusted data so it can be screened for prompt
+  // injection; the bound stays above the screener's excessive-length threshold.
+  const description = stringValue(
+    firstValue(sources, ["description", "long_description", "product_description"]),
+  );
+  if (description && typeof metadata.description !== "string") {
+    metadata.description = description.slice(0, MAX_DESCRIPTION_LENGTH);
+  }
   const product = NormalizedProductSchema.parse({
     source,
     externalId,

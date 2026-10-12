@@ -14,6 +14,18 @@ enum PaymentProfileStatus {
   DISCONNECTED
   CONNECTED
   REVOKED
+  /// A PayPal setup token was requested; the buyer has not approved it yet.
+  SETUP_PENDING
+  /// A PayPal Vault payment token is stored (encrypted) and may be charged by autopay.
+  ACTIVE
+  /// The user removed the method; PayPal deletion is not yet confirmed. Never charged.
+  REMOVAL_PENDING
+}
+
+/// How a payment reached PayPal: buyer-approved checkout or a saved Vault token.
+enum PaymentSource {
+  CHECKOUT
+  VAULT
 }
 
 enum AdminRole {
@@ -164,6 +176,7 @@ enum PaymentStatus {
   FAILED
   PARTIALLY_REFUNDED
   REFUNDED
+  REVERSED
 }
 
 enum RefundStatus {
@@ -239,6 +252,19 @@ enum AuditEventType {
   PAYPAL_REFUND_CREATED
   REFUND_COMPLETED
   REFUND_FAILED
+  PAYMENT_REVERSED
+  PAYMENT_METHOD_SETUP_STARTED
+  PAYMENT_METHOD_SAVED
+  PAYMENT_METHOD_REMOVAL_REQUESTED
+  PAYMENT_METHOD_REVOKED
+  AUTONOMOUS_PAYMENT_STARTED
+  AUTONOMOUS_PAYMENT_COMPLETED
+  AUTONOMOUS_PAYMENT_FALLBACK
+  AUTONOMOUS_PAYMENT_FAILED
+  AGENT_TOKEN_CREATED
+  AGENT_TOKEN_REVOKED
+  MANDATE_CREDENTIAL_ISSUED
+  CART_MANDATE_MISMATCH
 }
 
 enum AuditEntityType {
@@ -283,6 +309,7 @@ model User {
   disabledByAdmin                   AdminPrincipal?    @relation("UserDisabledBy", fields: [disabledByAdminId], references: [id], onDelete: SetNull)
   adminNotes                        AdminNote[]
   agentRuns                         AgentRunMetric[]
+  agentAccessTokens                 AgentAccessToken[]
 
   @@index([createdAt])
   @@index([disabledAt])
@@ -447,8 +474,25 @@ model PaymentProfile {
   id                     String               @id @default(uuid())
   userId                 String               @unique
   paypalCustomerId       String?              @unique @db.VarChar(255)
+  /// AES-256-GCM ciphertext of the PayPal Vault payment token id. Never logged or returned.
   paypalVaultIdEncrypted String?              @db.Text
+  /// Keyed HMAC of the payment token id, used only to match verified VAULT.* webhooks.
+  paypalVaultIdHash      String?              @unique @db.VarChar(64)
   status                 PaymentProfileStatus @default(DISCONNECTED)
+  setupTokenId           String?              @db.VarChar(128)
+  setupRequestId         String?              @unique @db.VarChar(36)
+  setupApprovalUrl       String?              @db.VarChar(2048)
+  setupExpiresAt         DateTime?
+  paymentTokenRequestId  String?              @unique @db.VarChar(36)
+  consentVersion         String?              @db.VarChar(32)
+  consentedAt            DateTime?
+  /// Masked payer email for display only (for example j***@example.com).
+  payerEmailMasked       String?              @db.VarChar(320)
+  activatedAt            DateTime?
+  removalRequestedAt     DateTime?
+  revokedAt              DateTime?
+  /// Server-owned failure code (never provider free text).
+  lastErrorCode          String?              @db.VarChar(128)
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt
   user                   User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -636,6 +680,11 @@ model Payment {
   idempotencyKey        String           @unique @db.VarChar(255)
   isSample              Boolean          @default(false)
   failureCode           String?          @db.VarChar(128)
+  /// Safe PayPal reason code for a held or payer-action state (for example PENDING_REVIEW).
+  providerStatusReason  String?          @db.VarChar(64)
+  /// Validated PayPal buyer redirect when the payer must choose another funding source.
+  payerActionUrl        String?          @db.VarChar(2048)
+  paymentSource         PaymentSource    @default(CHECKOUT)
   capturedAt            DateTime?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
@@ -646,6 +695,7 @@ model Payment {
 
   @@index([userId, createdAt])
   @@index([mandateId, status, createdAt])
+  @@index([status, updatedAt])
 }
 
 model Refund {
@@ -662,6 +712,8 @@ model Refund {
   idempotencyKey    String       @db.VarChar(255)
   requestFingerprint String?     @db.VarChar(128)
   failureCode       String?      @db.VarChar(128)
+  /// True when PayPal reported a refund that was issued outside MandatePay.
+  providerInitiated Boolean     @default(false)
   settledAt        DateTime?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
@@ -706,6 +758,8 @@ model WebhookInbox {
   payload           Json
   status            WebhookProcessingStatus @default(RECEIVED)
   attempts          Int                     @default(0)
+  /// The last outcome waited on provider state; retried on the long pending schedule.
+  awaitingProvider  Boolean                 @default(false)
   receivedAt        DateTime                @default(now())
   nextAttemptAt     DateTime?
   processedAt       DateTime?
@@ -832,4 +886,66 @@ model WebhookDeliveryMetric {
 
   @@index([receivedAt, id])
   @@index([outcome, receivedAt, id])
+}
+
+/// AP2-shaped mandate credential kinds (v0.2 open/closed payment and checkout mandates).
+enum MandateCredentialKind {
+  OPEN_PAYMENT
+  OPEN_CHECKOUT
+  CLOSED_CHECKOUT
+  CLOSED_PAYMENT
+}
+
+// Append-only signed credentials (compact ES256 JWS). Identifiers are historical
+// snapshots rather than FKs, like AdminAuditEvent. A DB trigger rejects UPDATE
+// and DELETE. Open kinds are unique per (mandateVersionId, kind) through a
+// partial index in the migration (proposalId IS NULL); closed kinds per
+// (proposalId, kind).
+model MandateCredential {
+  id               String                @id @default(uuid())
+  userId           String
+  mandateId        String
+  mandateVersionId String
+  proposalId       String?
+  kind             MandateCredentialKind
+  kid              String                @db.VarChar(64)
+  jwt              String                @db.Text
+  /// Hex SHA-256 of the compact JWS.
+  digest           String                @unique @db.VarChar(64)
+  checkoutHash     String?               @db.VarChar(64)
+  issuedAt         DateTime              @default(now())
+
+  @@unique([proposalId, kind])
+  @@index([mandateVersionId, kind])
+  @@index([userId, issuedAt])
+}
+
+/// What an external AI agent may do with an agent access token. AgentGuard still decides every purchase.
+enum AgentTokenScope {
+  /// Read mandates, proposals and order status; search products; run the policy simulator.
+  READ
+  /// Create purchase proposals that AgentGuard evaluates.
+  PROPOSE
+  /// Pay AgentGuard-ALLOW proposals with the saved PayPal method when autopay eligibility holds.
+  AUTOPAY
+}
+
+/// A bearer credential for the MCP agent gateway. Only a keyed HMAC of the token is stored.
+model AgentAccessToken {
+  id          String            @id @default(uuid())
+  userId      String
+  /// User-supplied label, for example "Claude Desktop".
+  name        String            @db.VarChar(64)
+  /// The first characters of the token, for display only.
+  tokenPrefix String            @db.VarChar(24)
+  /// HMAC-SHA256 (HKDF-derived key) of the full token. The plaintext is never stored.
+  tokenHash   String            @unique @db.VarChar(64)
+  scopes      AgentTokenScope[]
+  expiresAt   DateTime
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime          @default(now())
+  user        User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
 }

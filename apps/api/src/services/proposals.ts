@@ -1,4 +1,10 @@
-import { evaluateValidatedPolicy, type PolicyContext } from "@mandatepay/agentguard";
+import {
+  evaluateValidatedPolicy,
+  screenUntrustedContent,
+  type ContentScreenResult,
+  type PolicyContext,
+} from "@mandatepay/agentguard";
+import { lookupDemoProduct } from "@mandatepay/channel3";
 import {
   ApprovalDecision,
   AuditEntityType,
@@ -17,7 +23,9 @@ import {
 } from "@mandatepay/database";
 import { CanonicalMandateSchema, toMinorUnits } from "@mandatepay/shared";
 import { platformAutonomyEnabled } from "./platform-controls.js";
+import { explainStoredDecision, type StoredProposalFacts } from "./decision-explanation.js";
 import { proposalFingerprint } from "@mandatepay/database";
+import { issueClosedCredentialsAfterCommit } from "./mandate-credentials.js";
 
 type UserOwner = { id: string };
 export type TransactionClient = Prisma.TransactionClient;
@@ -68,6 +76,8 @@ const capturedStatuses: PaymentStatus[] = [
   PaymentStatus.COMPLETED,
   PaymentStatus.PARTIALLY_REFUNDED,
   PaymentStatus.REFUNDED,
+  // A provider reversal stays in confirmed spend, like a refund.
+  PaymentStatus.REVERSED,
 ];
 
 function utcPeriod(now: Date, window: ReservationWindow) {
@@ -270,12 +280,17 @@ export function serializeProposal(proposal: ProposalRecord) {
   };
 }
 
-function serializeDecision(decision: PolicyRecord) {
+function serializeDecision(
+  decision: PolicyRecord & { rulesSnapshot?: unknown; spendSnapshot?: unknown },
+  facts?: StoredProposalFacts | null,
+) {
   return {
     id: decision.id,
     decision: decision.decision,
     reasonCodes: decision.reasonCodes,
     evaluatedAt: decision.createdAt.toISOString(),
+    // Read-only, deterministic copy derived from the recorded verdict and snapshots.
+    explanation: explainStoredDecision(decision, facts),
   };
 }
 
@@ -410,6 +425,48 @@ async function loadLockedContext(
   return { proposal: locked, mandate: locked.mandate, rules: rules.data };
 }
 
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The stored product snapshot fields AgentGuard screens for prompt injection. */
+export interface ScreenableProductSnapshot {
+  readonly source: string;
+  readonly title: string;
+  readonly brand: string | null;
+  readonly category: string | null;
+  readonly merchant: string;
+  readonly metadata: unknown;
+}
+
+/**
+ * Screens the authoritative product text for instructions aimed at AI agents.
+ * It reads the immutable snapshot and, for Demo Catalog products, the server's
+ * own catalog record, whose seller description the snapshot references by ID.
+ * Pure and deterministic; never trusts anything the model or browser supplied.
+ */
+export function screenProductSnapshot(snapshot: ScreenableProductSnapshot): ContentScreenResult {
+  const metadata = isJsonRecord(snapshot.metadata) ? snapshot.metadata : {};
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  const catalog =
+    snapshot.source === "demo" && typeof metadata.externalId === "string"
+      ? lookupDemoProduct(metadata.externalId)
+      : null;
+  const categoryPath = Array.isArray(metadata.categoryPath)
+    ? metadata.categoryPath.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return screenUntrustedContent({
+    title: snapshot.title,
+    brand: snapshot.brand,
+    category: snapshot.category,
+    merchant: snapshot.merchant,
+    categoryPath,
+    description: text(metadata.description),
+    catalogTitle: catalog?.title ?? null,
+    catalogDescription: text(catalog?.metadata.description),
+  });
+}
+
 function policyContext(
   loaded: Awaited<ReturnType<typeof loadLockedContext>>,
   spend: Awaited<ReturnType<typeof spendContext>>,
@@ -452,6 +509,8 @@ function policyContext(
     },
     spend: spendSnapshot,
     globalAutonomousPurchasingEnabled: user.globalAutonomousPurchasingEnabled,
+    // Re-screened at every evaluation, approval and pre-payment revalidation.
+    contentRisk: screenProductSnapshot(product).risk,
   };
 }
 
@@ -461,9 +520,14 @@ export async function evaluateProposal(
   proposalId: string,
   options: { allowDisabledAccount?: boolean } = {},
 ) {
-  return database.$transaction((tx) =>
+  const result = await database.$transaction((tx) =>
     evaluateProposalInTransaction(tx, user, proposalId, options),
   );
+  // AgentGuard ALLOW: sign the exact authorized cart after the commit (never fails the decision).
+  if (result.proposal.status === ProposalStatus.AUTHORIZED) {
+    await issueClosedCredentialsAfterCommit(database, proposalId, user.id);
+  }
+  return result;
 }
 
 export async function evaluateProposalInTransaction(
@@ -591,7 +655,7 @@ export async function evaluateProposalInTransaction(
   if (!updated) throw new DatabaseError("NOT_FOUND", "Proposal disappeared during evaluation.");
   return {
     proposal: serializeProposal(updated),
-    decision: serializeDecision(persistedDecision),
+    decision: serializeDecision(persistedDecision, loaded.proposal),
   };
 }
 
@@ -600,7 +664,7 @@ export async function approveProposal(
   user: UserOwner,
   proposalId: string,
 ) {
-  return database.$transaction(async (tx) => {
+  const result = await database.$transaction(async (tx) => {
     const now = new Date();
     const loaded = await loadLockedContext(tx, user, proposalId, now);
     const dbUser = await tx.user.findUnique({
@@ -696,7 +760,7 @@ export async function approveProposal(
       if (!blocked) throw new DatabaseError("NOT_FOUND", "Proposal was not found.");
       return {
         proposal: serializeProposal(blocked),
-        decision: serializeDecision(persistedDecision),
+        decision: serializeDecision(persistedDecision, loaded.proposal),
       };
     }
     await tx.approval.update({
@@ -722,8 +786,16 @@ export async function approveProposal(
       include: { productSnapshot: true, mandateVersion: true, approval: true },
     });
     if (!updated) throw new DatabaseError("NOT_FOUND", "Proposal disappeared during approval.");
-    return { proposal: serializeProposal(updated), decision: serializeDecision(persistedDecision) };
+    return {
+      proposal: serializeProposal(updated),
+      decision: serializeDecision(persistedDecision, loaded.proposal),
+    };
   });
+  // Explicit human approval: sign the approved cart after the commit (idempotent).
+  if (result.proposal.status === ProposalStatus.AUTHORIZED) {
+    await issueClosedCredentialsAfterCommit(database, proposalId, user.id);
+  }
+  return result;
 }
 
 export async function rejectProposal(
@@ -799,7 +871,9 @@ export async function getProposal(database: DatabaseClient, user: UserOwner, pro
   if (!proposal) throw new DatabaseError("NOT_FOUND", "Proposal was not found for this user.");
   return {
     proposal: serializeProposal(proposal),
-    decision: proposal.policyDecisions[0] ? serializeDecision(proposal.policyDecisions[0]) : null,
+    decision: proposal.policyDecisions[0]
+      ? serializeDecision(proposal.policyDecisions[0], proposal)
+      : null,
   };
 }
 
@@ -906,7 +980,12 @@ export async function revalidateAuthorizationInTransaction(
   });
 
   if (decision.decision === "BLOCK") {
-    if (loaded.proposal.status !== ProposalStatus.PAYPAL_ORDER_CREATED) {
+    // A proposal at the provider boundary keeps its status: its order or
+    // capture must still be reconciled. Only the payment path is refused.
+    if (
+      loaded.proposal.status !== ProposalStatus.PAYPAL_ORDER_CREATED &&
+      loaded.proposal.status !== ProposalStatus.PAYMENT_PENDING
+    ) {
       await tx.purchaseProposal.update({
         where: { id: proposalId },
         data: { status: ProposalStatus.BLOCKED },
@@ -923,7 +1002,7 @@ export async function revalidateAuthorizationInTransaction(
     });
     return {
       authorized: false,
-      decision: serializeDecision(persistedDecision),
+      decision: serializeDecision(persistedDecision, loaded.proposal),
       proposal: loaded.proposal,
       reservation: null,
     };
@@ -988,7 +1067,7 @@ export async function revalidateAuthorizationInTransaction(
       });
       return {
         authorized: false,
-        decision: serializeDecision(persistedDecision),
+        decision: serializeDecision(persistedDecision, loaded.proposal),
         proposal: loaded.proposal,
         reservation: null,
       };
@@ -998,7 +1077,7 @@ export async function revalidateAuthorizationInTransaction(
   const reservation = await createReservation(tx, loaded.proposal, loaded.mandate, now);
   return {
     authorized: decision.decision === "ALLOW" || approvalIsValid,
-    decision: serializeDecision(persistedDecision),
+    decision: serializeDecision(persistedDecision, loaded.proposal),
     proposal: loaded.proposal,
     reservation,
   };
@@ -1014,4 +1093,112 @@ export async function revalidateAuthorization(
   return database.$transaction((tx) =>
     revalidateAuthorizationInTransaction(tx, user, proposalId, authoritativeProduct, options),
   );
+}
+
+/**
+ * Read-only spend facts for the AgentGuard policy simulator, in the same shape
+ * as a real evaluation's spend context. Unlike that path it never releases an
+ * expired hold or writes an audit row: a hold a real evaluation would release
+ * is simply left out of the reserved totals.
+ */
+export async function readSimulationSpendContext(
+  tx: TransactionClient,
+  input: { mandateId: string; userId: string; merchant: string; now: Date },
+) {
+  const { mandateId, userId, merchant, now } = input;
+  const periods = {
+    daily: utcPeriod(now, ReservationWindow.DAILY),
+    weekly: utcPeriod(now, ReservationWindow.WEEKLY),
+    monthly: utcPeriod(now, ReservationWindow.MONTHLY),
+  };
+  const payments = await tx.payment.findMany({
+    where: {
+      mandateId,
+      isSample: false,
+      proposal: { isSample: false },
+      status: { in: capturedStatuses },
+      capturedAt: { not: null },
+    },
+    select: { amount: true, currency: true, capturedAt: true },
+  });
+  for (const payment of payments) assertCurrency(payment.currency);
+  const confirmedFor = (window: { start: Date; end: Date }) =>
+    sum(
+      payments.filter(
+        (payment) =>
+          payment.capturedAt !== null &&
+          payment.capturedAt >= window.start &&
+          payment.capturedAt < window.end,
+      ),
+    );
+  const reservations = await tx.spendReservation.findMany({
+    where: {
+      mandateId,
+      isSample: false,
+      proposal: { isSample: false },
+      status: ReservationStatus.ACTIVE,
+    },
+    select: {
+      id: true,
+      amount: true,
+      currency: true,
+      window: true,
+      expiresAt: true,
+      proposal: { select: { status: true, payment: true } },
+    },
+  });
+  type PolicyWindow = "DAILY" | "WEEKLY" | "MONTHLY";
+  const otherReservations = reservations
+    .filter((reservation) => {
+      if (reservation.expiresAt > now) return true;
+      const payment = reservation.proposal.payment;
+      // Mirrors spendContext: only an unpaid expired hold would be released.
+      return Boolean(
+        reservation.proposal.status === ProposalStatus.PAYMENT_PENDING ||
+        payment?.status === PaymentStatus.CAPTURE_PENDING ||
+        payment?.paypalCaptureId ||
+        (payment && capturedStatuses.includes(payment.status)),
+      );
+    })
+    .map((reservation) => {
+      assertCurrency(reservation.currency);
+      return {
+        id: reservation.id,
+        amount: safeMinor(reservation.amount, "reservation amount"),
+        currency: "USD" as const,
+        windows: (reservation.window === ReservationWindow.TRANSACTION
+          ? ["DAILY", "WEEKLY", "MONTHLY"]
+          : [reservation.window]) as PolicyWindow[],
+      };
+    });
+  const merchantPayments = await tx.payment.count({
+    where: {
+      userId,
+      isSample: false,
+      status: { in: capturedStatuses },
+      capturedAt: { not: null },
+      proposal: { productSnapshot: { merchant } },
+    },
+  });
+  return {
+    currency: "USD" as const,
+    confirmed: {
+      daily: safeMinor(confirmedFor(periods.daily), "daily confirmed spend"),
+      weekly: safeMinor(confirmedFor(periods.weekly), "weekly confirmed spend"),
+      monthly: safeMinor(confirmedFor(periods.monthly), "monthly confirmed spend"),
+    },
+    periods: {
+      daily: { startAt: periods.daily.start.toISOString(), endAt: periods.daily.end.toISOString() },
+      weekly: {
+        startAt: periods.weekly.start.toISOString(),
+        endAt: periods.weekly.end.toISOString(),
+      },
+      monthly: {
+        startAt: periods.monthly.start.toISOString(),
+        endAt: periods.monthly.end.toISOString(),
+      },
+    },
+    otherReservations,
+    isNewMerchant: merchantPayments === 0,
+  };
 }

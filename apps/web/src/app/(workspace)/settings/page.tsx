@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ArrowRight, Settings2, UserRound } from "lucide-react";
 import { AuthAutonomyToggle } from "@/components/auth-autonomy-toggle";
+import { SavedPayPalMethod } from "@/components/saved-payment-method";
+import { AgentConnections } from "@/components/agent-connections";
 import { WorkspacePage } from "../_components/workspace-page";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { getServerSession } from "@/lib/auth/server-api";
@@ -42,6 +44,8 @@ export default async function SettingsPage() {
         </section>
         <div className="min-w-0 space-y-6">
           <AuthAutonomyToggle initialEnabled={principal?.autonomousPurchasingEnabled ?? false} />
+          <SavedPayPalMethod />
+          <AgentConnections />
           <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
             <h2 className="text-lg font-medium">Payment environment</h2>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -54,15 +58,17 @@ export default async function SettingsPage() {
               </Link>
             </div>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
-              Checkout uses PayPal Sandbox. A permitted proposal may still need your approval in
-              PayPal before payment can complete.
+              Checkout, capture and refunds run in PayPal Sandbox with test accounts, so no real
+              money moves. Without a saved PayPal method, an allowed proposal still needs your
+              confirmation in PayPal before payment completes.
             </p>
           </section>
           <section className="border-t border-border pt-5">
             <h2 className="text-sm font-medium">Your rules always apply</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              Mandates control budgets, products, merchants, and expiry. Turning on automatic
-              permissions keeps those boundaries in place.
+              Mandates control budgets, products, stores, and expiry. Turning on automatic
+              permissions only removes the extra MandatePay approval within your automatic limit;
+              every other boundary stays in place.
             </p>
             <Link
               href="/mandates"

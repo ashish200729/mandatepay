@@ -41,22 +41,31 @@ function readRefund(value: unknown): PaymentRefund {
     amount: readMinor(value.amount, "refund.amount"),
     currency: "USD",
     paypalRefundId: readNullableString(value.paypalRefundId, "refund.paypalRefundId"),
+    providerInitiated: value.providerInitiated === true,
   };
 }
 
-export function isSafeSandboxApprovalUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+/** The only buyer-facing PayPal hosts: Sandbox and live checkout. */
+const PAYPAL_APPROVAL_HOSTS = new Set(["www.sandbox.paypal.com", "www.paypal.com"]);
+
+export function isSafePayPalApprovalUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048) return false;
   try {
     const url = new URL(value);
     return (
       url.protocol === "https:" &&
-      (url.hostname === "sandbox.paypal.com" || url.hostname === "www.sandbox.paypal.com") &&
+      PAYPAL_APPROVAL_HOSTS.has(url.hostname) &&
+      !url.port &&
       !url.username &&
       !url.password
     );
   } catch {
     return false;
   }
+}
+
+function readOptionalCode(value: unknown) {
+  return typeof value === "string" && /^[A-Z0-9_:]{1,128}$/.test(value) ? value : null;
 }
 
 export function readPayment(value: unknown): PaymentRecord {
@@ -94,6 +103,12 @@ export function readPayment(value: unknown): PaymentRecord {
     capturedAt: readNullableString(candidate.capturedAt, "capturedAt"),
     createdAt: readString(candidate.createdAt, "createdAt"),
     authorizationExpiresAt,
+    failureCode: readOptionalCode(candidate.failureCode),
+    providerStatusReason: readOptionalCode(candidate.providerStatusReason),
+    payerActionUrl: isSafePayPalApprovalUrl(candidate.payerActionUrl)
+      ? candidate.payerActionUrl
+      : null,
+    paymentSource: candidate.paymentSource === "vault" ? "vault" : "checkout",
     product: {
       title: readString(product.title, "product.title"),
       brand: readString(product.brand, "product.brand"),
@@ -147,7 +162,7 @@ export async function createPaypalOrder(proposalId: string) {
   });
   if (
     !isRecord(payload) ||
-    (payload.approvalUrl !== null && !isSafeSandboxApprovalUrl(payload.approvalUrl))
+    (payload.approvalUrl !== null && !isSafePayPalApprovalUrl(payload.approvalUrl))
   )
     throw new Error("PayPal returned an unsafe approval URL.");
   return {
@@ -222,13 +237,13 @@ export async function getPaypalStatus(): Promise<PayPalStatus> {
   if (
     !isRecord(payload) ||
     typeof payload.configured !== "boolean" ||
-    payload.environment !== "sandbox" ||
+    (payload.environment !== "sandbox" && payload.environment !== "live") ||
     typeof payload.webhookConfigured !== "boolean"
   )
     throw new Error("PayPal status response was not valid.");
   return {
     configured: payload.configured,
-    environment: "sandbox",
+    environment: payload.environment,
     webhookConfigured: payload.webhookConfigured,
   };
 }

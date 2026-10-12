@@ -577,8 +577,8 @@ export function WebhookControls({ webhook }: { webhook: AdminWebhook }) {
     <section className="space-y-4">
       <h2 className="text-lg font-medium">Webhook recovery</h2>
       <p className="text-sm text-muted-foreground">
-        Retry uses the verified inbox lease and five-attempt cap. Linked reconciliation reads the
-        matching PayPal order or refund without editing payloads.
+        Retry uses the verified inbox lease and the event’s attempt cap. Linked reconciliation reads
+        the matching PayPal order or refund without editing payloads.
       </p>
       <div className="flex flex-wrap gap-3">
         <Button

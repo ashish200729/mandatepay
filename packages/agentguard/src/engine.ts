@@ -337,6 +337,11 @@ function evaluateValidatedPurchase(context: PolicyContext): AgentGuardDecision {
     }
   }
 
+  // Product text that tries to instruct an AI agent is a hard rule: approval can't override it.
+  if (context.contentRisk === "malicious") {
+    addReasonCode(hardReasons, "PRODUCT_CONTENT_MALICIOUS");
+  }
+
   if (hardReasons.length > 0) {
     return freezeDecision("BLOCK", hardReasons, context.now);
   }
@@ -351,6 +356,10 @@ function evaluateValidatedPurchase(context: PolicyContext): AgentGuardDecision {
 
   if (context.mandate.rules.newMerchantRequiresApproval && context.product.isNewMerchant === true) {
     addReasonCode(approvalReasons, "NEW_MERCHANT_REQUIRES_APPROVAL");
+  }
+
+  if (context.contentRisk === "suspicious") {
+    addReasonCode(approvalReasons, "PRODUCT_CONTENT_SUSPICIOUS");
   }
 
   if (approvalReasons.length > 0) {

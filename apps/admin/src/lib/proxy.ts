@@ -1,4 +1,5 @@
 import "server-only";
+import { isIP } from "node:net";
 import { NextResponse } from "next/server";
 import { AdminTraceIdSchema, ADMIN_EXPORT_COLUMNS, parseAdminCsv } from "@mandatepay/shared";
 import { matchAdminProxy } from "./admin-routes";
@@ -17,13 +18,18 @@ const MESSAGES: Record<string, string> = {
   CONFLICT: "The record changed. Reload its current state before trying again.",
   INVALID_STATE: "The record is not in a valid state for this action.",
   ADMIN_RETRY_NOT_ALLOWED:
-    "Retry is limited to verified due failures or stale processing leases under the five-attempt cap.",
+    "Retry is limited to verified due failures or stale processing leases under the event’s attempt cap.",
   ADMIN_RECONCILE_FAILED:
     "Provider confirmation is pending. Check the current state before retrying.",
   ADMIN_ACTION_NOT_ALLOWED: "This action is not allowed in the current state.",
   ADMIN_SETTING_INVALID: "That platform setting is not valid. Reload and try again.",
   ADMIN_CONFIRMATION_REQUIRED: "Type the setting key to confirm this change.",
 };
+/** First X-Forwarded-For hop, set by the platform edge or by Next.js from the socket. */
+export function adminClientIp(request: Request) {
+  const candidate = request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() ?? "";
+  return candidate.length <= 64 && isIP(candidate) ? candidate : null;
+}
 function writesBody(method: string) {
   return method === "POST" || method === "PATCH";
 }
@@ -93,6 +99,13 @@ export async function proxyAdmin(request: Request, params: { path?: string[] }) 
   for (const name of ["cookie", "origin", "content-type", "user-agent"] as const) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
+  }
+  // The API keys admin sign-in limits on this address only when the shared secret matches.
+  const proxySecret = process.env.INTERNAL_PROXY_SECRET;
+  const clientIp = proxySecret ? adminClientIp(request) : null;
+  if (proxySecret && clientIp) {
+    headers.set("x-mandatepay-client-ip", clientIp);
+    headers.set("x-mandatepay-proxy-secret", proxySecret);
   }
   let body: Uint8Array | undefined;
   if (writesBody(request.method) && request.body) {

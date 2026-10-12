@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { buildForwardHeaders, isAllowedContentType, proxyToApi } from "./proxy";
+import {
+  buildForwardHeaders,
+  clientIpFrom,
+  isAllowedContentType,
+  proxyToApi,
+  relayEventStream,
+} from "./proxy";
 
 describe("auth API proxy", () => {
   afterEach(() => {
@@ -28,6 +34,83 @@ describe("auth API proxy", () => {
     expect(headers.get("authorization")).toBeNull();
     expect(headers.get("host")).toBeNull();
     expect(headers.get("content-length")).toBeNull();
+  });
+
+  it("forwards the first X-Forwarded-For hop with the internal proxy secret", () => {
+    const secret = "fixture-internal-proxy-secret-0123456789";
+    const request = new Request("http://127.0.0.1:3000/api/auth/sign-in/email", {
+      headers: {
+        "x-forwarded-for": "203.0.113.9, 10.0.0.2",
+        // Caller-supplied internal headers must never be relayed.
+        "x-mandatepay-client-ip": "198.51.100.66",
+        "x-mandatepay-proxy-secret": "caller-guess",
+      },
+    });
+
+    const headers = buildForwardHeaders(request, secret);
+
+    expect(headers.get("x-mandatepay-client-ip")).toBe("203.0.113.9");
+    expect(headers.get("x-mandatepay-proxy-secret")).toBe(secret);
+    expect(headers.get("x-forwarded-for")).toBeNull();
+  });
+
+  it("omits the client address without a secret or a valid forwarded hop", () => {
+    const secret = "fixture-internal-proxy-secret-0123456789";
+    const spoofed = new Request("http://127.0.0.1:3000/api/me", {
+      headers: {
+        "x-mandatepay-client-ip": "198.51.100.66",
+        "x-mandatepay-proxy-secret": "caller-guess",
+      },
+    });
+    for (const headers of [
+      buildForwardHeaders(spoofed, secret),
+      buildForwardHeaders(
+        new Request("http://127.0.0.1:3000/api/me", {
+          headers: { "x-forwarded-for": "not-an-address, 10.0.0.2" },
+        }),
+        secret,
+      ),
+      buildForwardHeaders(
+        new Request("http://127.0.0.1:3000/api/me", {
+          headers: { "x-forwarded-for": "203.0.113.9" },
+        }),
+        undefined,
+      ),
+    ]) {
+      expect(headers.get("x-mandatepay-client-ip")).toBeNull();
+      expect(headers.get("x-mandatepay-proxy-secret")).toBeNull();
+    }
+    expect(
+      clientIpFrom(
+        new Request("http://127.0.0.1:3000/api/me", {
+          headers: { "x-forwarded-for": " 2001:db8::1 , 10.0.0.2" },
+        }),
+      ),
+    ).toBe("2001:db8::1");
+  });
+
+  it("sends the configured proxy secret and client address upstream", async () => {
+    vi.stubEnv("INTERNAL_PROXY_SECRET", "fixture-internal-proxy-secret-0123456789");
+    try {
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response("{}", { status: 200 }));
+      await proxyToApi(
+        new Request("http://127.0.0.1:3000/api/auth/sign-in/email", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+          body: "{}",
+        }),
+        { path: ["auth", "sign-in", "email"] },
+      );
+      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(headers.get("x-mandatepay-client-ip")).toBe("203.0.113.9");
+      expect(headers.get("x-mandatepay-proxy-secret")).toBe(
+        "fixture-internal-proxy-secret-0123456789",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("allows JSON and browser form media types only", () => {
@@ -105,6 +188,26 @@ describe("auth API proxy", () => {
 
     expect(response.status).toBe(503);
     expect(await response.text()).not.toContain("database password");
+  });
+
+  it("explains a missing AI configuration without relaying upstream text", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        { code: "AI_NOT_CONFIGURED", error: "private provider payload" },
+        { status: 503 },
+      ),
+    );
+
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/mandates/parse", { method: "POST" }),
+      { path: ["mandates", "parse"] },
+    );
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toMatchObject({ code: "AI_NOT_CONFIGURED" });
+    expect(body.error).toContain("AI service is not configured");
+    expect(JSON.stringify(body)).not.toContain("private");
   });
 
   it.each([
@@ -259,6 +362,7 @@ describe("auth API proxy", () => {
     [503, "SHOPPING_AI_UNAVAILABLE", "AI service is unavailable"],
     [502, "SHOPPING_AI_RESPONSE_INVALID", "couldn’t read"],
     [503, "SHOPPING_TOOLS_UNAVAILABLE", "Product search or comparison"],
+    [503, "SHOPPING_AI_NOT_CONFIGURED", "AI service is not configured"],
     [500, "private unknown code", "temporarily unavailable"],
   ])(
     "retains safe chat failure guidance for %s %s and hides upstream details",
@@ -333,5 +437,205 @@ describe("auth API proxy", () => {
     expect(response.headers.get("location")).toBe("/reset-password?token=fake-token");
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(`/api/auth/${path}${query}`);
     expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+  });
+});
+
+describe("streaming chat proxy", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function sseResponse(chunks: string[], init: { fail?: boolean } = {}) {
+    const encoder = new TextEncoder();
+    let index = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (index < chunks.length) controller.enqueue(encoder.encode(chunks[index++]!));
+          else if (init.fail) controller.error(new TypeError("upstream reset"));
+          else controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+        },
+      },
+    );
+  }
+
+  it("relays each event without buffering, with no-transform headers and forwarded identity", async () => {
+    vi.stubEnv("INTERNAL_PROXY_SECRET", "fixture-internal-proxy-secret-0123456789");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        sseResponse([
+          'event: step\ndata: {"id":"mandate","label":"Reading your mandate","status":"running"}\n\n',
+          'event: result\ndata: {"message":"done"}\n\n',
+        ]),
+      );
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/agent/chat/stream", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: "better-auth.session_token=session",
+          "x-forwarded-for": "203.0.113.9",
+        },
+        body: "{}",
+      }),
+      { path: ["agent", "chat", "stream"] },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    const reader = response.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain('"id":"mandate"');
+    expect(first).not.toContain("result");
+    const second = new TextDecoder().decode((await reader.read()).value);
+    expect(second).toContain("event: result");
+    expect((await reader.read()).done).toBe(true);
+    const [target, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(target)).toMatch(/\/api\/agent\/chat\/stream$/u);
+    const headers = init?.headers as Headers;
+    expect(headers.get("cookie")).toBe("better-auth.session_token=session");
+    expect(headers.get("x-mandatepay-client-ip")).toBe("203.0.113.9");
+    expect(headers.get("x-mandatepay-proxy-secret")).toBe(
+      "fixture-internal-proxy-secret-0123456789",
+    );
+  });
+
+  it("ends a broken upstream stream with one safe error event", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse(['event: step\ndata: {"id":"catalog","label":"Searching","status":"run'], {
+        fail: true,
+      }),
+    );
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/agent/chat/stream", { method: "POST" }),
+      { path: ["agent", "chat", "stream"] },
+    );
+    const body = await response.text();
+    expect(body).toMatch(
+      /\n\nevent: error\ndata: \{"status":503,"code":"SHOPPING_STREAM_INTERRUPTED"/u,
+    );
+    expect(body).not.toContain("upstream reset");
+  });
+
+  it("reports the chat deadline as a timeout event", async () => {
+    const deadline = new AbortController();
+    deadline.abort();
+    const failing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(new DOMException("Aborted", "AbortError"));
+      },
+    });
+    const text = await new Response(relayEventStream(failing, deadline.signal)).text();
+    expect(text).toContain('"status":504,"code":"SHOPPING_TIMEOUT"');
+  });
+
+  it("cancels the upstream request when the browser goes away", async () => {
+    const cancel = vi.fn();
+    const upstream = new ReadableStream<Uint8Array>({ pull: () => undefined, cancel });
+    await relayEventStream(upstream, new AbortController().signal).cancel("client left");
+    expect(cancel).toHaveBeenCalledWith("client left");
+  });
+
+  it("keeps safe JSON errors and the chat deadline for checks before the stream", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ code: "SHOPPING_AI_UNAVAILABLE", error: "private body" }, { status: 503 }),
+    );
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/agent/chat/stream", { method: "POST" }),
+      { path: ["agent", "chat", "stream"] },
+    );
+    expect(timeout).toHaveBeenCalledWith(130_000);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: "SHOPPING_AI_UNAVAILABLE",
+      error: "The shopping assistant’s AI service is unavailable. Retry the same request shortly.",
+    });
+  });
+
+  it("passes through ordinary 4xx JSON from the stream route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ error: "Too many shopping requests." }, { status: 429 }),
+    );
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/agent/chat/stream", { method: "POST" }),
+      { path: ["agent", "chat", "stream"] },
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-accel-buffering")).toBeNull();
+  });
+
+  it("does not open other agent paths", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/agent/chat/other", { method: "POST" }),
+      { path: ["agent", "chat", "other"] },
+    );
+    expect(response.status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards the read-only mandate policy simulator", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ simulated: true, decision: "ALLOW" }));
+    const response = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/mandates/mandate-1/simulate", { method: "POST" }),
+      { path: ["mandates", "mandate-1", "simulate"] },
+    );
+    expect(response.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/api\/mandates\/mandate-1\/simulate$/);
+  });
+
+  it("forwards mandate credential reads, the JWKS and the verifier only", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => Response.json({}));
+    for (const path of [
+      "mandates/mandate-1/credentials",
+      "proposals/proposal-1/credentials",
+      "credentials/jwks",
+      "credentials/verify",
+    ]) {
+      const response = await proxyToApi(new Request(`http://127.0.0.1:3000/api/${path}`), {
+        path: path.split("/"),
+      });
+      expect(response.status).toBe(200);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    for (const path of ["credentials/other", "mandates/mandate-1/credentials/x", "credentials"]) {
+      const response = await proxyToApi(new Request(`http://127.0.0.1:3000/api/${path}`), {
+        path: path.split("/"),
+      });
+      expect(response.status).toBe(404);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("forwards agent token management but never the agent gateway", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({}));
+    for (const path of [["agent-tokens"], ["agent-tokens", "token-1", "revoke"]]) {
+      const response = await proxyToApi(
+        new Request(`http://127.0.0.1:3000/api/${path.join("/")}`, { method: "POST" }),
+        { path },
+      );
+      expect(response.status).toBe(200);
+    }
+    const gateway = await proxyToApi(
+      new Request("http://127.0.0.1:3000/api/agent-gateway/v1/mandates"),
+      { path: ["agent-gateway", "v1", "mandates"] },
+    );
+    expect(gateway.status).toBe(404);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

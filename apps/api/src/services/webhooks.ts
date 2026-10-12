@@ -2,6 +2,7 @@ import type { Prisma } from "@mandatepay/database";
 import {
   AuditEntityType,
   AuditEventType,
+  PaymentSource,
   PaymentStatus,
   ProposalStatus,
   RefundStatus,
@@ -9,7 +10,11 @@ import {
   type DatabaseClient,
   type Prisma as PrismaNamespace,
 } from "@mandatepay/database";
-import { WebhookProcessingStatus } from "@mandatepay/database";
+import {
+  WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_PENDING_MAX_ATTEMPTS,
+  WebhookProcessingStatus,
+} from "@mandatepay/database";
 import {
   PayPalClient,
   PayPalWebhookService,
@@ -19,12 +24,17 @@ import {
   type PayPalWebhookReconciler,
 } from "@mandatepay/paypal";
 import {
+  PayPalCaptureSchema,
   parseProviderMoney,
   type PayPalCapture,
   type PayPalOrder,
   type PayPalRefund,
 } from "@mandatepay/paypal";
 import type { PayPalWebhookEvent } from "@mandatepay/paypal";
+import { reconcileVaultTokenEvent } from "./payment-methods.js";
+import { createVaultCipher, type VaultCipher } from "./vault-crypto.js";
+
+type PaymentAuthoritativeData = Exclude<AuthoritativeWebhookData, { kind: "payment_token" }>;
 
 const PROCESSING_LEASE_MS = 5 * 60_000;
 
@@ -35,7 +45,38 @@ function jsonPayload(event: PayPalWebhookEvent): Prisma.InputJsonValue {
 export interface VerifiedWebhookRecoveryCandidate {
   readonly id: string;
   readonly attempts: number;
+  readonly awaitingProvider: boolean;
   readonly payload: unknown;
+}
+
+/**
+ * Per-row retry ceilings: events waiting on provider state retry for days on
+ * a long schedule; events whose processing failed keep the short policy.
+ */
+export interface WebhookRetryLimits {
+  readonly failed: number;
+  readonly pending: number;
+}
+
+export const DEFAULT_WEBHOOK_RETRY_LIMITS: WebhookRetryLimits = {
+  failed: WEBHOOK_MAX_ATTEMPTS,
+  pending: WEBHOOK_PENDING_MAX_ATTEMPTS,
+};
+
+function remainingWhere(limits: WebhookRetryLimits): PrismaNamespace.WebhookInboxWhereInput {
+  return {
+    OR: [
+      { awaitingProvider: false, attempts: { lt: limits.failed } },
+      { awaitingProvider: true, attempts: { lt: limits.pending } },
+    ],
+  };
+}
+
+export function webhookRowLimit(
+  row: { awaitingProvider: boolean },
+  limits: WebhookRetryLimits = DEFAULT_WEBHOOK_RETRY_LIMITS,
+) {
+  return row.awaitingProvider ? limits.pending : limits.failed;
 }
 
 export class PrismaWebhookInboxStore implements WebhookInboxStore {
@@ -113,7 +154,21 @@ export class PrismaWebhookInboxStore implements WebhookInboxStore {
     });
   }
 
+  /** Provider state is not ready: the recovery worker retries on the pending schedule. */
   async markPending(id: string, reason: string): Promise<void> {
+    await this.db.webhookInbox.update({
+      where: { id },
+      data: {
+        status: "FAILED",
+        lastError: reason.slice(0, 10_000),
+        nextAttemptAt: null,
+        awaitingProvider: true,
+      },
+    });
+  }
+
+  /** Processing failed: the recovery worker retries on the failure schedule. */
+  async markFailed(id: string, reason: string): Promise<void> {
     await this.db.webhookInbox.update({
       where: { id },
       data: { status: "FAILED", lastError: reason.slice(0, 10_000), nextAttemptAt: null },
@@ -127,13 +182,18 @@ export class PrismaWebhookInboxStore implements WebhookInboxStore {
     });
   }
 
-  async listRecoveryCandidates(now: Date, maxAttempts: number, leaseMs: number, take: number) {
+  async listRecoveryCandidates(
+    now: Date,
+    limits: WebhookRetryLimits,
+    leaseMs: number,
+    take: number,
+  ) {
     const leaseCutoff = new Date(now.getTime() - leaseMs);
     return this.db.webhookInbox.findMany({
       where: {
         provider: "paypal",
         signatureVerified: true,
-        attempts: { lt: maxAttempts },
+        AND: [remainingWhere(limits)],
         OR: [
           {
             status: WebhookProcessingStatus.FAILED,
@@ -151,7 +211,7 @@ export class PrismaWebhookInboxStore implements WebhookInboxStore {
   async claimVerifiedForReplay(
     id: string,
     now: Date,
-    maxAttempts: number,
+    limits: WebhookRetryLimits,
     leaseMs: number,
   ): Promise<VerifiedWebhookRecoveryCandidate | null> {
     return this.db.$transaction(async (tx) => {
@@ -161,7 +221,7 @@ export class PrismaWebhookInboxStore implements WebhookInboxStore {
         !row ||
         row.provider !== "paypal" ||
         !row.signatureVerified ||
-        row.attempts >= maxAttempts
+        row.attempts >= webhookRowLimit(row, limits)
       ) {
         return null;
       }
@@ -180,17 +240,30 @@ export class PrismaWebhookInboxStore implements WebhookInboxStore {
           nextAttemptAt: null,
         },
       });
-      return { id: claimed.id, attempts: claimed.attempts, payload: claimed.payload };
+      return {
+        id: claimed.id,
+        attempts: claimed.attempts,
+        awaitingProvider: claimed.awaitingProvider,
+        payload: claimed.payload,
+      };
     });
   }
 
-  async scheduleRetry(id: string, nextAttemptAt: Date | null, reason: string): Promise<void> {
+  async scheduleRetry(
+    id: string,
+    nextAttemptAt: Date | null,
+    reason: string,
+    options: { awaitingProvider?: boolean } = {},
+  ): Promise<void> {
     await this.db.webhookInbox.update({
       where: { id },
       data: {
         status: WebhookProcessingStatus.FAILED,
         nextAttemptAt,
         lastError: reason.slice(0, 10_000),
+        ...(options.awaitingProvider === undefined
+          ? {}
+          : { awaitingProvider: options.awaitingProvider }),
       },
     });
   }
@@ -284,16 +357,28 @@ function orderCaptureMatches(order: PayPalOrder, capture: PayPalCapture): boolea
   );
 }
 
-class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
-  constructor(private readonly db: DatabaseClient) {}
+const SETTLED_PAYMENT_STATUSES: readonly PaymentStatus[] = [
+  PaymentStatus.COMPLETED,
+  PaymentStatus.PARTIALLY_REFUNDED,
+  PaymentStatus.REFUNDED,
+  PaymentStatus.REVERSED,
+];
+const SAFE_REASON = /^[A-Z0-9_]{1,64}$/u;
 
-  async findPayment(authoritative: AuthoritativeWebhookData) {
+function safeReason(value: unknown): string | null {
+  return typeof value === "string" && SAFE_REASON.test(value) ? value : null;
+}
+
+class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
+  constructor(
+    private readonly db: DatabaseClient,
+    private readonly vault: VaultCipher | null = null,
+  ) {}
+
+  async findPayment(authoritative: PaymentAuthoritativeData) {
     const orderId =
       authoritative.kind === "order" ? authoritative.order.id : (authoritative.order?.id ?? null);
-    const captureId =
-      authoritative.kind === "capture" || authoritative.kind === "refund"
-        ? (authoritative.capture?.id ?? null)
-        : null;
+    const captureId = authoritative.kind === "order" ? null : (authoritative.capture?.id ?? null);
     const payments = await this.db.payment.findMany({
       where: {
         isSample: false,
@@ -308,14 +393,43 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
         refunds: { where: { isSample: false } },
       },
     });
-    return payments.length === 1 ? payments[0] : null;
+    if (payments.length === 1) return payments[0];
+    if (payments.length > 1) return null;
+    // A Vault order whose create response was lost is not bound locally yet.
+    // PayPal's own order carries our payment id (reference_id) and proposal id
+    // (custom_id); the binding is re-checked under the payment lock.
+    const unit =
+      authoritative.order?.purchase_units?.length === 1
+        ? authoritative.order.purchase_units[0]
+        : undefined;
+    if (!unit?.reference_id || !unit.custom_id) return null;
+    return (
+      (await this.db.payment.findFirst({
+        where: {
+          id: unit.reference_id,
+          proposalId: unit.custom_id,
+          paypalOrderId: null,
+          paymentSource: PaymentSource.VAULT,
+          isSample: false,
+          proposal: { isSample: false },
+        },
+        include: {
+          proposal: { include: { productSnapshot: true, reservation: true } },
+          refunds: { where: { isSample: false } },
+        },
+      })) ?? null
+    );
   }
 
   async reconcile(input: {
     event: PayPalWebhookEvent;
     authoritative: AuthoritativeWebhookData;
   }): Promise<"processed" | "pending" | "ignored"> {
-    const candidate = await this.findPayment(input.authoritative);
+    if (input.authoritative.kind === "payment_token") {
+      return reconcileVaultTokenEvent(this.db, this.vault, input.event, input.authoritative);
+    }
+    const authoritative = input.authoritative;
+    const candidate = await this.findPayment(authoritative);
     if (!candidate) return "ignored";
 
     return this.db.$transaction(async (tx) => {
@@ -323,7 +437,7 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
       await tx.$queryRaw`SELECT id FROM "Mandate" WHERE id = ${candidate.mandateId} FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM "PurchaseProposal" WHERE id = ${candidate.proposalId} FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM "Payment" WHERE id = ${candidate.id} FOR UPDATE`;
-      const payment = await tx.payment.findUnique({
+      let payment = await tx.payment.findUnique({
         where: { id: candidate.id },
         include: {
           proposal: { include: { productSnapshot: true, reservation: true } },
@@ -331,27 +445,74 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
         },
       });
       if (!payment) return "ignored";
+      if (!payment.paypalOrderId) {
+        // Only an unbound Vault payment reaches here; bind it to PayPal's order
+        // when that order names this payment, proposal and amount exactly.
+        const order = authoritative.order;
+        if (
+          payment.paymentSource !== PaymentSource.VAULT ||
+          !order ||
+          !orderBindingMatches(payment, order)
+        ) {
+          return "ignored";
+        }
+        payment = await tx.payment.update({
+          where: { id: payment.id },
+          data: { paypalOrderId: order.id },
+          include: {
+            proposal: { include: { productSnapshot: true, reservation: true } },
+            refunds: { where: { isSample: false } },
+          },
+        });
+        await tx.auditEvent.create({
+          data: {
+            userId: payment.userId,
+            eventType: AuditEventType.PAYPAL_ORDER_CREATED,
+            entityType: AuditEntityType.PAYMENT,
+            entityId: payment.id,
+            dedupeKey: `paypal-order-created:${payment.id}`,
+            payload: {
+              paymentId: payment.id,
+              proposalId: payment.proposalId,
+              paypalOrderId: order.id,
+              amount: Number(payment.amount),
+              currency: payment.currency,
+              source: "verified_webhook",
+            },
+          },
+        });
+      }
 
-      if (input.authoritative.kind === "order") {
-        return this.reconcileOrder(tx, payment, input.event, input.authoritative.order);
+      switch (authoritative.kind) {
+        case "order":
+          return this.reconcileOrder(tx, payment, input.event, authoritative.order);
+        case "capture":
+          return this.reconcileCapture(
+            tx,
+            payment,
+            input.event,
+            authoritative.capture,
+            authoritative.order,
+          );
+        case "refund":
+          return this.reconcileRefund(
+            tx,
+            payment,
+            input.event,
+            authoritative.refund,
+            authoritative.capture,
+            authoritative.order,
+          );
+        case "reversal":
+          return this.reconcileReversal(
+            tx,
+            payment,
+            input.event,
+            authoritative.capture,
+            authoritative.refund,
+            authoritative.order,
+          );
       }
-      if (input.authoritative.kind === "capture") {
-        return this.reconcileCapture(
-          tx,
-          payment,
-          input.event,
-          input.authoritative.capture,
-          input.authoritative.order,
-        );
-      }
-      return this.reconcileRefund(
-        tx,
-        payment,
-        input.event,
-        input.authoritative.refund,
-        input.authoritative.capture,
-        input.authoritative.order,
-      );
     });
   }
 
@@ -366,12 +527,19 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
     if (payment.paypalOrderId !== order.id) return "ignored";
     if (!orderBindingMatches(payment, order)) return "ignored";
     if (order.status !== "APPROVED" && order.status !== "COMPLETED") return "pending";
-    if (
-      payment.status === PaymentStatus.COMPLETED ||
-      payment.status === PaymentStatus.REFUNDED ||
-      payment.status === PaymentStatus.PARTIALLY_REFUNDED
-    ) {
-      return "processed";
+    if (SETTLED_PAYMENT_STATUSES.includes(payment.status)) return "processed";
+    if (payment.status === PaymentStatus.DENIED || payment.status === PaymentStatus.FAILED) {
+      return order.status === "COMPLETED" ? "pending" : "processed";
+    }
+    if (order.status === "COMPLETED") {
+      // CHECKOUT.ORDER.COMPLETED: settle from the order's own authoritative capture.
+      const capture = singleOrderCapture(order);
+      if (!capture) return "pending";
+      if (capture.status === "PENDING") {
+        return this.recordPendingCapture(tx, payment, event, capture);
+      }
+      if (capture.status !== "COMPLETED") return "pending";
+      return this.completeCapture(tx, payment, event, capture, order);
     }
     if (payment.status !== PaymentStatus.CREATED && payment.status !== PaymentStatus.APPROVED) {
       return "pending";
@@ -379,7 +547,7 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
     if (payment.status === PaymentStatus.CREATED) {
       await tx.payment.update({
         where: { id: payment.id },
-        data: { status: PaymentStatus.APPROVED },
+        data: { status: PaymentStatus.APPROVED, providerStatusReason: null, payerActionUrl: null },
       });
       await this.audit(tx, payment, event, AuditEventType.PAYPAL_ORDER_APPROVED, {
         paypalOrderId: order.id,
@@ -418,14 +586,8 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
     if (!providerTime) return "pending";
 
     if (event.event_type === "PAYMENT.CAPTURE.DENIED") {
-      if (capture.status !== "DECLINED") return "pending";
-      if (
-        payment.status === PaymentStatus.COMPLETED ||
-        payment.status === PaymentStatus.REFUNDED ||
-        payment.status === PaymentStatus.PARTIALLY_REFUNDED
-      ) {
-        return "ignored";
-      }
+      if (capture.status !== "DECLINED" && capture.status !== "FAILED") return "pending";
+      if (SETTLED_PAYMENT_STATUSES.includes(payment.status)) return "ignored";
       if (payment.status === PaymentStatus.DENIED || payment.status === PaymentStatus.FAILED) {
         return "processed";
       }
@@ -438,7 +600,12 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
       }
       await tx.payment.update({
         where: { id: payment.id },
-        data: { status: PaymentStatus.DENIED, failureCode: "PAYPAL_CAPTURE_DENIED" },
+        data: {
+          status: PaymentStatus.DENIED,
+          failureCode: "PAYPAL_CAPTURE_DENIED",
+          providerStatusReason: safeReason(capture.status_details?.reason),
+          payerActionUrl: null,
+        },
       });
       await tx.purchaseProposal.update({
         where: { id: payment.proposalId },
@@ -457,22 +624,75 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
       return "processed";
     }
 
+    if (event.event_type === "PAYMENT.CAPTURE.PENDING" && capture.status === "PENDING") {
+      return this.recordPendingCapture(tx, payment, event, capture);
+    }
+
     if (capture.status !== "COMPLETED") return "pending";
-    if (
-      payment.status === PaymentStatus.COMPLETED ||
-      payment.status === PaymentStatus.REFUNDED ||
-      payment.status === PaymentStatus.PARTIALLY_REFUNDED
-    ) {
+    return this.completeCapture(tx, payment, event, capture, order);
+  }
+
+  /** Records a held capture and its reason; completion arrives as a later event. */
+  private async recordPendingCapture(
+    tx: TransactionClient,
+    payment: NonNullable<PaymentWithBindings>,
+    event: PayPalWebhookEvent,
+    capture: PayPalCapture,
+  ): Promise<"processed" | "pending" | "ignored"> {
+    if (SETTLED_PAYMENT_STATUSES.includes(payment.status)) return "processed";
+    if (payment.status === PaymentStatus.DENIED || payment.status === PaymentStatus.FAILED) {
+      return "ignored";
+    }
+    if (payment.paypalCaptureId && payment.paypalCaptureId !== capture.id) return "ignored";
+    const reason = safeReason(capture.status_details?.reason) ?? "PENDING";
+    await tx.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: PaymentStatus.CAPTURE_PENDING,
+        paypalCaptureId: capture.id,
+        providerStatusReason: reason,
+        payerActionUrl: null,
+      },
+    });
+    if (payment.proposal.status !== ProposalStatus.PAYMENT_PENDING) {
+      await tx.purchaseProposal.update({
+        where: { id: payment.proposalId },
+        data: { status: ProposalStatus.PAYMENT_PENDING },
+      });
+    }
+    await this.audit(tx, payment, event, AuditEventType.PAYMENT_CAPTURE_REQUESTED, {
+      paypalCaptureId: capture.id,
+      providerStatus: "PENDING",
+      providerStatusReason: reason,
+    });
+    return "processed";
+  }
+
+  private async completeCapture(
+    tx: TransactionClient,
+    payment: NonNullable<PaymentWithBindings>,
+    event: PayPalWebhookEvent,
+    capture: PayPalCapture,
+    order: PayPalOrder | null,
+  ): Promise<"processed" | "pending" | "ignored"> {
+    if (SETTLED_PAYMENT_STATUSES.includes(payment.status)) {
       return payment.paypalCaptureId === capture.id ? "processed" : "ignored";
     }
     if (payment.status === PaymentStatus.DENIED || payment.status === PaymentStatus.FAILED) {
       return "ignored";
     }
-    if (
-      payment.status !== PaymentStatus.APPROVED &&
-      payment.status !== PaymentStatus.CAPTURE_PENDING
-    ) {
-      return "pending";
+    if (payment.paypalCaptureId && payment.paypalCaptureId !== capture.id) return "ignored";
+    const providerTime = providerResourceTimestamp(capture);
+    if (!providerTime) return "pending";
+    let amount: bigint;
+    try {
+      amount = BigInt(parseProviderMoney(capture.amount));
+    } catch {
+      return "ignored";
+    }
+    if (amount !== payment.amount || payment.currency !== "USD") return "ignored";
+    if (capture.custom_id !== undefined && capture.custom_id !== payment.proposalId) {
+      return "ignored";
     }
     const reservation = payment.proposal.reservation;
     if (!reservation || reservation.status !== ReservationStatus.ACTIVE) return "pending";
@@ -483,6 +703,8 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
         status: PaymentStatus.COMPLETED,
         paypalCaptureId: capture.id,
         capturedAt: providerTime,
+        providerStatusReason: null,
+        payerActionUrl: null,
       },
     });
     await tx.purchaseProposal.update({
@@ -543,7 +765,9 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
     const existing =
       refunds.find((item) => item.paypalRefundId === refund.id) ??
       (refund.invoice_id ? refunds.find((item) => item.id === refund.invoice_id) : undefined);
-    if (!existing) return "ignored";
+    if (!existing) {
+      return this.recordProviderInitiatedRefund(tx, payment, event, refund, amount, providerTime);
+    }
     if (existing.amount !== amount || existing.currency !== "USD") return "ignored";
     if (existing.status === RefundStatus.COMPLETED) return "processed";
     if (
@@ -557,6 +781,67 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
       where: { id: existing.id },
       data: { paypalRefundId: refund.id, status: RefundStatus.COMPLETED, settledAt: providerTime },
     });
+    await this.updateRefundedStatus(tx, payment);
+    await this.audit(tx, payment, event, AuditEventType.REFUND_COMPLETED, {
+      paypalRefundId: refund.id,
+      amountMinor: amount.toString(),
+    });
+    return "processed";
+  }
+
+  /**
+   * A completed refund for a known capture that MandatePay did not submit
+   * (for example from the PayPal dashboard). The refund was re-fetched from
+   * PayPal; it is recorded once and only within the captured amount.
+   */
+  private async recordProviderInitiatedRefund(
+    tx: TransactionClient,
+    payment: NonNullable<PaymentWithBindings>,
+    event: PayPalWebhookEvent,
+    refund: PayPalRefund,
+    amount: bigint,
+    settledAt: Date,
+  ): Promise<"processed" | "pending" | "ignored"> {
+    if (
+      payment.status !== PaymentStatus.COMPLETED &&
+      payment.status !== PaymentStatus.PARTIALLY_REFUNDED &&
+      payment.status !== PaymentStatus.REFUNDED &&
+      payment.status !== PaymentStatus.REVERSED
+    ) {
+      return "pending";
+    }
+    const completed = payment.refunds
+      .filter((item) => item.status === RefundStatus.COMPLETED)
+      .reduce((total, item) => total + item.amount, 0n);
+    if (completed + amount > payment.amount) return "ignored";
+    await tx.refund.create({
+      data: {
+        paymentId: payment.id,
+        userId: payment.userId,
+        paypalRefundId: refund.id,
+        amount,
+        currency: "USD",
+        status: RefundStatus.COMPLETED,
+        providerInitiated: true,
+        reason: "Refund issued in PayPal outside MandatePay.",
+        idempotencyKey: `paypal-provider-refund:${refund.id}`.slice(0, 255),
+        settledAt,
+      },
+    });
+    await this.updateRefundedStatus(tx, payment);
+    await this.audit(tx, payment, event, AuditEventType.REFUND_COMPLETED, {
+      paypalRefundId: refund.id,
+      amountMinor: amount.toString(),
+      providerInitiated: "true",
+    });
+    return "processed";
+  }
+
+  private async updateRefundedStatus(
+    tx: TransactionClient,
+    payment: NonNullable<PaymentWithBindings>,
+  ) {
+    if (payment.status === PaymentStatus.REVERSED) return;
     const aggregate = await tx.refund.aggregate({
       where: { paymentId: payment.id, isSample: false, status: RefundStatus.COMPLETED },
       _sum: { amount: true },
@@ -570,9 +855,52 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
             : PaymentStatus.PARTIALLY_REFUNDED,
       },
     });
-    await this.audit(tx, payment, event, AuditEventType.REFUND_COMPLETED, {
-      paypalRefundId: refund.id,
-      amountMinor: amount.toString(),
+  }
+
+  /** A chargeback/reversal of a captured payment, verified against PayPal's capture. */
+  private async reconcileReversal(
+    tx: TransactionClient,
+    payment: NonNullable<PaymentWithBindings>,
+    event: PayPalWebhookEvent,
+    capture: PayPalCapture,
+    reversal: PayPalRefund | null,
+    order: PayPalOrder | null,
+  ): Promise<"processed" | "pending" | "ignored"> {
+    const eventResourceId = typeof event.resource.id === "string" ? event.resource.id : null;
+    if (!eventResourceId || eventResourceId !== (reversal?.id ?? capture.id)) return "ignored";
+    if (capture.id !== payment.paypalCaptureId) return "ignored";
+    if (order && (payment.paypalOrderId !== order.id || !orderBindingMatches(payment, order))) {
+      return "ignored";
+    }
+    if (
+      !customIdMatches(payment, [
+        ...captureCustomIds(capture),
+        ...(order ? orderCustomIds(order) : []),
+      ])
+    ) {
+      return "ignored";
+    }
+    let captureAmount: bigint;
+    let reversedAmount: bigint;
+    try {
+      captureAmount = BigInt(parseProviderMoney(capture.amount));
+      reversedAmount = reversal ? BigInt(parseProviderMoney(reversal.amount)) : captureAmount;
+    } catch {
+      return "ignored";
+    }
+    if (captureAmount !== payment.amount || payment.currency !== "USD") return "ignored";
+    if (reversedAmount <= 0n || reversedAmount > payment.amount) return "ignored";
+    if (payment.status === PaymentStatus.REVERSED) return "processed";
+    if (!SETTLED_PAYMENT_STATUSES.includes(payment.status)) return "pending";
+    await tx.payment.update({
+      where: { id: payment.id },
+      data: { status: PaymentStatus.REVERSED, providerStatusReason: "CAPTURE_REVERSED" },
+    });
+    await this.audit(tx, payment, event, AuditEventType.PAYMENT_REVERSED, {
+      paypalCaptureId: capture.id,
+      paypalReversalId: reversal?.id ?? null,
+      amountMinor: reversedAmount.toString(),
+      previousStatus: payment.status,
     });
     return "processed";
   }
@@ -597,13 +925,28 @@ class PrismaWebhookReconcilerImpl implements PayPalWebhookReconciler {
   }
 }
 
+function singleOrderCapture(order: PayPalOrder): PayPalCapture | null {
+  const units = order.purchase_units ?? [];
+  if (units.length !== 1) return null;
+  const captures = units[0]?.payments?.captures ?? [];
+  if (captures.length !== 1) return null;
+  const parsed = PayPalCaptureSchema.safeParse(captures[0]);
+  return parsed.success ? parsed.data : null;
+}
+
 export function createPayPalWebhookService(
   database: DatabaseClient,
   paypal: PayPalClient,
+  options: { readonly vaultCipher?: VaultCipher | null } = {},
 ): PayPalWebhookService {
+  // Vault events are matched by a keyed hash; without a valid key they are ignored.
+  const vault =
+    options.vaultCipher === undefined
+      ? createVaultCipher(process.env.TOKEN_ENCRYPTION_KEY)
+      : options.vaultCipher;
   return new PayPalWebhookService(
     paypal,
     new PrismaWebhookInboxStore(database),
-    new PrismaWebhookReconcilerImpl(database),
+    new PrismaWebhookReconcilerImpl(database, vault),
   );
 }

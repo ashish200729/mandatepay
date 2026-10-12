@@ -88,7 +88,8 @@ describe("controlled demo catalog and server proposals", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().mode).toBe("demo");
-    expect(response.json().products).toHaveLength(3);
+    // Six headphone scenarios plus the red-team open-box listing.
+    expect(response.json().products).toHaveLength(7);
     expect(response.json().notice).toContain("Demo Catalog");
     expect(
       (

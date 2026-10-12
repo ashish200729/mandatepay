@@ -54,6 +54,11 @@
       "key": "refundRequestKey",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "vaultConsentVersion",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -189,6 +194,33 @@
       }
     },
     {
+      "name": "Simulate a purchase against a mandate",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/mandates/{{mandateId}}/simulate",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"price\": 16900,\n  \"quantity\": 1,\n  \"condition\": \"NEW\",\n  \"brand\": \"Sony\",\n  \"category\": \"Headphones\",\n  \"merchant\": \"Mandate Demo Store\",\n  \"shipping\": 0,\n  \"tax\": 0\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Read-only AgentGuard verdict for a hypothetical purchase (amounts in cents). Returns { simulated, decision, reasonCodes, explanation, mandate, facts }. Creates no proposal, reservation or audit row. 60 per user per minute."
+      }
+    },
+    {
       "name": "Search controlled catalog",
       "request": {
         "method": "POST",
@@ -240,6 +272,33 @@
           }
         },
         "description": "Keep the same request key when retrying a request. The model can propose; it cannot approve or pay."
+      }
+    },
+    {
+      "name": "Shopping agent (streamed)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/agent/chat/stream",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"Find Sony headphones and prepare one proposal for review.\",\n  \"mandateId\": \"{{mandateId}}\",\n  \"requestKey\": \"{{shoppingRequestKey}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Same body and checks as Shopping agent. Answers text/event-stream: `step` events ({ id, label, status }), then exactly one `result` (the POST /api/agent/chat JSON body, including excludedProducts) or `error` ({ status, error, code? }). Checks that fail before the run starts return ordinary JSON errors."
       }
     },
     {
@@ -309,7 +368,8 @@
             "value": "application/json"
           }
         ],
-        "url": "{{apiUrl}}/api/proposals/{{proposalId}}"
+        "url": "{{apiUrl}}/api/proposals/{{proposalId}}",
+        "description": "The decision includes a deterministic explanation { decision, headline, summary, approvalCanOverride, checks[] } derived from the recorded verdict."
       }
     },
     {
@@ -340,6 +400,24 @@
       }
     },
     {
+      "name": "PayPal status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/paypal/status",
+        "description": "Returns { configured, environment: \"sandbox\" | \"live\", webhookConfigured }. Never returns credentials."
+      }
+    },
+    {
       "name": "Create Sandbox order",
       "request": {
         "method": "POST",
@@ -363,7 +441,7 @@
             }
           }
         },
-        "description": "Explicit Sandbox financial operation. Open the returned PayPal approval URL using a separate personal Sandbox buyer."
+        "description": "Explicit Sandbox financial operation. Open the returned PayPal approval URL using a separate personal Sandbox buyer. Returns { payment, approvalUrl, pending }: 202 with pending true and approvalUrl null when PayPal's outcome is unknown (send again to replay the same request ID); 422 PAYPAL_REQUEST_REJECTED when PayPal refused the order (nothing was created)."
       }
     },
     {
@@ -391,6 +469,33 @@
           }
         },
         "description": "paymentId is MandatePay's local payment ID, not a PayPal order ID. Requires actual Sandbox payer approval. Retrying uses server-stored idempotency."
+      }
+    },
+    {
+      "name": "Check Sandbox order status",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/paypal/orders/{{paymentId}}/reconcile",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Provider reads only for the local paymentId; never creates an order or capture. Returns { payment, pending } (202 while pending)."
       }
     },
     {
@@ -452,6 +557,204 @@
           }
         },
         "description": "Explicit $20 refund of an owned capture. Set a fresh key only for a new intentional refund; retain this key/details for retries."
+      }
+    },
+    {
+      "name": "Check refund status",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payments/{{paymentId}}/refund-status",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Provider reads only for the payment's pending refunds. 202 while still pending."
+      }
+    },
+    {
+      "name": "Saved PayPal method",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payment-methods/paypal",
+        "description": "Returns { paymentMethod } with status NONE, SETUP_PENDING, ACTIVE, REMOVAL_PENDING or REVOKED and currentConsentVersion. The PayPal token ID is never returned."
+      }
+    },
+    {
+      "name": "Start saving PayPal (consent)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payment-methods/paypal/setup",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"consent\": true,\n  \"consentVersion\": \"{{vaultConsentVersion}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Set vaultConsentVersion to paymentMethod.currentConsentVersion after reading the consent text in Settings. Returns { paymentMethod, approvalUrl }; approve at PayPal with a personal Sandbox buyer, then send Complete."
+      }
+    },
+    {
+      "name": "Complete saving PayPal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payment-methods/paypal/complete",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Confirms the PayPal approval and stores the encrypted token. Returns { paymentMethod }."
+      }
+    },
+    {
+      "name": "Cancel saving PayPal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payment-methods/paypal/cancel",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Abandons a pending setup. Returns { paymentMethod }."
+      }
+    },
+    {
+      "name": "Remove saved PayPal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/payment-methods/paypal/remove",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Deletes the token at PayPal, then revokes it locally. 202 with REMOVAL_PENDING while PayPal has not confirmed."
+      }
+    },
+    {
+      "name": "Autopay preview",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/proposals/{{proposalId}}/autopay",
+        "description": "Read-only. Returns { autopay: { eligible, reason, paymentMethodStatus, payment } }."
+      }
+    },
+    {
+      "name": "Autopay with saved PayPal",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Origin",
+            "value": "{{appUrl}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{apiUrl}}/api/proposals/{{proposalId}}/autopay",
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Explicit Sandbox financial operation: pays an AgentGuard ALLOW proposal within the automatic limit buyer-not-present. Returns { autopay: { outcome: PAID | PENDING | FALLBACK | NOT_ELIGIBLE | FAILED, reason, payment }, proposal, decision }; 202 when PENDING. Send again to replay the same request; it never creates a second order."
       }
     },
     {

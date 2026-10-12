@@ -12,6 +12,7 @@ import {
   type ProductCondition,
 } from "@mandatepay/shared";
 import { minorUnitsSchema } from "@mandatepay/shared";
+import { ContentRiskSchema } from "./content-screen.js";
 
 export const AGENTGUARD_EXTRA_REASON_CODES = [
   "INVALID_POLICY_INPUT",
@@ -24,6 +25,8 @@ export const AGENTGUARD_EXTRA_REASON_CODES = [
   "PRODUCT_PRICE_MISMATCH",
   "CURRENCY_MISMATCH",
   "SPEND_CONTEXT_INVALID",
+  "PRODUCT_CONTENT_SUSPICIOUS",
+  "PRODUCT_CONTENT_MALICIOUS",
 ] as const;
 
 export const AGENTGUARD_REASON_CODES = [
@@ -153,6 +156,11 @@ export const PolicyContextSchema = z
     product: ProductFactsSchema,
     spend: SpendContextSchema,
     globalAutonomousPurchasingEnabled: z.boolean(),
+    /**
+     * Server-side screening of the authoritative product text for prompt-injection
+     * indicators. "malicious" is a hard block; "suspicious" needs human approval.
+     */
+    contentRisk: ContentRiskSchema.optional(),
   })
   .strict();
 

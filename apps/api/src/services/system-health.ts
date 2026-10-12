@@ -1,5 +1,10 @@
 import { DEMO_CATALOG } from "@mandatepay/channel3";
-import { ObservabilityRepository, type ObservabilityClient } from "@mandatepay/database";
+import {
+  ObservabilityRepository,
+  PaymentSource,
+  PaymentStatus,
+  type ObservabilityClient,
+} from "@mandatepay/database";
 import {
   DATABASE_SLOW_MS,
   PROBE_CACHE_MS,
@@ -11,8 +16,99 @@ import {
   type AdminIntegrationHealth,
   type AdminSystemHealth,
   type AdminWorkerHealth,
+  type AdminWorkerName,
   type HealthStatus,
 } from "@mandatepay/shared";
+
+type WorkerSnapshot = AdminWorkerHealth["workers"][number];
+
+/**
+ * An autonomous (Vault) payment whose PayPal create-order outcome is unknown
+ * has no order id. The reconcile worker replays it while that is safe; one
+ * still unbound after this age is held (saved method removed, switches off,
+ * replay window elapsed or PayPal unreachable) and needs an operator, because
+ * its reservation must not be released while PayPal may have charged it.
+ */
+export const UNBOUND_VAULT_ATTENTION_MS = 30 * 60_000;
+
+export function unboundVaultPaymentWhere(now: Date) {
+  return {
+    status: PaymentStatus.CAPTURE_PENDING,
+    paymentSource: PaymentSource.VAULT,
+    paypalOrderId: null,
+    isSample: false,
+    updatedAt: { lte: new Date(now.getTime() - UNBOUND_VAULT_ATTENTION_MS) },
+  };
+}
+
+export async function countUnboundVaultPayments(database: ObservabilityClient, now: Date) {
+  return database.payment.count({ where: unboundVaultPaymentWhere(now) });
+}
+type HeartbeatRow = Awaited<ReturnType<ObservabilityRepository["latestWorker"]>>["row"];
+
+function emptyWorker(worker: AdminWorkerName): WorkerSnapshot {
+  return {
+    worker,
+    status: "unknown",
+    runId: null,
+    startedAt: null,
+    heartbeatAt: null,
+    completedAt: null,
+    outcome: null,
+    errorCode: null,
+    counts: { scanned: 0, claimed: 0, processed: 0, ignored: 0, pending: 0, exhausted: 0 },
+  };
+}
+
+/**
+ * One scheduled job's liveness from its latest heartbeat row: missing is
+ * unknown; older than 15 minutes, failed or skipped is degraded.
+ */
+export function workerHealth(input: {
+  worker: AdminWorkerName;
+  id: "worker" | "reconcileWorker";
+  row: HeartbeatRow;
+  enabled: boolean | null;
+  now: Date;
+}): { component: AdminHealthComponent; snapshot: WorkerSnapshot } {
+  const { row } = input;
+  const liveness = workerLiveness({
+    heartbeatAt: row?.heartbeatAt ?? null,
+    outcome: row?.outcome ?? null,
+    now: input.now,
+    worker: input.worker,
+  });
+  return {
+    component: component({
+      id: input.id,
+      status: liveness.status,
+      configured: true,
+      enabled: input.enabled,
+      summary: liveness.summary,
+      lastSuccessAt: row?.outcome === "SUCCEEDED" && row.completedAt ? iso(row.completedAt) : null,
+    }),
+    snapshot: row
+      ? {
+          worker: input.worker,
+          status: liveness.status,
+          runId: row.runId,
+          startedAt: iso(row.startedAt),
+          heartbeatAt: iso(row.heartbeatAt),
+          completedAt: row.completedAt ? iso(row.completedAt) : null,
+          outcome: row.outcome,
+          errorCode: row.errorCode === "WORKER_FAILED" ? "WORKER_FAILED" : null,
+          counts: {
+            scanned: row.scanned,
+            claimed: row.claimed,
+            processed: row.processed,
+            ignored: row.ignored,
+            pending: row.pending,
+            exhausted: row.exhausted,
+          },
+        }
+      : emptyWorker(input.worker),
+  };
+}
 
 export type IntegrationProbe = {
   status: "ready" | "degraded" | "unavailable";
@@ -151,6 +247,7 @@ export async function readSystemHealth(input: {
 
   let database: AdminHealthComponent;
   let worker: AdminHealthComponent;
+  let reconcileWorker: AdminHealthComponent;
   let webhooks: AdminHealthComponent;
   let agent: AdminHealthComponent;
   let checkoutEnabled: boolean | null = null;
@@ -158,17 +255,10 @@ export async function readSystemHealth(input: {
   let demoEnabled: boolean | null = null;
   let agentEnabled: boolean | null = null;
   let lastReconcileAt: Date | null = null;
-  let workerHealth: AdminWorkerHealth["workers"][number] = {
-    worker: "paypal-webhook-recovery",
-    status: "unknown",
-    runId: null,
-    startedAt: null,
-    heartbeatAt: null,
-    completedAt: null,
-    outcome: null,
-    errorCode: null,
-    counts: { scanned: 0, claimed: 0, processed: 0, ignored: 0, pending: 0, exhausted: 0 },
-  };
+  let workerSnapshots: WorkerSnapshot[] = [
+    emptyWorker("paypal-webhook-recovery"),
+    emptyWorker("paypal-payment-reconcile"),
+  ];
   const repository = new ObservabilityRepository(input.database);
 
   try {
@@ -185,53 +275,48 @@ export async function readSystemHealth(input: {
       latencyMs,
       lastSuccessAt: observedAt,
     });
-    const [latest, operations, latestRun, reconcile, rows] = await Promise.all([
-      repository.latestWorker(now),
-      repository.webhookOperations(now),
-      repository.latestAgentRun(),
-      repository.lastSuccessfulReconcile(),
-      repository.platformControlRows(),
-    ]);
+    const [latest, latestReconcile, operations, latestRun, reconcile, rows, unboundVault] =
+      await Promise.all([
+        repository.latestWorker(now),
+        repository.latestWorker(now, "paypal-payment-reconcile"),
+        repository.webhookOperations(now),
+        repository.latestAgentRun(),
+        repository.lastSuccessfulReconcile(),
+        repository.platformControlRows(),
+        countUnboundVaultPayments(input.database, now),
+      ]);
     const resolved = resolvePlatformControls(rows);
     checkoutEnabled = resolved["payments.checkoutEnabled"];
     channel3Enabled = resolved["discovery.channel3Enabled"];
     demoEnabled = resolved["discovery.demoCatalogEnabled"];
     agentEnabled = resolved["agent.enabled"];
     lastReconcileAt = reconcile;
-    const liveness = workerLiveness({
-      heartbeatAt: latest.row?.heartbeatAt ?? null,
-      outcome: latest.row?.outcome ?? null,
+    const webhookWorker = workerHealth({
+      worker: "paypal-webhook-recovery",
+      id: "worker",
+      row: latest.row,
+      enabled: resolved["workers.webhookProcessingEnabled"],
       now,
     });
-    worker = component({
-      id: "worker",
-      status: liveness.status,
-      configured: true,
-      enabled: resolved["workers.webhookProcessingEnabled"],
-      summary: liveness.summary,
-      lastSuccessAt:
-        latest.row?.outcome === "SUCCEEDED" && latest.row.completedAt
-          ? iso(latest.row.completedAt)
-          : null,
+    const paymentReconcile = workerHealth({
+      worker: "paypal-payment-reconcile",
+      id: "reconcileWorker",
+      row: latestReconcile.row,
+      enabled: null,
+      now,
     });
-    workerHealth = {
-      worker: "paypal-webhook-recovery",
-      status: liveness.status,
-      runId: latest.row?.runId ?? null,
-      startedAt: latest.row ? iso(latest.row.startedAt) : null,
-      heartbeatAt: latest.row ? iso(latest.row.heartbeatAt) : null,
-      completedAt: latest.row?.completedAt ? iso(latest.row.completedAt) : null,
-      outcome: latest.row?.outcome ?? null,
-      errorCode: latest.row?.errorCode === "WORKER_FAILED" ? "WORKER_FAILED" : null,
-      counts: {
-        scanned: latest.row?.scanned ?? 0,
-        claimed: latest.row?.claimed ?? 0,
-        processed: latest.row?.processed ?? 0,
-        ignored: latest.row?.ignored ?? 0,
-        pending: latest.row?.pending ?? 0,
-        exhausted: latest.row?.exhausted ?? 0,
-      },
-    };
+    worker = webhookWorker.component;
+    reconcileWorker = { ...paymentReconcile.component, backlog: unboundVault };
+    if (unboundVault > 0) {
+      // Held money needs an operator even while the worker itself is healthy.
+      if (reconcileWorker.status === "ready") reconcileWorker.status = "degraded";
+      reconcileWorker.summary =
+        `${reconcileWorker.summary} ${unboundVault} autonomous payment(s) with an unknown PayPal outcome are held with their reservations and need review.`.slice(
+          0,
+          300,
+        );
+    }
+    workerSnapshots = [webhookWorker.snapshot, paymentReconcile.snapshot];
     const pressure =
       operations.failed +
       operations.retrying +
@@ -278,6 +363,13 @@ export async function readSystemHealth(input: {
     });
     worker = component({
       id: "worker",
+      status: "unknown",
+      configured: true,
+      enabled: null,
+      summary: unread,
+    });
+    reconcileWorker = component({
+      id: "reconcileWorker",
       status: "unknown",
       configured: true,
       enabled: null,
@@ -330,7 +422,17 @@ export async function readSystemHealth(input: {
         300,
       );
   }
-  const components = [api, database, worker, webhooks, paypal, channel3, demo, agent];
+  const components = [
+    api,
+    database,
+    worker,
+    reconcileWorker,
+    webhooks,
+    paypal,
+    channel3,
+    demo,
+    agent,
+  ];
   const overall = aggregateHealth(components);
   const note = "Provider probes are read-only, cached, and do not include credentials or payloads.";
   return {
@@ -341,7 +443,7 @@ export async function readSystemHealth(input: {
       overall,
       components,
     },
-    workers: { observedAt, staleAfterSeconds: 900, workers: [workerHealth] },
+    workers: { observedAt, staleAfterSeconds: 900, workers: workerSnapshots },
     integrations: {
       observedAt,
       note,

@@ -21,6 +21,29 @@ const transaction = {
 describe("analytics client DTOs", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("reads reversed volume and rejects an invalid amount", async () => {
+    const totals = {
+      purchases: 2,
+      policyAllowed: 2,
+      humanApproved: 0,
+      blocked: 0,
+      spendMinor: 30_800,
+      refundsMinor: 0,
+      reversedMinor: 16_900,
+      activeMandates: 1,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ totals }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ totals: { ...totals, reversedMinor: -1 } }), {
+          status: 200,
+        }),
+      );
+    await expect(getDashboardSummary()).resolves.toMatchObject({ reversedMinor: 16_900 });
+    await expect(getDashboardSummary()).rejects.toThrow();
+  });
+
   it("reads verified summary totals and cursor transactions", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     fetchMock
@@ -46,7 +69,11 @@ describe("analytics client DTOs", () => {
         }),
       );
 
-    await expect(getDashboardSummary()).resolves.toMatchObject({ spendMinor: 2_700, purchases: 1 });
+    await expect(getDashboardSummary()).resolves.toMatchObject({
+      spendMinor: 2_700,
+      purchases: 1,
+      reversedMinor: 0,
+    });
     await expect(
       getDashboardTransactions({
         minAmountMinor: 2_000,

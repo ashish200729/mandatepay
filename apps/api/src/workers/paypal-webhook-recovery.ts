@@ -9,7 +9,7 @@ export async function runPayPalWebhookRecoveryOnce() {
     PAYPAL_CLIENT_SECRET: process.env.PAYPAL_CLIENT_SECRET,
     PAYPAL_WEBHOOK_ID: process.env.PAYPAL_WEBHOOK_ID,
   });
-  if (!paypal) throw new Error("PayPal Sandbox configuration is required for webhook recovery.");
+  if (!paypal) throw new Error("PayPal configuration is required for webhook recovery.");
   const database = createPrismaClient(process.env.DATABASE_URL);
   try {
     return await new PayPalWebhookRecoveryWorker(database, paypal).runOnce();

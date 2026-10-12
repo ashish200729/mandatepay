@@ -61,7 +61,10 @@ export function registerPayPalWebhookRoutes(
           try {
             await options.recordDelivery({ requestId: randomUUID(), ...result.delivery });
           } catch {
-            request.log.warn({ code: "WEBHOOK_DELIVERY_METRIC_FAILED" }, "Webhook delivery metric was not stored");
+            request.log.warn(
+              { code: "WEBHOOK_DELIVERY_METRIC_FAILED" },
+              "Webhook delivery metric was not stored",
+            );
           }
         }
         return routeReply(reply).status(result.statusCode).send(result.body);

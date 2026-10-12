@@ -334,6 +334,7 @@ describe("owned audit and dashboard analytics", () => {
       blocked: 1,
       spendMinor: 10_000,
       refundsMinor: 2_500,
+      reversedMinor: 0,
       activeMandates: 1,
     });
     const other = await app.inject({
@@ -348,6 +349,7 @@ describe("owned audit and dashboard analytics", () => {
       blocked: 0,
       spendMinor: 0,
       refundsMinor: 0,
+      reversedMinor: 0,
       activeMandates: 0,
     });
   });

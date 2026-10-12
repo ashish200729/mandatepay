@@ -1,10 +1,13 @@
 # Optional deployment template. Nothing is deployed by adding this file.
+# Plans use Render's current identifiers (web/cron: starter, Postgres: basic-256mb); adjust them
+# to your workspace's budget. Automatic deploys stay off. This Blueprint has not been validated
+# against a live Render workspace; review it in Render before creating billable services.
 services:
   - type: web
     name: mandatepay-web
     runtime: node
     region: singapore
-    plan: 1c-2g
+    plan: starter
     autoDeployTrigger: off
     buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/web...
     startCommand: pnpm --filter @mandatepay/web exec next start --hostname 0.0.0.0 --port $PORT
@@ -18,12 +21,40 @@ services:
         fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
       - key: API_URL
         fromService: { name: mandatepay-api, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      # Generated once on the API; lets the BFF forward each browser's IP for rate limiting.
+      - key: INTERNAL_PROXY_SECRET
+        fromService: { name: mandatepay-api, type: web, envVarKey: INTERNAL_PROXY_SECRET }
+
+  - type: web
+    name: mandatepay-admin
+    runtime: node
+    region: singapore
+    plan: starter
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/admin...
+    startCommand: pnpm --filter @mandatepay/admin exec next start --hostname 0.0.0.0 --port $PORT
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: 24.12.0
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_ENVIRONMENT
+        value: production
+      - key: ADMIN_ORIGIN
+        fromService: { name: mandatepay-admin, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: APP_URL
+        fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: API_URL
+        fromService: { name: mandatepay-api, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: INTERNAL_PROXY_SECRET
+        fromService: { name: mandatepay-api, type: web, envVarKey: INTERNAL_PROXY_SECRET }
 
   - type: web
     name: mandatepay-api
     runtime: node
     region: singapore
-    plan: 1c-2g
+    plan: starter
     autoDeployTrigger: off
     buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/api...
     preDeployCommand: pnpm --filter @mandatepay/database migrate:deploy
@@ -40,12 +71,24 @@ services:
         fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
       - key: WEB_ORIGIN
         fromService: { name: mandatepay-web, type: web, envVarKey: RENDER_EXTERNAL_URL }
+      - key: ADMIN_ORIGIN
+        fromService: { name: mandatepay-admin, type: web, envVarKey: RENDER_EXTERNAL_URL }
       - key: API_URL
         fromService: { name: mandatepay-api, type: web, envVarKey: RENDER_EXTERNAL_URL }
       - key: DATABASE_URL
         fromDatabase: { name: mandatepay-database, property: connectionString }
       - key: AUTH_SECRET
         generateValue: true
+      - key: INTERNAL_PROXY_SECRET
+        generateValue: true
+      - key: TOKEN_ENCRYPTION_KEY
+        generateValue: true
+      # EC P-256 private JWK from `pnpm --silent --filter @mandatepay/api mandate:keygen`.
+      - key: MANDATE_SIGNING_KEY
+        sync: false
+      # Optional retired public JWKs; keeps credentials signed by an old key verifiable.
+      - key: MANDATE_SIGNING_PREVIOUS_JWKS
+        sync: false
       - key: AUTH_REQUIRE_EMAIL_VERIFICATION
         value: "true"
       - key: RESEND_API_KEY
@@ -60,6 +103,12 @@ services:
         value: https://api.sarvam.ai/v1
       - key: PRODUCT_DISCOVERY_MODE
         value: demo
+      - key: CHANNEL3_FALLBACK_MODE
+        value: demo
+      - key: AGENT_CHAT_RATE_LIMIT_PER_MINUTE
+        value: "12"
+      - key: CATALOG_COMPARE_RATE_LIMIT_PER_MINUTE
+        value: "10"
       - key: PAYPAL_ENV
         value: sandbox
       - key: PAYPAL_CLIENT_ID
@@ -68,12 +117,40 @@ services:
         sync: false
       - key: PAYPAL_WEBHOOK_ID
         sync: false
+      # Read only by `pnpm --filter @mandatepay/api demo:account` in the API shell.
+      - key: DEMO_ACCOUNT_EMAIL
+        sync: false
+      - key: DEMO_ACCOUNT_PASSWORD
+        sync: false
+      - key: DEMO_ACCOUNT_NAME
+        sync: false
+
+  # Remote MCP server for external AI agents. Stateless: each request's own
+  # `Authorization: Bearer mp_agent_…` token is forwarded to the API's agent gateway.
+  - type: web
+    name: mandatepay-mcp
+    runtime: node
+    region: singapore
+    plan: starter
+    autoDeployTrigger: off
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/mcp...
+    startCommand: pnpm --filter @mandatepay/mcp start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.12.0
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: MANDATEPAY_API_URL
+        fromService: { name: mandatepay-api, type: web, envVarKey: RENDER_EXTERNAL_URL }
 
   - type: cron
     name: mandatepay-webhook-recovery
     runtime: node
     region: singapore
-    plan: 0.5c-512mb
+    plan: starter
     autoDeployTrigger: off
     schedule: "*/2 * * * *"
     buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/api...
@@ -94,9 +171,37 @@ services:
       - key: PAYPAL_WEBHOOK_ID
         fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_WEBHOOK_ID }
 
+  - type: cron
+    name: mandatepay-payment-reconcile
+    runtime: node
+    region: singapore
+    plan: starter
+    autoDeployTrigger: off
+    schedule: "*/5 * * * *"
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm exec turbo run build --filter=@mandatepay/api...
+    startCommand: pnpm --filter @mandatepay/api worker:reconcile
+    envVars:
+      - key: NODE_VERSION
+        value: 24.12.0
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase: { name: mandatepay-database, property: connectionString }
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_CLIENT_ID }
+      - key: PAYPAL_CLIENT_SECRET
+        fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_CLIENT_SECRET }
+      - key: PAYPAL_WEBHOOK_ID
+        fromService: { name: mandatepay-api, type: web, envVarKey: PAYPAL_WEBHOOK_ID }
+      # Lets the worker replay uncertain saved-PayPal orders; without it they stay held.
+      - key: TOKEN_ENCRYPTION_KEY
+        fromService: { name: mandatepay-api, type: web, envVarKey: TOKEN_ENCRYPTION_KEY }
+
 databases:
   - name: mandatepay-database
     region: singapore
-    plan: 256mb
+    plan: basic-256mb
     postgresMajorVersion: "17"
     databaseName: mandatepay

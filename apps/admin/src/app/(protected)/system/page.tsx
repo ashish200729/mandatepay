@@ -13,6 +13,11 @@ import {
   type AdminWorkerHealth,
 } from "@mandatepay/shared";
 
+const workerTitles: Record<AdminWorkerHealth["workers"][number]["worker"], string> = {
+  "paypal-webhook-recovery": "PayPal webhook recovery",
+  "paypal-payment-reconcile": "PayPal payment reconciliation",
+};
+
 const environments = {
   development: "Development",
   test: "Test",
@@ -87,8 +92,8 @@ export default async function SystemHealthPage() {
           </section>
         ) : null}
 
-        <section aria-label="Webhook worker">
-          <DisclosureSection title="Webhook worker diagnostics">
+        <section aria-label="Scheduled workers">
+          <DisclosureSection title="Worker diagnostics">
             {!workers ? (
               <ParseAlert message="Worker health could not be loaded." href="/system" />
             ) : workers.data.workers.length === 0 ? (
@@ -158,11 +163,12 @@ function WorkerCard({
         heartbeatAt: worker.heartbeatAt ? new Date(worker.heartbeatAt) : null,
         outcome: worker.outcome,
         now: new Date(observedAt),
+        worker: worker.worker,
       });
   return (
     <article className="rounded-xl border bg-card p-5 sm:col-span-2 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h3 className="text-sm font-medium">PayPal webhook recovery</h3>
+        <h3 className="text-sm font-medium">{workerTitles[worker.worker]}</h3>
         <HealthIndicator status={live.status} />
       </div>
       <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{live.summary}</p>

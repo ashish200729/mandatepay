@@ -6,6 +6,7 @@ import {
   ArrowRight,
   CircleAlert,
   ExternalLink,
+  Headphones,
   LoaderCircle,
   Search,
   ShieldCheck,
@@ -26,12 +27,9 @@ import {
 } from "@/lib/products/client";
 import type { NormalizedProduct, ProductRanking, PurchaseProposal } from "@/lib/products/types";
 import { activeShoppingMandates, selectShoppingMandate } from "@/lib/agent/mandates";
-import {
-  workspaceField,
-  WorkspaceLoading,
-  WorkspaceSteps,
-  WorkspaceStatus,
-} from "@/components/workspace-ui";
+import { safeProductImage } from "@/lib/agent/client";
+import { workspaceField, WorkspaceLoading, WorkspaceSteps } from "@/components/workspace-ui";
+import { DecisionExplanation } from "@/components/decision-explanation";
 
 function sourceLabel(source: NormalizedProduct["source"]) {
   return source === "demo" ? "Demo Catalog" : "Channel3 discovery";
@@ -55,6 +53,7 @@ function ProductCard({
   onPropose: () => void;
 }) {
   const productUrl = product.source === "channel3" ? safeExternalUrl(product.productUrl) : null;
+  const imageUrl = safeProductImage(product.imageUrl);
   return (
     <article
       className={cn(
@@ -63,6 +62,21 @@ function ProductCard({
       )}
     >
       <div className="flex items-start justify-between gap-4">
+        <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-secondary">
+          {imageUrl ? (
+            // Same-origin Demo Catalog illustration; external images are not loaded.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageUrl}
+              alt={product.title}
+              width={64}
+              height={64}
+              className="size-16 object-cover"
+            />
+          ) : (
+            <Headphones size={20} className="text-muted-foreground" aria-hidden="true" />
+          )}
+        </span>
         <div className="min-w-0 flex-1">
           <span className="inline-flex rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
             {sourceLabel(product.source)}
@@ -123,10 +137,10 @@ function ProductCard({
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
         {product.source === "demo"
-          ? "This catalog item can become a local proposal."
-          : "External discovery only. It cannot be sent to checkout."}
+          ? "Demo Catalog item. AgentGuard checks any proposal against your mandate before checkout."
+          : "External listing for comparison only. Buy it on the retailer’s site."}
       </p>
-      {recommended && product.source === "demo" ? (
+      {product.source === "demo" ? (
         <button
           type="button"
           disabled={disabled}
@@ -154,6 +168,7 @@ export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?:
   const [products, setProducts] = useState<NormalizedProduct[]>([]);
   const [mode, setMode] = useState<"demo" | "channel3" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [fallback, setFallback] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [ranking, setRanking] = useState<ProductRanking[]>([]);
   const [proposal, setProposal] = useState<PurchaseProposal | null>(null);
@@ -220,6 +235,7 @@ export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?:
       setProducts(result.products);
       setMode(result.mode);
       setNotice(result.notice);
+      setFallback(result.fallback);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Product search is unavailable.");
       setProducts([]);
@@ -329,6 +345,7 @@ export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?:
                   setSearched(false);
                   setError(null);
                   setNotice(null);
+                  setFallback(false);
                 }}
                 className={cn(workspaceField, "mt-2 block sm:w-96")}
               >
@@ -417,8 +434,13 @@ export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?:
       {products.length ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-muted-foreground">
-            {products.length} products · {mode === "demo" ? "Demo Catalog" : "Channel3 discovery"} ·
-            choose up to 3 to compare
+            {products.length} products ·{" "}
+            {fallback
+              ? "Demo Catalog fallback"
+              : mode === "demo"
+                ? "Demo Catalog"
+                : "Channel3 discovery"}{" "}
+            · choose up to 3 to compare
           </p>
           <button
             type="button"
@@ -461,8 +483,8 @@ export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?:
         <section className="border-t border-border pt-5">
           <h2 className="text-base font-medium">Comparison ready.</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            The ranking explains fit and trade-offs. Select a Demo Catalog recommendation to prepare
-            a proposal.
+            The ranking explains fit and trade-offs. AgentGuard, not the ranking, decides whether a
+            proposal is allowed.
           </p>
         </section>
       ) : null}
@@ -471,17 +493,16 @@ export function ProductDiscovery({ initialMandateId = "" }: { initialMandateId?:
           <div className="flex items-center gap-2 text-sm font-medium">
             <ShieldCheck size={17} aria-hidden="true" /> Proposal evaluated
           </div>
-          <div className="mt-3">
-            <WorkspaceStatus value={proposal.decision ?? proposal.status ?? "PROPOSAL_READY"} />
-          </div>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            {proposal.policyReason ??
-              proposal.reason ??
-              "The proposal is ready for the next permission step."}
-          </p>
+          {proposal.policy ? (
+            <DecisionExplanation decision={proposal.policy} className="mt-3" />
+          ) : (
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              {proposal.reason ?? "The proposal is ready for the next permission step."}
+            </p>
+          )}
           <p className="mt-5 text-xs text-muted-foreground">
-            This phase does not execute payment. An authorized Demo Catalog proposal can continue to
-            Sandbox checkout.
+            No payment has been made. An allowed or approved proposal continues to PayPal Sandbox
+            checkout, where you confirm the payment.
           </p>
           {proposal.status === "AUTHORIZED" ? (
             <Link

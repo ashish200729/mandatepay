@@ -3,6 +3,8 @@ import { PrismaClient } from "../../src/generated/prisma/client.js";
 import {
   MandateStatus,
   MandateRuleType,
+  PaymentProfileStatus,
+  PaymentSource,
   PaymentStatus,
   PolicyDecisionType,
   ProductCondition,
@@ -18,6 +20,14 @@ import { MandateRepository } from "../../src/repositories/mandate-repository.js"
 import { ProposalRepository } from "../../src/repositories/proposal-repository.js";
 import { SpendRepository } from "../../src/repositories/spend-repository.js";
 import { PaymentRepository } from "../../src/repositories/payment-repository.js";
+import { ObservabilityRepository } from "../../src/repositories/observability-repository.js";
+import {
+  WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_PENDING_MAX_ATTEMPTS,
+  webhookAttemptsExhaustedWhere,
+  webhookAttemptsRemainingWhere,
+  webhookDiagnostics,
+} from "../../src/repositories/admin-query.js";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 if (!connectionString) {
@@ -182,6 +192,110 @@ describe("database phase integration", () => {
 
   afterAll(async () => {
     await db.$disconnect();
+  });
+
+  it("applies per-row webhook retry ceilings for pending and failed outcomes", async () => {
+    const ids = [] as string[];
+    for (const [key, awaitingProvider, attempts] of [
+      ["failed-open", false, WEBHOOK_MAX_ATTEMPTS - 1],
+      ["failed-exhausted", false, WEBHOOK_MAX_ATTEMPTS],
+      ["pending-open", true, WEBHOOK_MAX_ATTEMPTS + 3],
+      ["pending-exhausted", true, WEBHOOK_PENDING_MAX_ATTEMPTS],
+    ] as const) {
+      const row = await db.webhookInbox.create({
+        data: {
+          provider: "paypal",
+          providerEventId: `ceiling-${key}-${suffix}`,
+          eventType: "PAYMENT.CAPTURE.COMPLETED",
+          signatureVerified: true,
+          payload: {},
+          status: "FAILED",
+          attempts,
+          awaitingProvider,
+        },
+      });
+      ids.push(row.id);
+    }
+    const remaining = await db.webhookInbox.findMany({
+      where: { id: { in: ids }, AND: [webhookAttemptsRemainingWhere()] },
+      select: { providerEventId: true },
+    });
+    expect(remaining.map((row) => row.providerEventId).sort()).toEqual(
+      [`ceiling-failed-open-${suffix}`, `ceiling-pending-open-${suffix}`].sort(),
+    );
+    const exhausted = await db.webhookInbox.findMany({
+      where: { id: { in: ids }, AND: [webhookAttemptsExhaustedWhere()] },
+      select: { providerEventId: true },
+    });
+    expect(exhausted.map((row) => row.providerEventId).sort()).toEqual(
+      [`ceiling-failed-exhausted-${suffix}`, `ceiling-pending-exhausted-${suffix}`].sort(),
+    );
+    const asOf = new Date();
+    const pendingOpen = await db.webhookInbox.findUniqueOrThrow({ where: { id: ids[2]! } });
+    expect(webhookDiagnostics({ ...pendingOpen, asOf })).toMatchObject({
+      exhausted: false,
+      retryEligible: true,
+    });
+    // Leave no due rows for the API recovery-worker tests that share this database.
+    await db.webhookInbox.updateMany({ where: { id: { in: ids } }, data: { status: "IGNORED" } });
+  });
+
+  it("records heartbeats for the payment reconcile worker and rejects unknown workers", async () => {
+    const repository = new ObservabilityRepository(db as never);
+    const runId = crypto.randomUUID();
+    await repository.beginWorkerRun({ runId, at: new Date(), worker: "paypal-payment-reconcile" });
+    await repository.finishWorkerRun({
+      runId,
+      at: new Date(),
+      outcome: "SUCCEEDED",
+      worker: "paypal-payment-reconcile",
+      counts: { scanned: 1, claimed: 1, processed: 1, ignored: 0, pending: 0, exhausted: 0 },
+    });
+    expect((await db.workerHeartbeat.findUniqueOrThrow({ where: { runId } })).worker).toBe(
+      "paypal-payment-reconcile",
+    );
+    await expect(
+      db.workerHeartbeat.create({
+        data: {
+          worker: "unknown-worker",
+          runId: crypto.randomUUID(),
+          startedAt: new Date(),
+          heartbeatAt: new Date(),
+          outcome: "RUNNING",
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("stores reversed payments and provider-initiated refunds additively", async () => {
+    const payment = await paymentFixture("reversed", PaymentStatus.COMPLETED);
+    const reversed = await db.payment.update({
+      where: { id: payment.id },
+      data: { status: PaymentStatus.REVERSED, providerStatusReason: "CAPTURE_REVERSED" },
+    });
+    expect(reversed.payerActionUrl).toBeNull();
+    const refund = await db.refund.create({
+      data: {
+        paymentId: payment.id,
+        userId: userAId,
+        amount: 100n,
+        currency: "USD",
+        status: "COMPLETED",
+        providerInitiated: true,
+        idempotencyKey: `provider-refund-${suffix}`,
+      },
+    });
+    expect(refund.providerInitiated).toBe(true);
+    const local = await db.refund.create({
+      data: {
+        paymentId: payment.id,
+        userId: userAId,
+        amount: 100n,
+        currency: "USD",
+        idempotencyKey: `local-refund-${suffix}`,
+      },
+    });
+    expect(local.providerInitiated).toBe(false);
   });
 
   it("persists ownership and immutable mandate history", async () => {
@@ -611,5 +725,41 @@ describe("database phase integration", () => {
     expect(inflightAfter?.status).toBe(ReservationStatus.ACTIVE);
     await db.spendReservation.delete({ where: { id: stale.id } });
     await db.purchaseProposal.delete({ where: { id: oldProposal.id } });
+  });
+  it("stores Vault consent state additively and keeps vault token lookups unique", async () => {
+    const payment = await paymentFixture("vault-default", PaymentStatus.CREATED);
+    expect(payment.paymentSource).toBe(PaymentSource.CHECKOUT);
+    const profile = await db.paymentProfile.upsert({
+      where: { userId: userAId },
+      create: {
+        userId: userAId,
+        status: PaymentProfileStatus.ACTIVE,
+        paypalVaultIdEncrypted: "v1:iv:tag:ciphertext",
+        paypalVaultIdHash: suffix.padEnd(64, "0").slice(0, 64),
+      },
+      update: {},
+    });
+    expect(profile.status).toBe(PaymentProfileStatus.ACTIVE);
+    await expect(
+      db.paymentProfile.create({
+        data: {
+          userId: userBId,
+          status: PaymentProfileStatus.ACTIVE,
+          paypalVaultIdHash: profile.paypalVaultIdHash,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "P2002" });
+    for (const status of [
+      PaymentProfileStatus.SETUP_PENDING,
+      PaymentProfileStatus.REMOVAL_PENDING,
+      PaymentProfileStatus.REVOKED,
+    ]) {
+      const updated = await db.paymentProfile.update({
+        where: { id: profile.id },
+        data: { status },
+      });
+      expect(updated.status).toBe(status);
+    }
+    await db.paymentProfile.delete({ where: { id: profile.id } });
   });
 });

@@ -55,9 +55,10 @@ import {
   timestampPage,
   webhookDiagnostics,
   WEBHOOK_LEASE_MS,
-  WEBHOOK_MAX_ATTEMPTS,
+  webhookAttemptsExhaustedWhere,
+  webhookAttemptsRemainingWhere,
 } from "./admin-query.js";
-import { loadOverviewAnalytics } from "./admin-analytics-queries.js";
+import { loadOverviewAnalytics, loadReversedRemainderMinor } from "./admin-analytics-queries.js";
 
 type Store = Prisma.TransactionClient | ReturnType<typeof getPrismaClient>;
 const captured = [...CAPTURED_PAYMENT_STATUSES];
@@ -1122,7 +1123,7 @@ export class AdminOperationsRepository {
           }
         : {}),
       ...(query.exhausted === true
-        ? { signatureVerified: true, status: "FAILED", attempts: { gte: WEBHOOK_MAX_ATTEMPTS } }
+        ? { signatureVerified: true, status: "FAILED", AND: [webhookAttemptsExhaustedWhere()] }
         : {}),
       ...timestampPage("receivedAt", direction, this.boundary(cursor, binding)),
     };
@@ -1449,7 +1450,7 @@ export class AdminOperationsRepository {
           provider: "paypal",
           signatureVerified: true,
           status: "FAILED",
-          attempts: { lt: WEBHOOK_MAX_ATTEMPTS },
+          AND: [webhookAttemptsRemainingWhere()],
           nextAttemptAt: { gt: asOf },
         },
       }),
@@ -1465,7 +1466,7 @@ export class AdminOperationsRepository {
         where: {
           signatureVerified: true,
           status: "FAILED",
-          attempts: { gte: WEBHOOK_MAX_ATTEMPTS },
+          AND: [webhookAttemptsExhaustedWhere()],
         },
       }),
       this.db.webhookInbox.aggregate({
@@ -1504,6 +1505,7 @@ export class AdminOperationsRepository {
     `);
     const capturedGrossMinor = capturedGross._sum.amount ?? 0n;
     const refundsMinor = refundsCompleted._sum.amount ?? 0n;
+    const reversedMinor = await loadReversedRemainderMinor(this.db, from, to);
     const telemetry = await new ObservabilityRepository(this.db).overviewTelemetry(from, to, asOf);
     const liveness = workerLiveness({
       heartbeatAt: telemetry.worker.row?.heartbeatAt ?? null,
@@ -1580,7 +1582,7 @@ export class AdminOperationsRepository {
           ),
         }),
         netCapturedMinor: {
-          value: Number(capturedGrossMinor - refundsMinor),
+          value: Number(capturedGrossMinor - refundsMinor - reversedMinor),
           availability: "available" as const,
           reason: null,
           definition: ADMIN_METRIC_DEFINITIONS.netCapturedMinor,
@@ -2046,6 +2048,7 @@ const webhookSelect = {
   signatureVerified: true,
   status: true,
   attempts: true,
+  awaitingProvider: true,
   receivedAt: true,
   processedAt: true,
   updatedAt: true,

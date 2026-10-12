@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import type { DatabaseClient } from "@mandatepay/database";
 import type { ShoppingAgentToolHandlers } from "@mandatepay/agent";
@@ -248,6 +248,248 @@ describe("selection and external checkout", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json().message).not.toContain("javascript:");
       expect(response.json().message).toContain("No retailer product link was supplied");
+    } finally {
+      await f.app.close();
+    }
+  });
+});
+
+function demoListing(overrides: Record<string, unknown>) {
+  return {
+    source: "demo",
+    externalId: "demo-headphones-139",
+    title: "Sony WH-1000XM5 Noise Cancelling Headphones",
+    brand: "Sony",
+    category: "Headphones",
+    condition: "NEW",
+    priceMinor: 13_900,
+    currency: "USD",
+    merchant: "Mandate Demo Store",
+    productUrl: null,
+    imageUrl: "/demo-products/over-ear-graphite.svg",
+    checkoutEligible: true,
+    ...overrides,
+  };
+}
+
+function excludedFixture() {
+  const app = Fastify();
+  const listings = [
+    demoListing({}),
+    demoListing({
+      externalId: "demo-headphones-refurbished",
+      title: "Bose QuietComfort Refurbished Headphones",
+      brand: "Bose",
+      condition: "REFURBISHED",
+      priceMinor: 12_000,
+    }),
+    demoListing({
+      externalId: "demo-headphones-beats-149",
+      title: "Beats Studio Pro Wireless Headphones",
+      brand: "Beats",
+      priceMinor: 14_900,
+      imageUrl: "https://tracker.example/pixel.svg",
+    }),
+    demoListing({
+      externalId: "demo-headphones-bundle-220",
+      title: "Sony WH-1000XM5 + Travel Case Bundle",
+      priceMinor: 22_000,
+    }),
+  ];
+  const search = vi.fn(async () => ({ products: listings, mode: "demo", fallback: false }));
+  const create = vi.fn(async (request: FastifyRequest, reply: FastifyReply) =>
+    reply.status(201).send({
+      proposal: {
+        id: `proposal-${(request.body as { productId: string }).productId}`,
+        status: "PROPOSED",
+      },
+    }),
+  );
+  const evaluate = vi.fn(async (request: FastifyRequest) => ({
+    proposal: { id: (request.params as { id: string }).id, status: "BLOCKED" },
+    decision: {
+      decision: "BLOCK",
+      reasonCodes: ["CONDITION_NOT_ALLOWED"],
+      explanation: {
+        decision: "BLOCK",
+        headline: "Blocked by your mandate — Your mandate allows new only; this one is refurbished",
+        summary: "This is a hard rule.",
+        approvalCanOverride: false,
+        checks: [],
+      },
+    },
+  }));
+  app.post("/api/products/search", search);
+  app.post("/api/proposals", create);
+  app.post("/api/proposals/:id/evaluate", evaluate);
+  const audit = vi.fn(async () => ({}));
+  const now = Date.now();
+  const database = {
+    platformSetting: { findMany: async () => [] },
+    auditEvent: { create: audit },
+    mandate: {
+      findFirst: async () => ({
+        id: "headphones-mandate",
+        status: "ACTIVE",
+        version: 1,
+        startsAt: new Date(now - 60_000),
+        expiresAt: new Date(now + 86_400_000),
+        activeVersion: {
+          version: 1,
+          canonicalRules: {
+            title: "Headphones",
+            productIntent: "Noise-cancelling headphones",
+            currency: "USD",
+            timezone: "UTC",
+            allowedBrands: ["Sony", "Bose"],
+            blockedBrands: [],
+            allowedCategories: [],
+            blockedCategories: [],
+            allowedConditions: ["NEW"],
+            autoSpendLimit: 15_000,
+            transactionLimit: 18_000,
+            quantityLimit: 1,
+            allowedMerchants: [],
+            blockedMerchants: [],
+            newMerchantRequiresApproval: false,
+            startsAt: new Date(now - 60_000).toISOString(),
+            expiresAt: new Date(now + 86_400_000).toISOString(),
+          },
+        },
+      }),
+    },
+  } as unknown as DatabaseClient;
+  const toolResults: unknown[] = [];
+  const runner = vi.fn(async (_input, tools: ShoppingAgentToolHandlers) => {
+    await tools.get_active_mandates!({}, toolContext);
+    toolResults.push(
+      await tools.search_products!(
+        { query: "headphones", category: null, maximumPriceMinor: null, brands: [] },
+        toolContext,
+      ),
+    );
+    return finalResult;
+  });
+  registerShoppingAgentRoutes(app, {
+    app,
+    database,
+    appUrl: "http://localhost:3000",
+    productContextSecret: "fixture-key",
+    requireUser: async () => ({ id: "owner" }),
+    isTrustedOrigin: () => true,
+    runner,
+  });
+  const chat = (message: string, productContext?: string) =>
+    app.inject({
+      method: "POST",
+      url: "/api/agent/chat",
+      payload: {
+        message,
+        mandateId: "headphones-mandate",
+        requestKey: crypto.randomUUID(),
+        ...(productContext ? { productContext } : {}),
+      },
+    });
+  return { app, runner, search, create, evaluate, audit, chat, toolResults };
+}
+
+describe("mandate-excluded listings", () => {
+  it("returns excluded listings with reasons and never offers them to the model", async () => {
+    const f = excludedFixture();
+    try {
+      const response = await f.chat("Show me wireless headphones");
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.excludedProducts).toEqual([
+        expect.objectContaining({
+          externalId: "demo-headphones-refurbished",
+          reasons: ["Your mandate allows new only; this one is refurbished."],
+          imageUrl: "/demo-products/over-ear-graphite.svg",
+        }),
+        expect.objectContaining({
+          externalId: "demo-headphones-beats-149",
+          reasons: ["Beats isn’t an allowed brand; your mandate allows Sony or Bose."],
+          imageUrl: null,
+        }),
+        expect.objectContaining({
+          externalId: "demo-headphones-bundle-220",
+          reasons: ["$220 is above your $180 maximum per purchase."],
+        }),
+      ]);
+      expect(body.message).toContain("3 other results were filtered out by your mandate");
+      const toolResult = f.toolResults[0] as {
+        products: { externalId: string }[];
+        excludedByMandateCount: number;
+      };
+      expect(toolResult.products.map((product) => product.externalId)).toEqual([
+        "demo-headphones-139",
+      ]);
+      expect(toolResult.excludedByMandateCount).toBe(3);
+      expect(JSON.stringify(toolResult)).not.toContain("Refurbished");
+    } finally {
+      await f.app.close();
+    }
+  });
+
+  it("evaluates an explicitly requested excluded listing server-side as a real BLOCK", async () => {
+    const f = excludedFixture();
+    try {
+      const search = await f.chat("Show me headphones");
+      const response = await f.chat(
+        "Buy the Bose QuietComfort Refurbished Headphones anyway",
+        search.json().productContext,
+      );
+      expect(response.statusCode).toBe(200);
+      expect(f.runner).toHaveBeenCalledTimes(1);
+      expect(f.create).toHaveBeenCalledTimes(1);
+      expect(f.create.mock.calls[0]?.[0].body).toMatchObject({
+        source: "demo",
+        productId: "demo-headphones-refurbished",
+        quantity: 1,
+      });
+      expect(f.evaluate).toHaveBeenCalledTimes(1);
+      const body = response.json();
+      expect(body.proposals).toHaveLength(1);
+      expect(body.proposals[0].decision.decision).toBe("BLOCK");
+      expect(body.message).toContain("AgentGuard blocked it");
+      expect(body.message).toContain("approval can’t override it");
+      expect(body.explanation).toBeNull();
+      expect(f.audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            eventType: "PRODUCT_SELECTED",
+            payload: expect.objectContaining({
+              aiReason: "user_selected_mandate_excluded_product",
+            }),
+          }),
+        }),
+      );
+    } finally {
+      await f.app.close();
+    }
+  });
+
+  it("evaluates an excluded listing named in the same message after the search", async () => {
+    const f = excludedFixture();
+    try {
+      const response = await f.chat("Buy the Beats Studio Pro Wireless Headphones");
+      expect(response.statusCode).toBe(200);
+      expect(f.runner).toHaveBeenCalledTimes(1);
+      expect(f.create.mock.calls[0]?.[0].body).toMatchObject({
+        productId: "demo-headphones-beats-149",
+      });
+      expect(response.json().message).toContain("AgentGuard blocked it");
+      expect(response.json().message).not.toContain("I bought it");
+    } finally {
+      await f.app.close();
+    }
+  });
+
+  it("does not create a proposal when the user only browses", async () => {
+    const f = excludedFixture();
+    try {
+      await f.chat("What about the Bose QuietComfort Refurbished Headphones?");
+      expect(f.create).not.toHaveBeenCalled();
     } finally {
       await f.app.close();
     }

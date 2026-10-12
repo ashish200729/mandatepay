@@ -1,3 +1,5 @@
+import type { ApprovalDecision } from "../approvals/types";
+
 export type ProductSource = "demo" | "channel3";
 export type ProductCondition = "NEW" | "USED" | "REFURBISHED";
 
@@ -33,4 +35,6 @@ export type PurchaseProposal = {
   currency?: string;
   policyDecision?: string;
   policyReason?: string;
+  /** The recorded AgentGuard decision with its read-only explanation, when evaluated. */
+  policy?: ApprovalDecision;
 };

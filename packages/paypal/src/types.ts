@@ -2,13 +2,13 @@ import { CurrencyCodeSchema, minorUnitsSchema, type MinorUnits } from "@mandatep
 import { z } from "zod";
 import { PayPalInputError, PayPalResponseError, PayPalWebhookError } from "./errors.js";
 
-const idempotencyKeySchema = z
+export const idempotencyKeySchema = z
   .string()
   .trim()
   .min(1)
   .max(38)
   .regex(/^[\x21-\x7E]+$/u);
-const sandboxRedirectUrlSchema = z
+export const sandboxRedirectUrlSchema = z
   .string()
   .url()
   .refine((value) => {
@@ -37,13 +37,34 @@ const providerMoneySchema = z
   })
   .strict();
 
-const linkSchema = z
+/**
+ * Order amounts echo the breakdown sent with line items (item_total, shipping, tax_total, ...).
+ * Each breakdown entry is validated as provider money; only currency and value are authoritative.
+ */
+const orderAmountSchema = z
+  .object({
+    currency_code: z.literal("USD"),
+    value: providerDecimalSchema,
+    breakdown: z.record(z.string(), providerMoneySchema).optional(),
+  })
+  .strict();
+
+export const linkSchema = z
   .object({
     href: z.string().url(),
     rel: z.string().min(1),
     method: z.string().optional(),
   })
   .passthrough();
+
+export const orderItemSchema = z
+  .object({
+    name: z.string().trim().min(1).max(127),
+    sku: z.string().trim().min(1).max(127).optional(),
+    quantity: z.number().int().positive().max(999),
+    unitAmountMinor: minorUnitsSchema,
+  })
+  .strict();
 
 export const CreateOrderInputSchema = z
   .object({
@@ -53,17 +74,67 @@ export const CreateOrderInputSchema = z
     requestId: idempotencyKeySchema,
     returnUrl: sandboxRedirectUrlSchema,
     cancelUrl: sandboxRedirectUrlSchema,
+    /** Line items shown to the buyer. When present, the breakdown must sum exactly. */
+    items: z.array(orderItemSchema).min(1).max(10).optional(),
+    shippingMinor: minorUnitsSchema.optional(),
+    taxMinor: minorUnitsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => refineOrderBreakdown(input, context));
+
+/** Line items, shipping and tax must sum exactly to the order amount. */
+export function refineOrderBreakdown(
+  input: {
+    amountMinor: number;
+    items?: readonly { unitAmountMinor: number; quantity: number }[] | undefined;
+    shippingMinor?: number | undefined;
+    taxMinor?: number | undefined;
+  },
+  context: z.RefinementCtx,
+) {
+  if (!input.items) {
+    if (input.shippingMinor !== undefined || input.taxMinor !== undefined) {
+      context.addIssue({ code: "custom", path: ["items"], message: "Breakdown needs items." });
+    }
+    return;
+  }
+  const itemTotal = input.items.reduce(
+    (total, item) => total + item.unitAmountMinor * item.quantity,
+    0,
+  );
+  const total = itemTotal + (input.shippingMinor ?? 0) + (input.taxMinor ?? 0);
+  if (!Number.isSafeInteger(itemTotal) || total !== input.amountMinor) {
+    context.addIssue({
+      code: "custom",
+      path: ["items"],
+      message: "Item, shipping and tax amounts must equal the order amount.",
+    });
+  }
+}
 
 export type CreateOrderInput = z.output<typeof CreateOrderInputSchema>;
 
 export const OrderIdSchema = z.string().trim().min(1);
 
+export const PAYPAL_CAPTURE_STATUSES = [
+  "COMPLETED",
+  "DECLINED",
+  "PENDING",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
+  "FAILED",
+] as const;
+
+/** PENDING/DECLINED captures carry a reason code that must not be discarded. */
+const captureStatusDetailsSchema = z
+  .object({ reason: z.string().trim().min(1).max(128).optional() })
+  .passthrough();
+
 const orderCaptureSchema = z
   .object({
     id: z.string().trim().min(1),
-    status: z.enum(["COMPLETED", "DECLINED", "PENDING", "REFUNDED", "PARTIALLY_REFUNDED"]),
+    status: z.enum(PAYPAL_CAPTURE_STATUSES),
+    status_details: captureStatusDetailsSchema.optional(),
     amount: providerMoneySchema,
     custom_id: z.string().trim().min(1).optional(),
     create_time: z.string().trim().min(1).optional(),
@@ -88,7 +159,7 @@ export const PayPalOrderSchema = z
           .object({
             reference_id: z.string().optional(),
             custom_id: z.string().optional(),
-            amount: providerMoneySchema.optional(),
+            amount: orderAmountSchema.optional(),
             payments: z
               .object({ captures: z.array(orderCaptureSchema).optional() })
               .passthrough()
@@ -101,13 +172,15 @@ export const PayPalOrderSchema = z
   .passthrough();
 
 export type PayPalOrder = z.output<typeof PayPalOrderSchema> & {
+  /** The validated buyer redirect (rel "approve" or "payer-action"), if any. */
   readonly approvalUrl: string | null;
 };
 
 export const PayPalCaptureSchema = z
   .object({
     id: z.string().trim().min(1),
-    status: z.enum(["COMPLETED", "DECLINED", "PENDING", "REFUNDED", "PARTIALLY_REFUNDED"]),
+    status: z.enum(PAYPAL_CAPTURE_STATUSES),
+    status_details: captureStatusDetailsSchema.optional(),
     amount: providerMoneySchema,
     custom_id: z.string().trim().min(1).optional(),
     create_time: z.string().trim().min(1).optional(),
@@ -180,7 +253,15 @@ export const WebhookVerificationResponseSchema = z
 export type WebhookVerificationResponse = z.output<typeof WebhookVerificationResponseSchema>;
 
 export function parseProviderMoney(value: unknown): MinorUnits {
-  const parsed = providerMoneySchema.safeParse(value);
+  // An order amount may carry a validated breakdown; the total is its currency and value.
+  let total = value;
+  if (typeof value === "object" && value !== null && "breakdown" in value) {
+    const amount = orderAmountSchema.safeParse(value);
+    total = amount.success
+      ? { currency_code: amount.data.currency_code, value: amount.data.value }
+      : null;
+  }
+  const parsed = providerMoneySchema.safeParse(total);
   if (!parsed.success) throw new PayPalResponseError("INVALID_ORDER_RESPONSE");
   const whole = parsed.data.value;
   const units = Number(whole.replace(".", ""));

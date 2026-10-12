@@ -1,25 +1,85 @@
 import { randomUUID } from "node:crypto";
 import type { PayPalClient, WebhookProcessingResult } from "@mandatepay/paypal";
-import { ObservabilityRepository, type DatabaseClient } from "@mandatepay/database";
+import {
+  ObservabilityRepository,
+  WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_PENDING_MAX_ATTEMPTS,
+  type DatabaseClient,
+} from "@mandatepay/database";
 import type { WorkerRunCounts } from "@mandatepay/shared";
 import { webhookProcessingOpen } from "./platform-controls.js";
 import {
   PrismaWebhookInboxStore,
   createPayPalWebhookService,
   type VerifiedWebhookRecoveryCandidate,
+  type WebhookRetryLimits,
 } from "./webhooks.js";
 
-export const WEBHOOK_RECOVERY_MAX_ATTEMPTS = 5;
+/** Failure policy: processing errors such as PayPal being unreachable. */
+export const WEBHOOK_RECOVERY_MAX_ATTEMPTS = WEBHOOK_MAX_ATTEMPTS;
 export const WEBHOOK_RECOVERY_LEASE_MS = 5 * 60_000;
 export const WEBHOOK_RECOVERY_BASE_DELAY_MS = 5_000;
 export const WEBHOOK_RECOVERY_MAX_DELAY_MS = 15 * 60_000;
 export const WEBHOOK_RECOVERY_BATCH_SIZE = 50;
+/**
+ * Pending policy: the event is verified but provider state or the payment
+ * binding is not ready yet (for example a held capture). 15 minutes doubling
+ * to a 6 hour cap over 24 attempts keeps retrying for roughly four days.
+ */
+export const WEBHOOK_PENDING_RECOVERY_MAX_ATTEMPTS = WEBHOOK_PENDING_MAX_ATTEMPTS;
+export const WEBHOOK_PENDING_BASE_DELAY_MS = 15 * 60_000;
+export const WEBHOOK_PENDING_MAX_DELAY_MS = 6 * 60 * 60_000;
+
+export const WEBHOOK_RECOVERY_LIMITS: WebhookRetryLimits = {
+  failed: WEBHOOK_RECOVERY_MAX_ATTEMPTS,
+  pending: WEBHOOK_PENDING_RECOVERY_MAX_ATTEMPTS,
+};
+
+export interface WebhookRetrySchedule {
+  readonly limits?: WebhookRetryLimits;
+  readonly failedBaseDelayMs?: number;
+  readonly failedMaxDelayMs?: number;
+  readonly pendingBaseDelayMs?: number;
+  readonly pendingMaxDelayMs?: number;
+}
+
+/**
+ * Next attempt for a claimed row, or null when it reached its ceiling. A
+ * pending outcome moves the row to the long schedule and its higher ceiling.
+ */
+export function webhookRetryAt(
+  input: {
+    readonly attempts: number;
+    readonly outcome: "pending" | "failed";
+    readonly awaitingProvider: boolean;
+    readonly now: Date;
+  },
+  schedule: WebhookRetrySchedule = {},
+): Date | null {
+  const limits = schedule.limits ?? WEBHOOK_RECOVERY_LIMITS;
+  const pending = input.outcome === "pending";
+  const ceiling = pending || input.awaitingProvider ? limits.pending : limits.failed;
+  if (input.attempts >= ceiling) return null;
+  const base = pending
+    ? (schedule.pendingBaseDelayMs ?? WEBHOOK_PENDING_BASE_DELAY_MS)
+    : (schedule.failedBaseDelayMs ?? WEBHOOK_RECOVERY_BASE_DELAY_MS);
+  const cap = pending
+    ? (schedule.pendingMaxDelayMs ?? WEBHOOK_PENDING_MAX_DELAY_MS)
+    : (schedule.failedMaxDelayMs ?? WEBHOOK_RECOVERY_MAX_DELAY_MS);
+  const delay = Math.min(cap, base * 2 ** Math.max(0, input.attempts - 1));
+  return new Date(input.now.getTime() + delay);
+}
 
 export interface WebhookRecoveryOptions {
+  /** Ceiling for rows whose processing failed. */
   readonly maxAttempts?: number;
+  /** Ceiling for rows whose last outcome was pending provider state. */
+  readonly pendingMaxAttempts?: number;
   readonly leaseMs?: number;
   readonly baseDelayMs?: number;
   readonly maxDelayMs?: number;
+  readonly pendingBaseDelayMs?: number;
+  readonly pendingMaxDelayMs?: number;
   readonly batchSize?: number;
   readonly now?: Date;
   readonly replay?: (
@@ -78,6 +138,24 @@ export class PayPalWebhookRecoveryWorker {
     }
   }
 
+  private schedule(limits: WebhookRetryLimits): WebhookRetrySchedule {
+    return {
+      limits,
+      ...(this.options.baseDelayMs === undefined
+        ? {}
+        : { failedBaseDelayMs: this.options.baseDelayMs }),
+      ...(this.options.maxDelayMs === undefined
+        ? {}
+        : { failedMaxDelayMs: this.options.maxDelayMs }),
+      ...(this.options.pendingBaseDelayMs === undefined
+        ? {}
+        : { pendingBaseDelayMs: this.options.pendingBaseDelayMs }),
+      ...(this.options.pendingMaxDelayMs === undefined
+        ? {}
+        : { pendingMaxDelayMs: this.options.pendingMaxDelayMs }),
+    };
+  }
+
   private async recover(
     now: Date,
     runId: string,
@@ -89,17 +167,14 @@ export class PayPalWebhookRecoveryWorker {
       await heartbeats.finishWorkerRun({ runId, at: now, outcome: "SKIPPED", counts: empty });
       return empty;
     }
-    const maxAttempts = this.options.maxAttempts ?? WEBHOOK_RECOVERY_MAX_ATTEMPTS;
+    const limits: WebhookRetryLimits = {
+      failed: this.options.maxAttempts ?? WEBHOOK_RECOVERY_MAX_ATTEMPTS,
+      pending: this.options.pendingMaxAttempts ?? WEBHOOK_PENDING_RECOVERY_MAX_ATTEMPTS,
+    };
+    const schedule = this.schedule(limits);
     const leaseMs = this.options.leaseMs ?? WEBHOOK_RECOVERY_LEASE_MS;
     const batchSize = this.options.batchSize ?? WEBHOOK_RECOVERY_BATCH_SIZE;
-    const baseDelayMs = this.options.baseDelayMs ?? WEBHOOK_RECOVERY_BASE_DELAY_MS;
-    const maxDelayMs = this.options.maxDelayMs ?? WEBHOOK_RECOVERY_MAX_DELAY_MS;
-    const candidates = await this.store.listRecoveryCandidates(
-      now,
-      maxAttempts,
-      leaseMs,
-      batchSize,
-    );
+    const candidates = await this.store.listRecoveryCandidates(now, limits, leaseMs, batchSize);
     const result = {
       scanned: candidates.length,
       claimed: 0,
@@ -110,50 +185,51 @@ export class PayPalWebhookRecoveryWorker {
     };
 
     for (const candidate of candidates) {
-      const claimed = await this.store.claimVerifiedForReplay(
-        candidate.id,
-        now,
-        maxAttempts,
-        leaseMs,
-      );
+      const claimed = await this.store.claimVerifiedForReplay(candidate.id, now, limits, leaseMs);
       if (!claimed) continue;
       result.claimed += 1;
       const replay =
         this.options.replay ??
         ((input: VerifiedWebhookRecoveryCandidate) =>
           this.service.replayVerified({ inboxId: input.id, event: input.payload }));
+      let outcome: "pending" | "failed";
       try {
-        const outcome = await replay(claimed);
-        if (outcome === "processed") {
+        const replayed = await replay(claimed);
+        if (replayed === "processed") {
           await this.store.markProcessed(claimed.id);
           result.processed += 1;
-        } else if (outcome === "ignored") {
+          continue;
+        }
+        if (replayed === "ignored") {
           await this.store.markIgnored(claimed.id, "Verified webhook replay was ignored.");
           result.ignored += 1;
-        } else {
-          result.pending += 1;
-          await this.retryOrExhaust(
-            claimed,
-            now,
-            maxAttempts,
-            baseDelayMs,
-            maxDelayMs,
-            "Verified webhook reconciliation is pending.",
-          );
-          if (claimed.attempts >= maxAttempts) result.exhausted += 1;
+          continue;
         }
+        outcome = "pending";
       } catch {
-        result.pending += 1;
-        await this.retryOrExhaust(
-          claimed,
-          now,
-          maxAttempts,
-          baseDelayMs,
-          maxDelayMs,
-          "Verified webhook recovery failed.",
-        );
-        if (claimed.attempts >= maxAttempts) result.exhausted += 1;
+        outcome = "failed";
       }
+      result.pending += 1;
+      const next = webhookRetryAt(
+        {
+          attempts: claimed.attempts,
+          outcome,
+          awaitingProvider: claimed.awaitingProvider,
+          now,
+        },
+        schedule,
+      );
+      const reason =
+        outcome === "pending"
+          ? "Verified webhook reconciliation is pending."
+          : "Verified webhook recovery failed.";
+      await this.store.scheduleRetry(
+        claimed.id,
+        next,
+        next ? reason : `${reason} Retry limit reached.`,
+        outcome === "pending" ? { awaitingProvider: true } : {},
+      );
+      if (!next) result.exhausted += 1;
     }
     await heartbeats.finishWorkerRun({
       runId,
@@ -162,20 +238,5 @@ export class PayPalWebhookRecoveryWorker {
       counts: result,
     });
     return result;
-  }
-
-  private retryOrExhaust(
-    claimed: VerifiedWebhookRecoveryCandidate,
-    now: Date,
-    maxAttempts: number,
-    baseDelayMs: number,
-    maxDelayMs: number,
-    reason: string,
-  ) {
-    if (claimed.attempts >= maxAttempts) {
-      return this.store.scheduleRetry(claimed.id, null, `${reason} Retry limit reached.`);
-    }
-    const delay = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, claimed.attempts - 1));
-    return this.store.scheduleRetry(claimed.id, new Date(now.getTime() + delay), reason);
   }
 }

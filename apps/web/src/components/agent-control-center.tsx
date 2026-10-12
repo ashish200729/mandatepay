@@ -25,7 +25,13 @@ import {
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { formatUsdLabel, parseUsdDecimal } from "@/lib/mandates/money";
-import { capturedSpendByCategory, decisionCounts } from "@/lib/analytics/chart-math";
+import {
+  capturedSpendByCategory,
+  decisionCounts,
+  isCapturedRow,
+  paymentStatusLabel,
+  refundStatusLabel,
+} from "@/lib/analytics/chart-math";
 import {
   getDashboardSummary,
   getDashboardTransactions,
@@ -84,6 +90,7 @@ const emptyTotals: DashboardTotals = {
   blocked: 0,
   spendMinor: 0,
   refundsMinor: 0,
+  reversedMinor: 0,
   activeMandates: 0,
 };
 
@@ -91,8 +98,6 @@ function formatDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toISOString().slice(0, 16).replace("T", " ");
 }
-
-const CAPTURED_PAYMENT_STATUSES = new Set(["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED"]);
 
 type SpendBarRow = { label: string; amountMinor: number };
 
@@ -102,8 +107,7 @@ function capturedSpendByKey(
 ): SpendBarRow[] {
   const totals = new Map<string, number>();
   for (const row of rows) {
-    if (!row.capturedAt || !row.paypalStatus || !CAPTURED_PAYMENT_STATUSES.has(row.paypalStatus))
-      continue;
+    if (!isCapturedRow(row)) continue;
     const key = getKey(row);
     totals.set(key, (totals.get(key) ?? 0) + row.amountMinor);
   }
@@ -124,12 +128,6 @@ function weekKey(value: string) {
   const mondayOffset = day === 0 ? -6 : 1 - day;
   date.setUTCDate(date.getUTCDate() + mondayOffset);
   return `Week of ${date.toISOString().slice(0, 10)}`;
-}
-
-function refundStatus(value: string | null) {
-  if (value === "REFUNDED") return "Refunded";
-  if (value === "PARTIALLY_REFUNDED") return "Partial refund";
-  return "—";
 }
 
 function transactionDetailHref(row: TransactionRow) {
@@ -189,7 +187,7 @@ const transactionColumns: ColDef<TransactionRow>[] = [
     width: 180,
     minWidth: 180,
     valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
-      typeof value === "string" ? value.replaceAll("_", " ") : "Not recorded",
+      paymentStatusLabel(typeof value === "string" ? value : null),
   },
   {
     field: "mandate.title",
@@ -204,7 +202,7 @@ const transactionColumns: ColDef<TransactionRow>[] = [
     field: "paypalStatus",
     headerName: "Refund",
     valueFormatter: ({ value }: ValueFormatterParams<TransactionRow>) =>
-      refundStatus(typeof value === "string" ? value : null),
+      refundStatusLabel(typeof value === "string" ? value : null),
     minWidth: 130,
   },
 ];
@@ -337,6 +335,66 @@ function MiniBars({
           <p>No captured spend in this view. Completed payments will appear here.</p>
         </div>
       )}
+    </section>
+  );
+}
+
+const demoSteps = [
+  {
+    title: "Create the demo mandate",
+    text: "Choose “Use demo mandate”, review every rule, then activate it.",
+    href: "/mandates/new",
+    action: "Create the demo mandate",
+  },
+  {
+    title: "Ask the assistant",
+    text: "Try “Find Sony or Bose noise-cancelling headphones”. Results outside your mandate are listed with the reason.",
+    href: "/chat",
+    action: "Open the assistant",
+  },
+  {
+    title: "See all three outcomes",
+    text: "Propose the $139 pair (allowed when autonomous purchasing is on), the $169 pair (needs your approval) and the $220 bundle (blocked).",
+    href: "/discover",
+    action: "Browse the Demo Catalog",
+  },
+] as const;
+
+/** Guidance for a brand-new account. It shows steps only, never sample financial records. */
+function GettingStarted() {
+  return (
+    <section
+      aria-labelledby="getting-started-heading"
+      className="rounded-xl border border-sand-border bg-sand/50 p-5 sm:p-6"
+    >
+      <h2
+        id="getting-started-heading"
+        className="font-editorial text-2xl tracking-[-0.02em] sm:text-[28px]"
+      >
+        New here? Run the demo in three steps.
+      </h2>
+      <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+        Your control center fills in as AgentGuard records real decisions. Payments run in PayPal
+        Sandbox, so no real money moves.
+      </p>
+      <ol className="mt-5 grid gap-4 md:grid-cols-3">
+        {demoSteps.map((step, index) => (
+          <li key={step.title} className="flex min-w-0 flex-col rounded-lg bg-card p-4">
+            <span className="flex size-7 items-center justify-center rounded-full border border-border text-xs font-medium tabular-nums">
+              {index + 1}
+            </span>
+            <h3 className="mt-3 text-sm font-medium">{step.title}</h3>
+            <p className="mt-1 flex-1 text-sm leading-6 text-muted-foreground">{step.text}</p>
+            <Link
+              href={step.href}
+              className="mt-3 inline-flex min-h-11 items-center gap-1.5 text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {step.action}
+              <ArrowUpRight size={14} aria-hidden="true" />
+            </Link>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }
@@ -541,9 +599,18 @@ export function AgentControlCenter() {
       </div>
     );
 
+  const brandNew =
+    totals.purchases === 0 &&
+    totals.blocked === 0 &&
+    totals.activeMandates === 0 &&
+    !transactions.length &&
+    !policyEvents.length &&
+    !filterLabels.length;
+
   return (
     <AgGridProvider modules={communityModules}>
       <div className="space-y-7">
+        {brandNew ? <GettingStarted /> : null}
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-2">
             <ShieldCheck size={15} aria-hidden="true" />
@@ -566,7 +633,11 @@ export function AgentControlCenter() {
           <Metric
             label="Captured spend"
             value={formatUsdLabel(totals.spendMinor)}
-            detail={`${formatUsdLabel(totals.refundsMinor)} refunded`}
+            detail={
+              totals.reversedMinor > 0
+                ? `${formatUsdLabel(totals.refundsMinor)} refunded · ${formatUsdLabel(totals.reversedMinor)} reversed by PayPal`
+                : `${formatUsdLabel(totals.refundsMinor)} refunded`
+            }
           />
           <Metric
             label="Blocked attempts"
@@ -782,8 +853,13 @@ export function AgentControlCenter() {
                         ["Date · UTC", formatDate(row.activityAt)],
                         ["Mandate", `${row.mandate.title} · v${row.mandate.version}`],
                         ["Approval", row.approvalType?.replaceAll("_", " ") ?? "—"],
-                        ["Payment", row.paypalStatus?.replaceAll("_", " ") ?? "Not yet recorded"],
-                        ["Refund", refundStatus(row.paypalStatus)],
+                        [
+                          "Payment",
+                          row.paypalStatus
+                            ? paymentStatusLabel(row.paypalStatus)
+                            : "Not yet recorded",
+                        ],
+                        ["Refund", refundStatusLabel(row.paypalStatus)],
                       ].map(([label, value]) => (
                         <div key={label} className="grid grid-cols-[80px_1fr] gap-3">
                           <dt className="text-muted-foreground">{label}</dt>

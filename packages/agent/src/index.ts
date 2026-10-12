@@ -20,6 +20,7 @@ export {
   OpenAIProviderError,
   RankingInputError,
   RankingOutputError,
+  isAIConfigurationError,
   isMandateParserError,
   type CapabilityErrorCode,
   type ConfigurationErrorCode,
@@ -88,6 +89,7 @@ export {
   type ShoppingAgentOptions,
   type ShoppingAgentRequest,
   type ShoppingAgentResult,
+  type ShoppingAgentStepEvent,
   type ShoppingAgentToolHandler,
   type ShoppingAgentToolHandlerContext,
   type ShoppingAgentToolHandlers,
@@ -97,3 +99,14 @@ export {
   type ShoppingSearchProductsToolInput,
   type ShoppingToolTrace,
 } from "./shopping.js";
+export {
+  UNTRUSTED_LISTING_CLOSE,
+  UNTRUSTED_LISTING_NOTICE,
+  UNTRUSTED_LISTING_OPEN,
+  WITHHELD_DESCRIPTION,
+  cleanUntrustedText,
+  removeInvisibleCharacters,
+  spotlightListing,
+  type SpotlightOptions,
+  type UntrustedListingFields,
+} from "./spotlight.js";

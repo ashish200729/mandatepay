@@ -438,3 +438,53 @@ describe("AgentGuard deterministic policy engine", () => {
     expect(evaluateValidatedPolicy(parsed).decision).toBe("ALLOW");
   });
 });
+
+describe("AgentGuard listing-content risk", () => {
+  it("allows an otherwise valid purchase when screening found nothing", () => {
+    expect(expectDecision({ ...baseContext(), contentRisk: "none" }, "ALLOW").reasonCodes).toEqual(
+      [],
+    );
+  });
+
+  it("asks for approval when the listing text is suspicious", () => {
+    const result = expectDecision(
+      { ...baseContext(), contentRisk: "suspicious" },
+      "REQUIRE_APPROVAL",
+    );
+    expect(result.reasonCodes).toEqual(["PRODUCT_CONTENT_SUSPICIOUS"]);
+  });
+
+  it("hard-blocks a malicious listing even when it is otherwise within the mandate", () => {
+    const result = expectDecision({ ...baseContext(), contentRisk: "malicious" }, "BLOCK");
+    expect(result.reasonCodes).toEqual(["PRODUCT_CONTENT_MALICIOUS"]);
+  });
+
+  it("keeps the block when approval signals are also present", () => {
+    const context = { ...baseContext(), contentRisk: "malicious" as const };
+    context.globalAutonomousPurchasingEnabled = false;
+    context.proposal = { ...context.proposal };
+    const result = expectDecision(context, "BLOCK");
+    expect(result.reasonCodes).toContain("PRODUCT_CONTENT_MALICIOUS");
+    expect(result.reasonCodes).not.toContain("GLOBAL_AUTONOMY_DISABLED");
+  });
+
+  it("adds the content block to other hard violations", () => {
+    const context = { ...baseContext(), contentRisk: "malicious" as const };
+    context.product = { ...context.product, brand: "Apple" };
+    const result = expectDecision(context, "BLOCK");
+    expect(result.reasonCodes).toEqual(["BRAND_NOT_ALLOWED", "PRODUCT_CONTENT_MALICIOUS"]);
+  });
+
+  it("rejects an unknown content risk instead of ignoring it", () => {
+    const result = expectDecision({ ...baseContext(), contentRisk: "unknown" }, "BLOCK");
+    expect(result.reasonCodes).toEqual(["INVALID_POLICY_INPUT"]);
+  });
+});
+
+describe("reason code catalogue parity", () => {
+  it("lists every AgentGuard reason code for administrator views", async () => {
+    const { ADMIN_POLICY_REASON_CODES } = await import("@mandatepay/shared");
+    const { AGENTGUARD_REASON_CODES } = await import("../src/index.js");
+    expect([...ADMIN_POLICY_REASON_CODES].sort()).toEqual([...AGENTGUARD_REASON_CODES].sort());
+  });
+});

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProposal, safeExternalUrl } from "./client";
+import { createProposal, evaluateProposal, safeExternalUrl, searchProducts } from "./client";
 import type { NormalizedProduct } from "./types";
 
 describe("product source links", () => {
@@ -53,5 +53,56 @@ describe("product source links", () => {
     const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(firstBody.requestKey).toBe("proposal-request-key");
     expect(secondBody.requestKey).toBe("proposal-request-key");
+  });
+});
+
+describe("discovery policy copy", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows verdict-specific copy instead of raw reason codes", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        proposal: { id: "proposal_2", status: "BLOCKED", total: 12_000, currency: "USD" },
+        decision: { decision: "BLOCK", reasonCodes: ["CONDITION_NOT_ALLOWED"] },
+      }),
+    );
+    const proposal = await evaluateProposal("proposal_2");
+    expect(proposal.policyReason).toBe(
+      "Blocked by your mandate — Your mandate doesn’t allow this product condition",
+    );
+    expect(proposal.policyReason).not.toContain("CONDITION_NOT_ALLOWED");
+    expect(proposal.policy?.decision).toBe("BLOCK");
+  });
+
+  it("prefers the server explanation and reports Demo Catalog fallback", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json({
+          proposal: { id: "proposal_3", status: "AUTHORIZED" },
+          decision: {
+            decision: "ALLOW",
+            reasonCodes: [],
+            explanation: {
+              decision: "ALLOW",
+              headline: "Within your mandate — $139 is under your $150 automatic limit",
+              summary: "AgentGuard allowed this purchase without asking you.",
+              approvalCanOverride: true,
+              checks: [],
+            },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          products: [],
+          mode: "demo",
+          notice: "Demo Catalog fallback",
+          fallback: true,
+        }),
+      );
+    expect((await evaluateProposal("proposal_3")).policyReason).toBe(
+      "Within your mandate — $139 is under your $150 automatic limit",
+    );
+    expect(await searchProducts("mandate_1", "headphones")).toMatchObject({ fallback: true });
   });
 });

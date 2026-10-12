@@ -8,6 +8,7 @@ const labels: Record<AdminHealthComponent["id"], string> = {
   api: "API",
   database: "Database",
   worker: "Webhook worker",
+  reconcileWorker: "Payment reconcile worker",
   webhooks: "Webhooks",
   paypal: "PayPal Sandbox",
   channel3: "Channel3",

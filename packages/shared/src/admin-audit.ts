@@ -168,6 +168,7 @@ const summaries = {
         "FAILED",
         "PARTIALLY_REFUNDED",
         "REFUNDED",
+        "REVERSED",
       ])
       .optional(),
     amountMinor: count.optional(),

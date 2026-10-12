@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { DatabaseError, type DatabaseClient } from "@mandatepay/database";
+import { PAYPAL_ENVIRONMENTS } from "@mandatepay/paypal";
 import {
   capturePaypalOrder,
   createPaypalOrder,
@@ -23,7 +24,7 @@ export interface PayPalRouteContext {
   readonly lookupDemoProduct: (externalId: string) => Promise<DemoProductFacts | null>;
   readonly paypalStatus?: {
     readonly configured: boolean;
-    readonly environment: "sandbox";
+    readonly environment: "sandbox" | "live";
     readonly webhookConfigured: boolean;
   };
   readonly requireUser: (
@@ -54,8 +55,12 @@ function error(reply: FastifyReply, cause: unknown) {
         cause.code === "PAYER_APPROVAL_REQUIRED"
           ? "This payment requires approval before PayPal can be called."
           : cause.code === "PAYPAL_UNAVAILABLE"
-            ? "PayPal Sandbox is not configured."
-            : "PayPal returned an unusable payment response.",
+            ? "PayPal is not configured."
+            : cause.code === "PAYPAL_REQUEST_REJECTED"
+              ? "PayPal declined this request. No payment was taken; try again."
+              : cause.code === "CART_MANDATE_MISMATCH"
+                ? "This cart no longer matches the cart mandate signed when it was authorized, so PayPal was not called."
+                : "PayPal returned an unusable payment response.",
       code: cause.code,
     });
   }
@@ -90,7 +95,7 @@ export function registerPayPalRoutes(app: FastifyInstance, context: PayPalRouteC
     if (!user) return;
     const status = context.paypalStatus ?? {
       configured: context.paypal !== null,
-      environment: "sandbox" as const,
+      environment: context.paypal?.hosts === PAYPAL_ENVIRONMENTS.live ? "live" : "sandbox",
       webhookConfigured: false,
     };
     return reply.send(status);
@@ -109,6 +114,7 @@ export function registerPayPalRoutes(app: FastifyInstance, context: PayPalRouteC
       return reply.status(result.pending ? 202 : 200).send({
         payment: result.payment,
         approvalUrl: result.approvalUrl,
+        pending: result.pending,
       });
     } catch (cause) {
       return error(reply, cause);

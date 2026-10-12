@@ -10,7 +10,7 @@ const rules = [
 export function MandatePreview() {
   return (
     <figure
-      aria-label="Illustrative purchase mandate"
+      aria-label="Example purchase mandate"
       className="w-full rounded-2xl border border-sand-border bg-linear-to-b from-[#F7EED8]/70 via-sand to-[#EFE2C2] p-6 shadow-[0_8px_32px_rgba(27,20,14,0.04),inset_0_1px_0_rgba(255,255,255,0.7)] sm:p-8"
     >
       <div className="flex items-center justify-between gap-3 text-xs">
@@ -62,7 +62,7 @@ export function MandatePreview() {
         </div>
       </div>
       <figcaption className="mt-3.5 text-center text-xs tracking-tight text-muted-foreground">
-        An illustrative proposal. Your approval comes before payment.
+        A Demo Catalog proposal. Your approval comes before payment.
       </figcaption>
     </figure>
   );

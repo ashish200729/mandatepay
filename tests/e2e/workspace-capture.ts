@@ -9,16 +9,28 @@ export async function captureWorkspace(page: Page, testInfo: TestInfo, name: str
       await document.fonts.ready;
       window.scrollTo({ top: 0, behavior: "instant" });
     });
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-    ).toBe(true);
+    const overflow = await page.evaluate(() => {
+      if (document.documentElement.scrollWidth <= window.innerWidth) return null;
+      const widest = [...document.querySelectorAll("body *")]
+        .map((element) => ({ element, right: element.getBoundingClientRect().right }))
+        .filter(({ right }) => right > window.innerWidth + 1)
+        .sort((a, b) => b.right - a.right)[0];
+      return widest
+        ? `${widest.element.tagName.toLowerCase()}.${widest.element.className} → ${Math.round(widest.right)}px`
+        : `document ${document.documentElement.scrollWidth}px`;
+    });
+    expect(overflow, `no horizontal overflow at ${width}px`).toBeNull();
     if (new URL(page.url()).pathname === "/chat") {
       const send = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
       expect(send).not.toBeNull();
       expect(send!.y + send!.height).toBeLessThanOrEqual(width < 600 ? 844 : 900);
-      expect(
-        await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1),
-      ).toBe(true);
+      const heights = await page.evaluate(() => ({
+        document: document.documentElement.scrollHeight,
+        viewport: window.innerHeight,
+      }));
+      expect(heights.document, `chat must fit the ${width}px viewport`).toBeLessThanOrEqual(
+        heights.viewport + 1,
+      );
       await page.getByRole("log", { name: "Shopping conversation" }).evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });

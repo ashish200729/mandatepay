@@ -11,12 +11,17 @@ export const SYSTEM_COMPONENT_IDS = [
   "api",
   "database",
   "worker",
+  "reconcileWorker",
   "webhooks",
   "paypal",
   "channel3",
   "demoCatalog",
   "agent",
 ] as const;
+
+/** Scheduled jobs that record one heartbeat row per run. */
+export const ADMIN_WORKER_NAMES = ["paypal-webhook-recovery", "paypal-payment-reconcile"] as const;
+export type AdminWorkerName = (typeof ADMIN_WORKER_NAMES)[number];
 
 export const WORKER_HEARTBEAT_STALE_MS = 15 * 60_000;
 export const DATABASE_SLOW_MS = 1_000;
@@ -154,34 +159,53 @@ export function aggregateHealth(
   return worst;
 }
 
+const WORKER_LIVENESS_COPY: Record<
+  AdminWorkerName,
+  Record<"unknown" | "stale" | "failed" | "skipped" | "running" | "succeeded", string>
+> = {
+  "paypal-webhook-recovery": {
+    unknown: "No webhook worker heartbeat has been recorded. Liveness is unknown.",
+    stale: "The last webhook worker heartbeat is older than 15 minutes.",
+    failed: "The last webhook recovery run failed.",
+    skipped: "Webhook processing is turned off.",
+    running: "A webhook recovery run is in progress.",
+    succeeded: "The last webhook recovery run succeeded.",
+  },
+  "paypal-payment-reconcile": {
+    unknown: "No payment reconciliation heartbeat has been recorded. Liveness is unknown.",
+    stale: "The last payment reconciliation heartbeat is older than 15 minutes.",
+    failed: "The last payment reconciliation run failed.",
+    skipped: "The last payment reconciliation run was skipped.",
+    running: "A payment reconciliation run is in progress.",
+    succeeded: "The last payment reconciliation run succeeded.",
+  },
+};
+
+/** Missing heartbeat is unknown; one older than 15 minutes, failed or skipped is degraded. */
 export function workerLiveness(input: {
   heartbeatAt: Date | null;
   outcome: (typeof WORKER_RUN_OUTCOMES)[number] | null;
   now: Date;
+  worker?: AdminWorkerName;
 }): { status: HealthStatus; summary: string } {
+  const copy = WORKER_LIVENESS_COPY[input.worker ?? "paypal-webhook-recovery"];
   if (!input.heartbeatAt || !input.outcome) {
-    return {
-      status: "unknown",
-      summary: "No webhook worker heartbeat has been recorded. Liveness is unknown.",
-    };
+    return { status: "unknown", summary: copy.unknown };
   }
   const age = input.now.getTime() - input.heartbeatAt.getTime();
   if (age > WORKER_HEARTBEAT_STALE_MS) {
-    return {
-      status: "degraded",
-      summary: "The last webhook worker heartbeat is older than 15 minutes.",
-    };
+    return { status: "degraded", summary: copy.stale };
   }
   if (input.outcome === "FAILED") {
-    return { status: "degraded", summary: "The last webhook recovery run failed." };
+    return { status: "degraded", summary: copy.failed };
   }
   if (input.outcome === "SKIPPED") {
-    return { status: "degraded", summary: "Webhook processing is turned off." };
+    return { status: "degraded", summary: copy.skipped };
   }
   if (input.outcome === "RUNNING") {
-    return { status: "ready", summary: "A webhook recovery run is in progress." };
+    return { status: "ready", summary: copy.running };
   }
-  return { status: "ready", summary: "The last webhook recovery run succeeded." };
+  return { status: "ready", summary: copy.succeeded };
 }
 
 export const AdminHealthComponentSchema = z
@@ -219,14 +243,14 @@ export const AdminSystemHealthSchema = z
     environment: z.enum(["development", "test", "production", "unknown"]),
     build: AdminBuildSchema,
     overall: HealthStatusSchema,
-    components: z.array(AdminHealthComponentSchema).max(8),
+    components: z.array(AdminHealthComponentSchema).max(SYSTEM_COMPONENT_IDS.length),
   })
   .strict();
 export type AdminSystemHealth = z.infer<typeof AdminSystemHealthSchema>;
 
 export const AdminWorkerSnapshotSchema = z
   .object({
-    worker: z.literal("paypal-webhook-recovery"),
+    worker: z.enum(ADMIN_WORKER_NAMES),
     status: HealthStatusSchema,
     runId: z.uuid().nullable(),
     startedAt: utc.nullable(),

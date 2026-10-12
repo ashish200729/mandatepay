@@ -4,7 +4,19 @@ AI commerce with human-controlled spending permissions.
 
 **AI proposes. AgentGuard authorizes. PayPal executes.**
 
-This TypeScript monorepo implements authentication, reviewable/versioned mandates, product discovery and comparison, deterministic AgentGuard decisions, approvals, Sandbox checkout/capture/refund services, verified webhook processing, audit history and an AG Grid Community Control Center. The approved landing page remains intact. Local automated financial tests use an isolated simulated provider; real Sandbox buyer/capture/refund/webhook and hosted deployment qualification remain open. No landing-page example is a real purchase.
+This TypeScript monorepo implements authentication, reviewable/versioned mandates, product discovery and comparison, deterministic AgentGuard decisions, approvals, PayPal Sandbox checkout/capture/refunds, saved-PayPal (Vault) autonomous payments, verified webhook processing with recovery workers, signed AP2-shaped mandate credentials, an MCP server for external AI agents, audit history, an AG Grid Community Control Center and an operator admin console. Automated financial tests use an isolated simulated PayPal provider; live Sandbox evidence is recorded separately in [PROGRESS.md](docs/implementation/PROGRESS.md). Landing-page examples are Demo Catalog products you can reproduce in PayPal Sandbox; none is a real-money purchase.
+
+### Highlights
+
+- **Explainable verdicts.** Every proposal shows the recorded AgentGuard verdict with deterministic, server-templated copy (for example “Within your mandate — $139 is under your $150 automatic limit”) and a “Why?” disclosure listing each rule checked, its limit and the proposal's value. The explanation is derived from the stored decision, rules snapshot and totals; it never changes the decision.
+- **Autonomy that actually pays — only inside the mandate.** After explicit consent in Settings, MandatePay saves the buyer's PayPal with Vault v3. When AgentGuard returns ALLOW within the automatic limit and autonomy is on, the server pays with the saved method — no redirect. REQUIRE_APPROVAL keeps normal PayPal checkout, BLOCK is final, and removing the method deletes the PayPal token. See [Vault autonomy](docs/implementation/VAULT_AUTONOMY.md).
+- **Prompt-injection defense.** Retailer text is screened deterministically for instructions aimed at AI agents. Suspicious listings need approval; malicious ones are a hard BLOCK, and listing text reaches the model only inside delimited untrusted blocks. The Demo Catalog includes a red-team “Open Box Deal” to show it live.
+- **Policy simulator.** “Try AgentGuard” on a mandate evaluates hypothetical purchases with the real engine in a read-only database transaction — nothing is proposed, reserved or paid.
+- **Verifiable mandates.** Activated mandates and authorized carts are issued as ES256-signed credentials using AP2 v0.2 field names, with a public JWKS and verifier. PayPal orders are refused if the cart no longer matches its signed cart mandate. See [AP2-shaped mandates](docs/architecture/AP2_MANDATES.md).
+- **Any agent, same guardrails.** The MCP server (`apps/mcp`) lets Claude, ChatGPT, Cursor or custom agents search, simulate and propose through AgentGuard with scoped, expiring, revocable tokens. They cannot approve, check out, capture or refund. See [MCP integration](docs/integrations/MCP.md).
+- **Live agent progress.** Chat streams each server step (reading the mandate, searching, comparing, AgentGuard evaluating) and falls back to the JSON endpoint.
+- **Transparent filtering.** Search results outside the mandate are listed under “Filtered by your mandate” with the rule each breaks; they are never offered to the model.
+- **Reliable money movement.** Typed PayPal errors distinguish definitive declines from uncertain outcomes; declines release spend holds, uncertain captures are reconciled by `worker:reconcile`, and webhooks cover pending, reversed, dashboard-issued refunds and Vault token events.
 
 Read [phase progress](docs/implementation/PROGRESS.md), [plan review](docs/implementation/PLAN_REVIEW.md), and [tool usage](docs/implementation/TOOL_USAGE.md) for qualification boundaries.
 
@@ -40,7 +52,7 @@ On subsequent local starts, use `pnpm dev:local` to start the existing database,
 - API liveness: http://localhost:4000/health
 - Database/auth readiness: http://localhost:4000/health/ready
 
-Sign up at `/signup`, open **Mandates → New mandate**, review the AI-generated rules, save the draft, then activate it explicitly. `/chat` runs the limited shopping agent under a selected active mandate; structured discovery/comparison remains available as a fallback. Prepare a proposal, review required approval, then continue to Sandbox checkout. Use a separate personal Sandbox buyer for PayPal approval. `/orders` shows server-confirmed payment/refund facts; `/dashboard` shows owned analytics, natural-language filters and policy/audit detail links. Refund chat remains available without an active purchasing mandate and prepares reviewable details only. Without database/auth configuration, protected services report unavailable.
+Sign up at `/signup`, open **Mandates → New mandate**, review the AI-generated rules, save the draft, then activate it explicitly. Select **Use demo mandate** for the example rules. `/chat` runs the limited shopping agent under a selected active mandate (Enter sends, Shift+Enter adds a line); structured discovery/comparison remains available and works without the AI service. Prepare a proposal, review required approval, then continue to Sandbox checkout. Use a separate personal Sandbox buyer for PayPal approval. `/orders` shows server-confirmed payment/refund facts; `/dashboard` shows owned analytics, natural-language filters and policy/audit detail links. Refund chat remains available without an active purchasing mandate and prepares reviewable details only. Without database/auth configuration, protected services report unavailable.
 
 Admin access requires `ADMIN_ORIGIN=http://localhost:3001` in the API's ignored environment file, plus an existing verified account granted the singleton administrator role. Provision that role with `MANDATEPAY_ADMIN_USER_ID=<verified-user-id> pnpm --filter @mandatepay/database admin:bootstrap`, then sign in at the admin URL. Customer signup never grants administrator privileges. See [the admin security setup](docs/implementation/ADMIN_PHASE_1.md).
 
@@ -75,17 +87,19 @@ pnpm test:e2e
 
 ## Workspace
 
-| Path                  | Purpose                                                   |
-| --------------------- | --------------------------------------------------------- |
-| `apps/web`            | Next.js App Router, React, Tailwind, application UI       |
-| `apps/api`            | Fastify, Better Auth, protected server routes             |
-| `packages/shared`     | Strict domain contracts and integer-cent arithmetic       |
-| `packages/agent`      | Server-only parsing, ranking, analytics and limited tools |
-| `packages/channel3`   | Normalized discovery and explicit demo merchant catalog   |
-| `packages/paypal`     | Sandbox OAuth, orders, captures, refunds and webhooks     |
-| `packages/agentguard` | Pure deterministic policy decisions                       |
-| `packages/database`   | Prisma migrations, repositories, immutable audit/history  |
-| `packages/ui`         | Shared shadcn components, theme and controls              |
+| Path                  | Purpose                                                    |
+| --------------------- | ---------------------------------------------------------- |
+| `apps/web`            | Next.js App Router, React, Tailwind, application UI        |
+| `apps/admin`          | Next.js operator console (separate origin and identity)    |
+| `apps/api`            | Fastify, Better Auth, protected server routes              |
+| `apps/mcp`            | MCP server (stdio and Streamable HTTP) for external agents |
+| `packages/shared`     | Strict domain contracts and integer-cent arithmetic        |
+| `packages/agent`      | Server-only parsing, ranking, analytics and limited tools  |
+| `packages/channel3`   | Normalized discovery and explicit demo merchant catalog    |
+| `packages/paypal`     | Sandbox OAuth, orders, captures, refunds and webhooks      |
+| `packages/agentguard` | Pure deterministic policy decisions                        |
+| `packages/database`   | Prisma migrations, repositories, immutable audit/history   |
+| `packages/ui`         | Shared shadcn components, theme and controls               |
 
 Use `pnpm dev:web` / `pnpm dev:api` to start one surface, `pnpm build` for production builds, and package `start` scripts afterward. Optional `pnpm --filter @mandatepay/database seed` creates clearly marked sample records, not provider-confirmed financial evidence.
 
@@ -99,6 +113,6 @@ Project source uses the root [MIT license](LICENSE). Provider services and third
 
 Production authentication requires HTTPS, `AUTH_SECRET`, PostgreSQL, `RESEND_API_KEY`, and a verified bare-email `AUTH_EMAIL_FROM`. Email verification is required in production; local development/test signup remains immediate by default. Verification/resend, forgot-password and single-use reset flows are implemented. Reset invalidates existing sessions. Tests use a fake sender; live sender delivery remains unverified. See [environment setup](docs/development/environment.md).
 
-The verified webhook recovery job can be run with `pnpm --filter @mandatepay/api worker:webhooks` after building the API. It retries previously verified inbox events with leases and bounded backoff, fetching authoritative provider state without creating new payments. Exhausted events remain held for investigation. See [optional Render setup](docs/deployment/RENDER.md), [threat model](docs/security/THREAT_MODEL.md), [system diagram](docs/architecture/SYSTEM.md), [Postman collection](docs/api/POSTMAN.md) and [demo runbook](docs/demo/RUNBOOK.md).
+Background workers run after building the API: `pnpm --filter @mandatepay/api worker:webhooks` retries previously verified inbox events with leases and bounded backoff, and `pnpm --filter @mandatepay/api worker:reconcile` settles or releases stale captures and replays uncertain saved-PayPal orders with their original request id. Neither creates new payments. Judge/demo accounts can be provisioned with `pnpm --filter @mandatepay/api demo:account` (see [Render setup](docs/deployment/RENDER.md)). See also the [threat model](docs/security/THREAT_MODEL.md), [system diagram](docs/architecture/SYSTEM.md), [commerce API](docs/architecture/commerce-api.md), [Postman collection](docs/api/POSTMAN.md) and [demo runbook](docs/demo/RUNBOOK.md).
 
-PayPal execution remains Sandbox-only. The user deferred hosted deployment and live Sandbox buyer verification. Real payment/refund/webhook delivery, live email delivery and final submission/video qualification remain open. AG Studio, Vault, recurring purchases and voice are not implemented. The current local implementation and exact evidence are recorded in [the handoff](docs/implementation/PROGRESS.md).
+PayPal runs in Sandbox by default; `PAYPAL_ENV=live` is an explicit opt-in that has not been qualified. Saved-PayPal autonomy requires Vault to be enabled on the PayPal app and a 32-byte `TOKEN_ENCRYPTION_KEY`; production also requires `MANDATE_SIGNING_KEY` and `INTERNAL_PROXY_SECRET`. Hosted deployment, live email delivery and the final submission video remain open. AG Studio, recurring purchases and voice are not implemented. Exact evidence and boundaries are recorded in [the handoff](docs/implementation/PROGRESS.md).

@@ -133,6 +133,9 @@ export async function getDashboardSummary() {
     blocked: integer(totals.blocked, "blocked"),
     spendMinor: integer(totals.spendMinor, "spendMinor"),
     refundsMinor: integer(totals.refundsMinor, "refundsMinor"),
+    // Older API builds omit reversals; they had none to report.
+    reversedMinor:
+      totals.reversedMinor === undefined ? 0 : integer(totals.reversedMinor, "reversedMinor"),
     activeMandates: integer(totals.activeMandates, "activeMandates"),
   } satisfies DashboardTotals;
 }

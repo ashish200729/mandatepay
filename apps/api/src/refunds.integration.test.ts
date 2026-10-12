@@ -441,6 +441,96 @@ describe("PayPal refund boundary", () => {
     expect(requests.at(-1)).toBe(requests.at(-2));
   });
 
+  it("marks a definitively rejected refund FAILED and restores the refundable remainder", async () => {
+    const { payment } = await createRefundablePayment("rejected-4xx");
+    refundCapture.mockRejectedValueOnce(
+      new PayPalProviderError("UPSTREAM_REQUEST_FAILED", 422, {
+        details: {
+          name: "UNPROCESSABLE_ENTITY",
+          issue: "REFUND_NOT_ALLOWED",
+          debugId: "debug4xx",
+        },
+      }),
+    );
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: 4_000,
+        reason: "Provider will refuse",
+        requestKey: requestKey("rejected-4xx"),
+        confirmed: true,
+      },
+    });
+    expect(rejected.statusCode).toBe(200);
+    expect(rejected.json().pending).toBe(false);
+    expect(rejected.json().refund.status).toBe("FAILED");
+    const stored = await database.refund.findUniqueOrThrow({
+      where: { id: rejected.json().refund.id },
+    });
+    expect(stored.failureCode).toBe("PAYPAL_REFUND_REJECTED:REFUND_NOT_ALLOWED");
+    expect(stored.paypalRefundId).toBeNull();
+    expect(
+      await database.auditEvent.count({
+        where: { entityId: stored.id, eventType: "REFUND_FAILED" },
+      }),
+    ).toBe(1);
+    // The same request key replays the terminal result without another mutation.
+    const mutations = refundCapture.mock.calls.length;
+    const replay = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: 4_000,
+        reason: "Provider will refuse",
+        requestKey: requestKey("rejected-4xx"),
+        confirmed: true,
+      },
+    });
+    expect(replay.json().refund.status).toBe("FAILED");
+    expect(refundCapture.mock.calls.length).toBe(mutations);
+    // A FAILED refund no longer consumes the remainder: a full refund is allowed.
+    const full = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: null,
+        reason: "Full refund after rejection",
+        requestKey: requestKey("rejected-4xx-full"),
+        confirmed: true,
+      },
+    });
+    expect(full.statusCode).toBe(200);
+    expect(full.json().refund.amount).toBe(10_000);
+    expect(full.json().payment.status).toBe(PaymentStatus.REFUNDED);
+  });
+
+  it("keeps an uncertain 5xx refund SUBMITTED instead of failing it", async () => {
+    const { payment } = await createRefundablePayment("uncertain-5xx");
+    refundCapture.mockRejectedValueOnce(
+      new PayPalProviderError("UPSTREAM_UNAVAILABLE", 503, {
+        retryable: true,
+        unknownOutcome: true,
+      }),
+    );
+    const pending = await app.inject({
+      method: "POST",
+      url: `/api/payments/${payment.id}/refund`,
+      headers: headers(userA),
+      payload: {
+        amountMinor: 1_000,
+        reason: "Provider unavailable",
+        requestKey: requestKey("uncertain-5xx"),
+        confirmed: true,
+      },
+    });
+    expect(pending.statusCode).toBe(202);
+    expect(pending.json().refund.status).toBe("SUBMITTED");
+  });
+
   it("allows a refund after the mandate is revoked while rejecting provider mismatches", async () => {
     const { payment, mandate } = await createRefundablePayment("revoked");
     await database.mandate.update({ where: { id: mandate.id }, data: { status: "REVOKED" } });

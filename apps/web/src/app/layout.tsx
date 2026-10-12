@@ -19,7 +19,7 @@ const hedvig = localFont({
 export const metadata: Metadata = {
   title: "MandatePay — AI commerce, on your terms.",
   description:
-    "AI commerce with human-controlled spending permissions. Discover the MandatePay concept: AI proposes, AgentGuard authorizes, PayPal executes.",
+    "AI commerce with human-controlled spending permissions. AI proposes, AgentGuard authorizes, PayPal executes.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

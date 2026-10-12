@@ -30,5 +30,7 @@ export function loadE2eEnvironment() {
     MANDATEPAY_E2E_API_URL: "http://127.0.0.1:4100",
     API_URL: "http://127.0.0.1:4100",
     APP_URL: "http://127.0.0.1:3100",
+    // Exercises the BFF-to-API client-address path; loopback fixture value only.
+    INTERNAL_PROXY_SECRET: "e2e-only-internal-proxy-secret-not-for-deployment",
   };
 }

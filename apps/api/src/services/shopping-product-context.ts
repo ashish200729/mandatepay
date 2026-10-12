@@ -15,9 +15,30 @@ export const shoppingProductSchema = z
     currency: z.literal("USD"),
     merchant: text,
     productUrl: z.string().max(4_000).nullable(),
+    /** Same-origin Demo Catalog illustration only; external images are never proxied. */
+    imageUrl: z
+      .string()
+      .regex(/^\/demo-products\/[a-z0-9-]{1,80}\.svg$/u)
+      .nullable()
+      .optional(),
+    /**
+     * Cleaned seller description, kept only when screening found no instruction-like
+     * text. It reaches the model solely inside a delimited untrusted-data block.
+     */
+    description: text.nullable().optional(),
   })
   .strict();
 export type ShoppingProduct = z.output<typeof shoppingProductSchema>;
+
+/** A retrieved product the mandate excludes, with plain-language reasons. Never purchasable here. */
+export const excludedShoppingProductSchema = shoppingProductSchema
+  .extend({
+    reasons: z.array(text).min(1).max(8),
+    /** Set when the listing's own text tried to instruct AI agents. */
+    promptInjection: z.literal(true).optional(),
+  })
+  .strict();
+export type ExcludedShoppingProduct = z.output<typeof excludedShoppingProductSchema>;
 
 const contextSchema = z
   .object({
@@ -27,6 +48,7 @@ const contextSchema = z
     mandateVersion: z.number().int().positive(),
     expiresAt: z.number().int().positive(),
     products: z.array(shoppingProductSchema).max(8),
+    excluded: z.array(excludedShoppingProductSchema).max(8).optional(),
   })
   .strict();
 type Owner = { userId: string; mandateId: string; mandateVersion: number };
@@ -40,6 +62,7 @@ export function signShoppingProducts(
   products: readonly ShoppingProduct[],
   owner: Owner,
   secret: string,
+  excluded: readonly ExcludedShoppingProduct[] = [],
 ) {
   const payload = Buffer.from(
     JSON.stringify(
@@ -48,6 +71,9 @@ export function signShoppingProducts(
         ...owner,
         expiresAt: Date.now() + 15 * 60_000,
         products: [...products].sort((a, b) => a.priceMinor - b.priceMinor).slice(0, 8),
+        ...(excluded.length
+          ? { excluded: [...excluded].sort((a, b) => a.priceMinor - b.priceMinor).slice(0, 8) }
+          : {}),
       }),
     ),
   ).toString("base64url");
@@ -60,6 +86,15 @@ export function readShoppingProducts(
   owner: Owner,
   secret: string,
 ): ShoppingProduct[] | null {
+  return readShoppingContext(token, owner, secret)?.products ?? null;
+}
+
+/** Verified products plus mandate-excluded listings from the previous search. */
+export function readShoppingContext(
+  token: string,
+  owner: Owner,
+  secret: string,
+): { products: ShoppingProduct[]; excluded: ExcludedShoppingProduct[] } | null {
   try {
     if (token.length > 50_000) return null;
     const parts = token.split(".");
@@ -80,7 +115,7 @@ export function readShoppingProducts(
       data.expiresAt <= Date.now()
     )
       return null;
-    return data.products;
+    return { products: data.products, excluded: data.excluded ?? [] };
   } catch {
     return null;
   }

@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, LoaderCircle, ReceiptText, RotateCcw } from "lucide-react";
+import { ArrowLeft, Check, ExternalLink, LoaderCircle, ReceiptText, RotateCcw } from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { AuditTimeline } from "@/components/audit-timeline";
+import { CartMandateBadge } from "@/components/verifiable-mandate";
 import {
   formatUsdLabel,
   formatUsdMinor,
@@ -22,6 +23,7 @@ import {
   PaymentApiError,
 } from "@/lib/payments/client";
 import { calculateRemainingRefundableMinor } from "@/lib/payments/refunds";
+import { paymentOutcomeNotice } from "@/lib/payments/outcomes";
 import { consumeRefundDraft } from "@/lib/agent/refund-draft";
 import type { PaymentRecord } from "@/lib/payments/types";
 import {
@@ -315,9 +317,13 @@ export function OrderDetail({
   );
   const capturePending = payment.status === "CAPTURE_PENDING";
   const captureUncertain = capturePending || capturing || captureAwaitingConfirmation;
+  const outcome = paymentOutcomeNotice(payment);
+  // After a funding-source decline the payer must act in PayPal first.
+  const payerActionPending = Boolean(outcome?.payerActionRequired) && paypalState !== "return";
   const canConfirmPayment =
     !captured &&
     !expired &&
+    !payerActionPending &&
     Boolean(payment.paypalOrderId) &&
     ["CREATED", "APPROVED", "CAPTURE_PENDING"].includes(payment.status) &&
     (approved || (capturePending ? paymentChecked : paypalState === "return"));
@@ -353,6 +359,20 @@ export function OrderDetail({
       </div>
       {error ? <WorkspaceNotice error>{error}</WorkspaceNotice> : null}
       {paymentNotice ? <WorkspaceNotice>{paymentNotice}</WorkspaceNotice> : null}
+      {outcome ? (
+        <WorkspaceNotice error={outcome.tone === "error"}>
+          {outcome.message}
+          {outcome.actionUrl && outcome.actionLabel && !captured && !expired ? (
+            <a
+              href={outcome.actionUrl}
+              rel="noopener noreferrer"
+              className="ml-2 inline-flex min-h-11 items-center gap-1 font-medium underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {outcome.actionLabel} <ExternalLink size={14} aria-hidden="true" />
+            </a>
+          ) : null}
+        </WorkspaceNotice>
+      ) : null}
       <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
         <div className="grid gap-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <div>
@@ -377,6 +397,7 @@ export function OrderDetail({
           </div>
         </div>
       </section>
+      <CartMandateBadge proposalId={payment.proposalId} />
       {!captured &&
       payment.paypalOrderId &&
       ["CREATED", "APPROVED", "CAPTURE_PENDING"].includes(payment.status) ? (
@@ -423,6 +444,15 @@ export function OrderDetail({
           </Link>
         </WorkspaceNotice>
       ) : null}
+      {!captured &&
+      !payment.paypalOrderId &&
+      payment.paymentSource === "vault" &&
+      payment.status === "CAPTURE_PENDING" ? (
+        <WorkspaceNotice>
+          PayPal has not confirmed this automatic payment with your saved PayPal yet. The amount
+          stays reserved and MandatePay will not charge it twice; check back shortly.
+        </WorkspaceNotice>
+      ) : null}
       {paypalState === "cancel" ? (
         <div className="rounded-xl border border-border bg-secondary p-4 text-sm">
           PayPal approval was canceled. The server record above remains authoritative.
@@ -462,11 +492,16 @@ export function OrderDetail({
           <p className="flex items-center gap-2 font-medium">
             <Check size={17} aria-hidden="true" /> Server confirmed capture
           </p>
+          {payment.paymentSource === "vault" ? (
+            <p className="mt-2 text-sm font-medium">
+              Paid automatically with your saved PayPal — no PayPal redirect was needed.
+            </p>
+          ) : null}
           <p className="mt-2 break-all text-sm text-muted-foreground">
             Capture ID: {payment.paypalCaptureId}
           </p>
         </div>
-      ) : (
+      ) : payment.status === "REVERSED" ? null : (
         <div className="rounded-2xl border border-border bg-secondary p-6 text-sm leading-relaxed">
           <p className="font-medium">Refunds are unavailable until this payment is captured.</p>
           <p className="mt-2 text-muted-foreground">
@@ -670,6 +705,7 @@ export function OrderDetail({
                     >
                       <span>
                         {refund.status} · {formatUsdLabel(refund.amount)}
+                        {refund.providerInitiated ? " · Issued in PayPal" : ""}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {refund.paypalRefundId ?? "Provider reference pending"}

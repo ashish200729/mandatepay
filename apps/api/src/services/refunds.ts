@@ -14,8 +14,10 @@ import {
 import { evaluateRefundPolicy, type RefundReasonCode } from "@mandatepay/agentguard";
 import {
   PayPalError,
+  isDefinitivePayPalRejection,
   parseProviderMoney,
   type PayPalCapture,
+  type PayPalProviderError,
   type PayPalRefund,
 } from "@mandatepay/paypal";
 import { assertNewRefund } from "./platform-controls.js";
@@ -520,6 +522,56 @@ async function markRefundFailed(
   });
 }
 
+/**
+ * PayPal definitively refused the refund request, so no money moved. The
+ * refund becomes FAILED, which restores the refundable remainder.
+ */
+async function markRefundRejected(
+  context: RefundServiceContext,
+  user: Owner,
+  refundId: string,
+  error: PayPalProviderError,
+) {
+  const issue =
+    [error.issue, error.providerName].find(
+      (value): value is string => typeof value === "string" && /^[A-Z0-9_]{1,64}$/u.test(value),
+    ) ?? null;
+  const failureCode = `PAYPAL_REFUND_REJECTED${issue ? `:${issue}` : ""}`.slice(0, 128);
+  return context.database.$transaction(async (tx) => {
+    const initial = await tx.refund.findFirst({ where: { id: refundId, userId: user.id } });
+    if (!initial) throw new DatabaseError("NOT_FOUND", "Refund was not found for this user.");
+    const payment = await lockPaymentInOrder(tx, user.id, initial.paymentId);
+    const refund = await tx.refund.findFirst({
+      where: { id: refundId, userId: user.id },
+      include: refundInclude,
+    });
+    if (!refund) throw new DatabaseError("NOT_FOUND", "Refund was not found for this user.");
+    // A provider-bound refund is only ended by its own provider status.
+    if (!pendingRefundStatuses.includes(refund.status) || refund.paypalRefundId) return refund;
+    const updated = await tx.refund.update({
+      where: { id: refund.id },
+      data: { status: RefundStatus.FAILED, failureCode },
+      include: refundInclude,
+    });
+    await tx.auditEvent.create({
+      data: {
+        userId: user.id,
+        eventType: AuditEventType.REFUND_FAILED,
+        entityType: AuditEntityType.REFUND,
+        entityId: refund.id,
+        dedupeKey: `paypal-refund-rejected:${refund.id}`,
+        payload: {
+          refundId: refund.id,
+          paymentId: payment.id,
+          failureCode,
+          ...(error.debugId ? { providerDebugId: error.debugId } : {}),
+        },
+      },
+    });
+    return updated;
+  });
+}
+
 async function providerCapture(
   context: RefundServiceContext,
   payment: PaymentReceipt,
@@ -602,6 +654,10 @@ async function applyProviderRefund(
     });
     return await reconcile(providerRefund);
   } catch (error) {
+    if (isDefinitivePayPalRejection(error)) {
+      await markRefundRejected(context, user, refund.id, error);
+      return refundResult(context, user.id, refund.id, false);
+    }
     if (!isPendingProviderError(error)) throw error;
     const current = await currentPaymentForRefund(context, user.id, refund.id);
     return {

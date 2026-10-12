@@ -119,6 +119,24 @@ test("web imports only server URLs, excluding provider/auth/database secrets and
   );
 });
 
+test("BFFs import the internal proxy secret but no API-only or demo credentials", (t) => {
+  const f = fixture(t);
+  f.root(
+    ".env",
+    "API_URL=http://root.test\nINTERNAL_PROXY_SECRET=fixture-proxy-secret\nTRUST_PROXY=1\nDEMO_ACCOUNT_PASSWORD=private\nAUTH_SECRET=private",
+  );
+  for (const keys of [WEB_ENV_KEYS, ADMIN_ENV_KEYS]) {
+    assert.deepEqual(
+      { ...readWorkspaceEnvironment({ ...f, keys }) },
+      { API_URL: "http://root.test", INTERNAL_PROXY_SECRET: "fixture-proxy-secret" },
+    );
+  }
+  const api = readWorkspaceEnvironment({ ...f, keys: API_ENV_KEYS });
+  assert.equal(api.INTERNAL_PROXY_SECRET, "fixture-proxy-secret");
+  assert.equal(api.TRUST_PROXY, "1");
+  assert.equal(api.DEMO_ACCOUNT_PASSWORD, "private");
+});
+
 test("database tooling reads only URLs and API reads supported runtime knobs", (t) => {
   const f = fixture(t);
   f.root(

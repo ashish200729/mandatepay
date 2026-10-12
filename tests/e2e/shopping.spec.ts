@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { captureChat, chatResult } from "./chat-capture";
 import { captureWorkspace } from "./workspace-capture";
 
 const isolatedApiUrl = process.env.MANDATEPAY_E2E_API_URL ?? process.env.API_URL ?? "";
@@ -38,16 +39,20 @@ async function createActiveMandate(page: Page, title: string) {
   return mandate.id as string;
 }
 
+const chatCaptures = new WeakMap<Page, Awaited<ReturnType<typeof captureChat>>>();
+
 async function sendMessage(page: Page, message: string) {
+  let capture = chatCaptures.get(page);
+  if (!capture) {
+    capture = await captureChat(page);
+    chatCaptures.set(page, capture);
+  }
   await page.getByLabel("Message the shopping agent").fill(message);
-  const response = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/api/agent/chat") && response.request().method() === "POST",
-  );
+  const response = capture.next();
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const completed = await response;
-  expect(completed.ok()).toBeTruthy();
-  return completed.json();
+  expect(completed.status).toBe(200);
+  return chatResult(completed) as Record<string, any>;
 }
 
 async function askDashboard(page: Page, query: string) {
@@ -104,8 +109,15 @@ test.describe("conversational shopping and read-only dashboard", () => {
       "create_purchase_proposal",
     ]);
     const proposalCard = page.getByRole("article").filter({ hasText: "$169.00" });
+    await expect(proposalCard.getByText("Needs your approval", { exact: true })).toBeVisible();
     await expect(
-      proposalCard.getByText("AgentGuard: REQUIRE APPROVAL", { exact: true }),
+      proposalCard.getByText("Needs your approval — $169 is above your $150 automatic limit", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await proposalCard.getByRole("button", { name: /^Why\?/u }).click();
+    await expect(
+      proposalCard.getByRole("list", { name: "Rules AgentGuard checked" }),
     ).toBeVisible();
     await expect(
       proposalCard.getByText("Selected headphones mandate · v1", { exact: true }),
@@ -115,7 +127,7 @@ test.describe("conversational shopping and read-only dashboard", () => {
       proposalCard.getByRole("link", { name: "Continue to Sandbox checkout" }),
     ).toHaveCount(0);
     await page.getByText("Show server steps", { exact: true }).click();
-    await expect(page.getByText("compare_products", { exact: true })).toBeVisible();
+    await expect(page.getByText("Compared products", { exact: true })).toBeVisible();
     await captureWorkspace(page, testInfo, "chat");
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
@@ -135,6 +147,11 @@ test.describe("conversational shopping and read-only dashboard", () => {
       .getByRole("article")
       .filter({ hasText: "Bose QuietComfort Refurbished Headphones" });
     await expect(blockedCard).toHaveCount(0);
+    const filtered = page.getByRole("region", { name: "Filtered by your mandate" }).last();
+    await expect(filtered.getByText("Bose QuietComfort Refurbished Headphones")).toBeVisible();
+    await expect(
+      filtered.getByText("Your mandate allows new only; this one is refurbished."),
+    ).toBeVisible();
     expect((await (await page.request.get("/api/orders")).json()).orders).toHaveLength(0);
 
     // A caller supplying a known controlled SKU directly must still be blocked
@@ -177,7 +194,8 @@ test.describe("conversational shopping and read-only dashboard", () => {
     await details.click();
     await expect(page).toHaveURL(new RegExp(`/proposals/${proposed.proposal.id}$`));
     await expect(page.getByRole("heading", { name: "Policy decision", exact: true })).toBeVisible();
-    await expect(page.getByText("REQUIRE APPROVAL", { exact: true })).toBeVisible();
+    await expect(page.getByText("Needs your approval", { exact: true })).toBeVisible();
+    await expect(page.getByRole("list", { name: "Rules AgentGuard checked" })).toBeVisible();
 
     await page.getByRole("link", { name: "Control center", exact: true }).click();
     const decisions = await askDashboard(

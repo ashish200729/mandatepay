@@ -2388,6 +2388,7 @@ describe("admin security with persisted Better Auth sessions", () => {
         "api",
         "database",
         "worker",
+        "reconcileWorker",
         "webhooks",
         "paypal",
         "channel3",
@@ -2418,6 +2419,7 @@ describe("admin security with persisted Better Auth sessions", () => {
       });
       expect(workers.statusCode).toBe(200);
       expect(workers.json().data.workers[0].worker).toBe("paypal-webhook-recovery");
+      expect(workers.json().data.workers[1].worker).toBe("paypal-payment-reconcile");
 
       const repository = new ObservabilityRepository(database, config.AUTH_SECRET);
       await expect(
