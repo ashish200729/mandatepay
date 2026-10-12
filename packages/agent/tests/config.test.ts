@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OPENAI_BASE_URL,
   OpenAIConfigurationError,
+  OpenAIProviderError,
+  isAIConfigurationError,
   loadOpenAIConfig,
   parseOpenAIConfig,
 } from "../src/index.js";
@@ -79,5 +81,19 @@ describe("OpenAI server configuration", () => {
       expect(error).toBeInstanceOf(OpenAIConfigurationError);
       expect(String(error)).not.toContain("sk-secret-value");
     }
+  });
+});
+
+describe("AI configuration errors", () => {
+  it("distinguishes a missing configuration from provider failures", () => {
+    let missing: unknown;
+    try {
+      loadOpenAIConfig({});
+    } catch (error) {
+      missing = error;
+    }
+    expect(isAIConfigurationError(missing)).toBe(true);
+    expect(isAIConfigurationError(new OpenAIProviderError("UPSTREAM_UNAVAILABLE"))).toBe(false);
+    expect(isAIConfigurationError(new Error("other"))).toBe(false);
   });
 });

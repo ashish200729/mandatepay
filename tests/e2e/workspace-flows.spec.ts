@@ -70,7 +70,7 @@ test("binds discovery to a deliberate mandate and opens the exact approval", asy
   await page.getByLabel("Search products").fill("headphones");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   const choices = page.getByRole("checkbox", { name: "Compare", exact: true });
-  await expect(choices).toHaveCount(3);
+  await expect(choices).toHaveCount(7);
   await choices.nth(0).check();
   await choices.nth(1).check();
   let release!: () => void;
@@ -116,7 +116,8 @@ test("keeps the composer in view, retries with the same key, and scrolls convers
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/agent/chat", async (route) => {
+  // The chat UI streams first; a mocked JSON answer is valid on either chat URL.
+  await page.route(/\/api\/agent\/chat(?:\/stream)?$/u, async (route) => {
     keys.push(route.request().postDataJSON().requestKey);
     if (keys.length === 1)
       return route.fulfill({

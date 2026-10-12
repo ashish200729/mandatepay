@@ -7,22 +7,10 @@ import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { AuditTimeline } from "@/components/audit-timeline";
 import { ApprovalApiError, getApproval } from "@/lib/approvals/client";
-import { approvalReasonText } from "@/lib/approvals/reasons";
+import { DecisionExplanation } from "@/components/decision-explanation";
+import { CartMandateBadge } from "@/components/verifiable-mandate";
 import type { ApprovalDetail } from "@/lib/approvals/types";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
-
-function policyExplanation(detail: ApprovalDetail) {
-  if (!detail.decision || detail.decision.decision === "REQUIRE_APPROVAL") {
-    return approvalReasonText(detail.decision);
-  }
-  if (detail.decision.decision === "ALLOW") {
-    return "AgentGuard allowed this proposal under the recorded mandate rules.";
-  }
-  if (detail.decision.decision === "BLOCK") {
-    return "AgentGuard blocked this proposal. The recorded reasons appear below.";
-  }
-  return "The latest recorded policy decision and reasons appear below.";
-}
 
 export function ProposalDetail({ proposalId }: { proposalId: string }) {
   const [detail, setDetail] = useState<ApprovalDetail | null>(null);
@@ -201,35 +189,16 @@ export function ProposalDetail({ proposalId }: { proposalId: string }) {
         </p>
       </section>
 
+      <CartMandateBadge proposalId={proposal.id} />
+
       <section
         className="rounded-xl border border-sand-border bg-sand/60 p-5 sm:p-6"
         aria-labelledby="proposal-policy-heading"
       >
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <h2 id="proposal-policy-heading" className="flex items-center gap-2 text-lg font-medium">
-            <ShieldCheck size={20} aria-hidden="true" /> Policy decision
-          </h2>
-          <span className="rounded-full bg-background px-3 py-1.5 text-xs font-medium">
-            {decision ? decision.decision.replaceAll("_", " ") : "Not evaluated"}
-          </span>
-        </div>
-        <p className="mt-4 max-w-[70ch] text-sm leading-relaxed text-muted-foreground">
-          {policyExplanation(detail)}
-        </p>
-        {decision?.reasonCodes.length ? (
-          <div className="mt-5">
-            <h3 className="text-sm font-medium">Recorded reason codes</h3>
-            <ul className="mt-2 space-y-2 text-sm text-muted-foreground">
-              {decision.reasonCodes.map((code, index) => (
-                <li key={`${code}-${index}`} className="break-words">
-                  {code.replaceAll("_", " ")}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : decision ? (
-          <p className="mt-4 text-sm text-muted-foreground">No reason codes were recorded.</p>
-        ) : null}
+        <h2 id="proposal-policy-heading" className="flex items-center gap-2 text-lg font-medium">
+          <ShieldCheck size={20} aria-hidden="true" /> Policy decision
+        </h2>
+        <DecisionExplanation decision={decision} defaultOpen className="mt-4 max-w-[80ch]" />
         {proposal.status === "AWAITING_APPROVAL" ? (
           <div className="mt-6 border-t border-sand-border pt-5">
             <p className="mb-4 text-sm leading-relaxed text-muted-foreground">

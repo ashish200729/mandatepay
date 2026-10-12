@@ -43,16 +43,17 @@ export const ADMIN_METRIC_DEFINITIONS = {
   ordersCreated:
     "Non-sample payments with a PayPal order ID created in range, labelled by internal creation time.",
   capturedPayments:
-    "Non-sample captured payments (completed or refunded) whose capture time falls in range.",
-  capturedGrossMinor: "Original captured amount in range. Refunds do not reduce this gross.",
+    "Non-sample captured payments (completed, refunded or reversed by PayPal) whose capture time falls in range.",
+  capturedGrossMinor:
+    "Original captured amount in range. Refunds and PayPal reversals do not reduce this gross.",
   capturedGrossByDay:
-    "Original captured amount bucketed by UTC capturedAt day. Refunds do not reduce this gross.",
+    "Original captured amount bucketed by UTC capturedAt day. Refunds and PayPal reversals do not reduce this gross.",
   paymentFailures:
     "Non-sample DENIED or FAILED payments created in range. CAPTURE_PENDING is not a failure.",
   refundsMinor: "Completed non-sample refund amounts with settlement time in range.",
   refundsByDay: "Completed refund amounts bucketed by UTC settlement day.",
   netCapturedMinor:
-    "Captured gross minus completed refunds for this window. This is cash flow, not restored mandate allowance.",
+    "Captured gross minus completed refunds and minus PayPal-reversed (chargeback) payments captured in this window, net of their refunds. This is cash flow, not restored mandate allowance.",
   policyDistribution: "One latest policy decision per non-sample proposal created in range.",
   approvalFunnel:
     "Current approval outcomes for non-sample proposals created in range. Intermediate conversion times are not stored.",

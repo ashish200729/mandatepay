@@ -12,7 +12,7 @@ import {
   getApproval,
   listApprovals,
 } from "@/lib/approvals/client";
-import { approvalReasonText } from "@/lib/approvals/reasons";
+import { DecisionExplanation } from "@/components/decision-explanation";
 import type { ApprovalDetail, ApprovalProposal } from "@/lib/approvals/types";
 import { WorkspaceLoading, WorkspaceStatus } from "@/components/workspace-ui";
 
@@ -322,11 +322,17 @@ export function ApprovalInbox({ initialProposalId = "" }: { initialProposalId?: 
                 : (selected.decision?.decision ?? selected.proposal.status).replaceAll("_", " ")}
             </span>
           </div>
-          <p className="mt-4 rounded-lg bg-sand/60 p-4 text-sm leading-6">
-            {selected.proposal.status === "AUTHORIZED"
-              ? "This proposal is authorized. Continue to PayPal Sandbox to review and complete checkout."
-              : approvalReasonText(selected.decision)}
-          </p>
+          {selected.proposal.status === "AUTHORIZED" ? (
+            <p className="mt-4 rounded-lg bg-sand/60 p-4 text-sm leading-6">
+              This proposal is authorized. Continue to PayPal Sandbox to review and complete
+              checkout.
+            </p>
+          ) : (
+            <DecisionExplanation
+              decision={selected.decision}
+              className="mt-4 rounded-lg bg-sand/60 p-4"
+            />
+          )}
           <div className="mt-5">
             <ProposalSummary proposal={selected.proposal} />
           </div>

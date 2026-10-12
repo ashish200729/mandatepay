@@ -5,6 +5,8 @@ export type DashboardTotals = {
   blocked: number;
   spendMinor: number;
   refundsMinor: number;
+  /** Captured payments PayPal reversed (chargebacks), net of any earlier refund. */
+  reversedMinor: number;
   activeMandates: number;
 };
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
-import { proxyAdmin } from "./proxy";
+import { adminClientIp, proxyAdmin } from "./proxy";
 import { parseAdminMe } from "./session";
 
 const identity = {
@@ -84,6 +84,37 @@ describe("admin BFF security", () => {
     expect(headers.get("authorization")).toBeNull();
     expect(headers.get("x-mandatepay-admin-authorized")).toBeNull();
     expect(headers.get("origin")).toBe("http://localhost:3001");
+  });
+  it("forwards the client address with the internal proxy secret, never caller copies", async () => {
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ data: identity }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const spoofed = () => {
+      const input = request();
+      input.headers.set("x-forwarded-for", "203.0.113.9, 10.0.0.2");
+      input.headers.set("x-mandatepay-client-ip", "198.51.100.66");
+      input.headers.set("x-mandatepay-proxy-secret", "caller-guess");
+      return input;
+    };
+    await proxyAdmin(spoofed(), { path: ["session"] });
+    let headers = fetcher.mock.calls[0]![1]!.headers as Headers;
+    expect(headers.get("x-mandatepay-client-ip")).toBeNull();
+    expect(headers.get("x-mandatepay-proxy-secret")).toBeNull();
+
+    vi.stubEnv("INTERNAL_PROXY_SECRET", "fixture-internal-proxy-secret-0123456789");
+    await proxyAdmin(spoofed(), { path: ["session"] });
+    headers = fetcher.mock.calls[1]![1]!.headers as Headers;
+    expect(headers.get("x-mandatepay-client-ip")).toBe("203.0.113.9");
+    expect(headers.get("x-mandatepay-proxy-secret")).toBe(
+      "fixture-internal-proxy-secret-0123456789",
+    );
+    expect(headers.get("x-forwarded-for")).toBeNull();
+    expect(
+      adminClientIp(new Request("http://x/", { headers: { "x-forwarded-for": "bogus" } })),
+    ).toBeNull();
   });
   it("validates origin and Host when Next reconstructs an internal URL behind TLS", async () => {
     vi.stubEnv("NODE_ENV", "production");

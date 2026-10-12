@@ -6,10 +6,20 @@ import { ArrowRight, Check, Package } from "lucide-react";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
 import { listOrders } from "@/lib/payments/client";
 import type { PaymentRecord } from "@/lib/payments/types";
+import { orderStatusPresentation, type OrderStatusTone } from "@/lib/payments/order-status";
 import { WorkspaceCollectionToolbar, WorkspaceLoading } from "@/components/workspace-ui";
 import { buttonVariants } from "@mandatepay/ui/components/button";
+import { cn } from "@mandatepay/ui/lib/utils";
+
+const TONE_CLASSES: Record<OrderStatusTone, string> = {
+  neutral: "bg-secondary text-foreground",
+  success: "bg-secondary text-foreground",
+  attention: "border border-sand-border bg-sand text-foreground",
+  danger: "bg-foreground text-background",
+};
 
 function OrderCard({ order }: { order: PaymentRecord }) {
+  const status = orderStatusPresentation(order);
   return (
     <Link
       href={`/orders/${order.id}`}
@@ -29,10 +39,15 @@ function OrderCard({ order }: { order: PaymentRecord }) {
             </p>
           </div>
         </div>
-        <span className="rounded-full bg-secondary px-3 py-1 text-xs font-medium">
-          {order.status.replaceAll("_", " ")}
+        <span
+          className={cn("rounded-full px-3 py-1 text-xs font-medium", TONE_CLASSES[status.tone])}
+        >
+          {status.label}
         </span>
       </div>
+      {status.note ? (
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{status.note}</p>
+      ) : null}
       <div className="mt-4 grid gap-4 border-t border-border pt-4 text-sm sm:grid-cols-3">
         <div>
           <p className="text-xs text-muted-foreground">Amount</p>

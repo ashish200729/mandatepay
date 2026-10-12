@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check, CircleAlert, LoaderCircle, ShieldCheck } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CircleAlert,
+  LoaderCircle,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import {
@@ -23,6 +31,7 @@ import Link from "next/link";
 import { WorkspaceSteps } from "@/components/workspace-ui";
 import { formatUsdLabel, parseUsdDecimal } from "@/lib/mandates/money";
 import { MandatePermissions } from "@/components/mandate-permissions";
+import { DEMO_MANDATE_PROMPT } from "@/lib/mandates/demo";
 
 type BuilderState = "prompt" | "parsing" | "review" | "clarification" | "saving" | "saved";
 
@@ -241,6 +250,26 @@ export function MandateBuilder() {
               Describe the product, budget, brands, conditions, and when the agent should come back
               to you. Include your maximum total budget in USD, including shipping and tax.
             </p>
+            <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => {
+                  // Fills the request only. Parsing, review and activation stay explicit steps.
+                  setPrompt(DEMO_MANDATE_PROMPT);
+                  setClarification(null);
+                  setError(null);
+                  promptRef.current?.focus();
+                }}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }), "min-h-11")}
+              >
+                <Sparkles size={15} aria-hidden="true" />
+                Use demo mandate
+              </button>
+              <span className="text-xs leading-5 text-muted-foreground">
+                Fills in the headphones example. You still review every rule before activating it.
+              </span>
+            </div>
             <textarea
               id="mandate-prompt"
               ref={promptRef}

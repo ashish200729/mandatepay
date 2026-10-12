@@ -1,5 +1,87 @@
 # Phase progress and handoff
 
+## Hackathon hardening and agentic features — 2026-10-12/13
+
+Branch `feat/hackathon-hardening` (local, uncommitted at handoff). A codebase audit and PayPal AI Hackathon research (Devpost rules: five equally weighted criteria; judges may lack LLM keys, so a hosted demo matters) drove three implementation waves with file-owned parallel agents and a full verification run after each.
+
+**Production fixes.**
+
+- **PayPal failure handling.**
+  - Errors are typed by PayPal issue and debug id. Definitive declines end the payment as FAILED and release the spending hold. INSTRUMENT_DECLINED and PAYER_ACTION_REQUIRED return the buyer to PayPal. ORDER_ALREADY_CAPTURED finalizes the existing capture.
+  - Uncertain outcomes stay pending, and the new `worker:reconcile` settles them. It also releases expired holds and replays uncertain saved-PayPal orders with the same request id.
+  - A retried pending capture no longer re-runs policy or expiry checks.
+  - Webhooks now also cover PAYMENT.CAPTURE.PENDING and REVERSED, CHECKOUT.ORDER.COMPLETED, refunds issued in the PayPal dashboard, and VAULT.PAYMENT-TOKEN events. Pending events back off for up to about 4 days.
+  - Orders use `experience_context` with line items and a breakdown. A 401 refreshes the token and retries once, and idempotent requests retry.
+  - Webhook verification now sends the raw body.
+  - `PAYPAL_ENV` accepts `sandbox` or `live`, mapped in one place; live is an explicit opt-in.
+- **Platform and security.**
+  - Client-IP forwarding from the web and admin BFFs is trusted only with the shared `INTERNAL_PROXY_SECRET`. Sign-in and sign-up are also limited per email.
+  - A global error handler stops internal details leaking.
+  - API security headers, plus CSP and HSTS for web and admin.
+  - The product-context HMAC key is derived separately with HKDF.
+  - `demo:account` provisions verified judge accounts and an optional active demo mandate.
+  - `render.yaml` adds the admin service, the MCP service, the reconcile cron and the new secrets.
+- **Line endings.** `.gitattributes` enforces LF (with the repo-local `core.autocrlf=false`), so `pnpm format:check` now passes on Windows. Four committed files previously failed CI formatting.
+- **Windows browser tests.** The customer E2E launcher now runs on Windows; it previously could not start pnpm or Next.
+
+**Bugs found during verification and fixed.**
+
+- PayPal order responses that echo line items and a breakdown were rejected. The same would have happened with real Sandbox once items were sent.
+- The order route omitted `pending`, so a pending checkout was shown as an unsafe-approval-URL error.
+- Visually hidden labels escaped the chat scroll container and stretched the page.
+- The saved-PayPal button overflowed at 320px.
+- The simulator test tried to mutate an immutable mandate version.
+- Admin enum mirrors were missing new values. A new parity test now pins audit event types, payment statuses and AgentGuard reason codes.
+
+**Product and demo features.**
+
+- **Explanations.** Deterministic decision explanations (`decision.explanation`) with a "Why?" list of every rule, used in chat, Discover, approvals and proposal detail.
+- **Truthful landing page.** The stale "not connected yet" copy is gone.
+- **Demo Catalog.** Seven more products plus illustrations: a $220 bundle, a second store, a disallowed brand and a red-team listing. Search is tokenized with synonyms.
+- **Chat.** Mandate-excluded results are listed with their reasons. Enter sends. A clear message appears when the AI service is not configured. Rate limits are configurable.
+- **Saved-PayPal autonomy (Vault v3).**
+  - Consent in Settings saves the method. Token ids are stored with AES-256-GCM.
+  - `POST /api/proposals/:id/autopay` pays only on a fresh ALLOW within the automatic limit, while user and platform autonomy are on, and only if a human did not approve the proposal.
+  - It is idempotent under row locks. PAYER_ACTION_REQUIRED or a Vault-not-enabled response falls back to checkout.
+  - Removing the method deletes the PayPal token.
+- **Prompt-injection defense.**
+  - A deterministic content screen produces `PRODUCT_CONTENT_SUSPICIOUS` (needs approval) or `PRODUCT_CONTENT_MALICIOUS` (hard block).
+  - Listing text reaches the model only inside spotlighted untrusted blocks.
+  - A red-team "Open Box Deal" product demonstrates it.
+- **Streaming chat.** `/api/agent/chat/stream` (SSE) shows live steps and falls back to the JSON endpoint.
+- **Policy simulator.** `POST /api/mandates/:id/simulate` runs the real engine in a read-only transaction, behind the "Try AgentGuard" panel.
+- **Signed mandates.** ES256-signed AP2-shaped mandate and cart-mandate credentials, a public JWKS, a verifier, and a `CART_MANDATE_MISMATCH` refusal before PayPal order creation or autopay.
+- **MCP.** The `apps/mcp` server (stdio and Streamable HTTP) calls the scoped agent gateway with expiring, revocable `mp_agent_` tokens (scopes READ, PROPOSE, AUTOPAY). There is no approve, checkout, capture or refund access.
+- **Admin and analytics.** REVERSED is handled in analytics and admin. A reconcile-worker health card and its backlog are shown.
+
+**Deliberately not added.** `@paypal/agent-toolkit` 1.11.0 depends on the AI SDK, LangChain, a pinned OpenAI SDK, mathjs, dotenvx and a placeholder `os` package. That is too much supply-chain surface for the payment API. Instead, [MCP.md](../integrations/MCP.md) documents running PayPal's hosted Sandbox MCP server next to MandatePay's. New dependencies are pinned and at least two weeks old: `jose@6.2.12` in the API and `@modelcontextprotocol/sdk@1.30.1` in `apps/mcp` only.
+
+**Verification (Windows, local PostgreSQL 17, simulated PayPal and AI).**
+
+| Check                             | Result                                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm format:check`               | pass                                                                                                                            |
+| `pnpm lint`                       | pass, 0 errors (3 pre-existing warnings)                                                                                        |
+| `pnpm typecheck`                  | pass                                                                                                                            |
+| Unit tests                        | **826** pass: api 202, web 220, agentguard 126, paypal 84, shared 54, agent 54, admin 33, channel3 30, mcp 17, ui 3, database 3 |
+| Environment and boundary tests    | 14 pass                                                                                                                         |
+| `pnpm build`                      | pass                                                                                                                            |
+| Integration (isolated PostgreSQL) | **12** database + **158** API pass                                                                                              |
+| Customer Chromium suite           | **40** pass, including autonomous Vault, red-team, agent tokens, streaming chat and mandate credentials                         |
+| Admin Chromium suite              | **17** pass                                                                                                                     |
+
+The customer suite is load-sensitive on this machine: sign-up hashing can exceed 5 s with many workers. It passes at three workers.
+
+**Not qualified; needs the owner.**
+
+- Vault must be enabled on the PayPal Sandbox app, and one real saved-PayPal autopay must be run.
+- Live checks still pending: Sandbox webhooks for VAULT, PENDING and REVERSED, live partial refunds, and the assumption that PayPal keeps request ids for about 6 hours (the replay window uses 3 hours).
+- Hosted Render deployment and Blueprint validation.
+- Secrets to set: `MANDATE_SIGNING_KEY`, `INTERNAL_PROXY_SECRET`, a 32-byte `TOKEN_ENCRYPTION_KEY`, and the PayPal, AI and Resend secrets.
+- A Channel3 live key.
+- Judge accounts, the video and the Devpost submission. A draft is in [DEVPOST.md](../submission/DEVPOST.md).
+- AP2-shaped credentials are server-signed and not certified. The MCP server has not been tried with a real Claude Desktop or ChatGPT client.
+
 ## Admin form focus refinement — 2026-10-07
 
 Following the user's focused-dropdown screenshot, replaced the external double black frame on admin inputs, selects and textareas with one warm inset focus border using the existing chart/accent token. Keyboard focus remains visible. The admin production build passed; a focused Chromium check passed at 390/1440px after waiting for page readiness and the existing color transition. It verifies focus, inset geometry, matching border/outline colors and at least 3:1 contrast against the white field surface. Both captures were inspected. This adds one focused browser case to the previously passing 16 workflow scenarios; their functionality is unchanged.

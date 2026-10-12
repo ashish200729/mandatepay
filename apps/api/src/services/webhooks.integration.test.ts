@@ -351,3 +351,396 @@ describe("PayPal webhook durable integration", () => {
     expect(await database.webhookInbox.count({ where: { providerEventId: eventId } })).toBe(1);
   });
 });
+
+describe("PayPal webhook provider-side outcomes", () => {
+  let database: DatabaseClient;
+  let ownerId = "";
+
+  beforeAll(async () => {
+    database = createPrismaClient(databaseUrl);
+    const user = await database.user.create({
+      data: {
+        email: `webhook-outcomes-${randomUUID()}@mandatepay.local`,
+        name: "Webhook outcomes",
+      },
+    });
+    ownerId = user.id;
+  });
+
+  afterAll(async () => {
+    await database.$disconnect();
+  });
+
+  async function fixture(status: PaymentStatus, options: { captured?: boolean } = {}) {
+    const suffix = randomUUID();
+    const mandate = await new MandateRepository(database).create({
+      userId: ownerId,
+      title: "Webhook outcome mandate",
+      originalPrompt: "Buy one demo item.",
+      status: "ACTIVE",
+      currency: "USD",
+      autoSpendLimit: 20_000n,
+      transactionLimit: 20_000n,
+      dailyLimit: 50_000n,
+      startsAt: new Date(Date.now() - 60_000),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    const product = await database.productSnapshot.create({
+      data: {
+        source: "demo",
+        externalId: "demo-webhook-outcome-" + suffix,
+        title: "Demo product",
+        brand: "Demo",
+        category: "Test",
+        condition: "NEW",
+        price: 1_234n,
+        currency: "USD",
+        merchant: "Mandate Demo Store",
+        metadata: { externalId: "demo-webhook-outcome-" + suffix },
+      },
+    });
+    const captured = options.captured ?? false;
+    const proposal = await database.purchaseProposal.create({
+      data: {
+        userId: ownerId,
+        mandateId: mandate.id,
+        mandateVersionId: mandate.activeVersionId!,
+        productSnapshotId: product.id,
+        quantity: 1,
+        subtotal: 1_234n,
+        shipping: 0n,
+        tax: 0n,
+        total: 1_234n,
+        currency: "USD",
+        status: captured
+          ? ProposalStatus.COMPLETED
+          : status === PaymentStatus.CAPTURE_PENDING
+            ? ProposalStatus.PAYMENT_PENDING
+            : ProposalStatus.PAYPAL_ORDER_CREATED,
+        proposalFingerprint: "webhook-outcome-fingerprint-" + suffix,
+        idempotencyKey: "webhook-outcome-proposal-" + suffix,
+      },
+    });
+    const order = "ORDER-OUTCOME-" + suffix;
+    const capture = "CAP-" + suffix.replaceAll("-", "").slice(0, 20);
+    const payment = await database.payment.create({
+      data: {
+        userId: ownerId,
+        mandateId: mandate.id,
+        proposalId: proposal.id,
+        paypalOrderId: order,
+        ...(captured ? { paypalCaptureId: capture, capturedAt: new Date() } : {}),
+        amount: 1_234n,
+        currency: "USD",
+        status,
+        idempotencyKey: "webhook-outcome-payment-" + suffix,
+      },
+    });
+    const reservation = await database.spendReservation.create({
+      data: {
+        mandateId: mandate.id,
+        mandateVersionId: mandate.activeVersionId!,
+        proposalId: proposal.id,
+        amount: 1_234n,
+        currency: "USD",
+        window: "TRANSACTION",
+        windowStart: new Date(Date.now() - 60_000),
+        windowEnd: new Date(Date.now() + 86_400_000),
+        status: captured ? ReservationStatus.CONSUMED : ReservationStatus.ACTIVE,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    return { payment, proposal, reservation, order, capture };
+  }
+
+  function provider(input: {
+    order: string;
+    paymentId: string;
+    proposalId: string;
+    capture: Record<string, unknown>;
+    refund?: Record<string, unknown>;
+    orderCaptures?: readonly unknown[];
+  }) {
+    return {
+      verifyWebhook: async () => true,
+      getOrder: async () => ({
+        id: input.order,
+        status: "COMPLETED" as const,
+        links: [],
+        approvalUrl: null,
+        purchase_units: [
+          {
+            reference_id: input.paymentId,
+            custom_id: input.proposalId,
+            amount: { currency_code: "USD" as const, value: "12.34" },
+            payments: { captures: input.orderCaptures ?? [input.capture] },
+          },
+        ],
+      }),
+      getCapture: async () => input.capture,
+      getRefund: async () => input.refund,
+    } as unknown as PayPalClient;
+  }
+
+  function completedCapture(id: string, proposalId: string, overrides = {}) {
+    return {
+      id,
+      status: "COMPLETED",
+      amount: { currency_code: "USD", value: "12.34" },
+      custom_id: proposalId,
+      create_time: "2026-10-02T12:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("records a refund issued outside MandatePay once, after an authoritative re-fetch", async () => {
+    const data = await fixture(PaymentStatus.COMPLETED, { captured: true });
+    const refundId = "REFUND-DASHBOARD-" + randomUUID();
+    const paypal = provider({
+      order: data.order,
+      paymentId: data.payment.id,
+      proposalId: data.proposal.id,
+      capture: completedCapture(data.capture, data.proposal.id, {
+        status: "PARTIALLY_REFUNDED",
+        supplementary_data: { related_ids: { order_id: data.order } },
+      }),
+      refund: {
+        id: refundId,
+        status: "COMPLETED",
+        amount: { currency_code: "USD", value: "3.00" },
+        create_time: "2026-10-03T10:00:00Z",
+        links: [
+          {
+            rel: "up",
+            href: `https://api-m.sandbox.paypal.com/v2/payments/captures/${data.capture}`,
+          },
+        ],
+      },
+    });
+    const service = createPayPalWebhookService(database, paypal);
+    const delivery = (id: string) =>
+      service.handle({
+        headers,
+        rawBody: JSON.stringify({
+          id,
+          event_type: "PAYMENT.CAPTURE.REFUNDED",
+          resource: { id: refundId },
+        }),
+      });
+    expect((await delivery("WH-DASH-" + randomUUID())).statusCode).toBe(200);
+    // A second, distinct event for the same provider refund is not double counted.
+    expect((await delivery("WH-DASH-" + randomUUID())).statusCode).toBe(200);
+    const refunds = await database.refund.findMany({ where: { paymentId: data.payment.id } });
+    expect(refunds).toHaveLength(1);
+    expect(refunds[0]).toMatchObject({
+      paypalRefundId: refundId,
+      amount: 300n,
+      status: "COMPLETED",
+      providerInitiated: true,
+    });
+    expect(refunds[0]?.settledAt?.toISOString()).toBe("2026-10-03T10:00:00.000Z");
+    expect(
+      (await database.payment.findUniqueOrThrow({ where: { id: data.payment.id } })).status,
+    ).toBe(PaymentStatus.PARTIALLY_REFUNDED);
+    expect(
+      await database.auditEvent.count({
+        where: { entityId: data.payment.id, eventType: AuditEventType.REFUND_COMPLETED },
+      }),
+    ).toBe(1);
+  });
+
+  it("ignores an outside refund that would exceed the captured amount", async () => {
+    const data = await fixture(PaymentStatus.COMPLETED, { captured: true });
+    const refundId = "REFUND-OVER-" + randomUUID();
+    const service = createPayPalWebhookService(
+      database,
+      provider({
+        order: data.order,
+        paymentId: data.payment.id,
+        proposalId: data.proposal.id,
+        capture: completedCapture(data.capture, data.proposal.id),
+        refund: {
+          id: refundId,
+          status: "COMPLETED",
+          amount: { currency_code: "USD", value: "12.35" },
+          capture_id: data.capture,
+          create_time: "2026-10-03T10:00:00Z",
+        },
+      }),
+    );
+    const result = await service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-OVER-" + randomUUID(),
+        event_type: "PAYMENT.CAPTURE.REFUNDED",
+        resource: { id: refundId, capture_id: data.capture },
+      }),
+    });
+    expect(result.statusCode).toBe(200);
+    expect(await database.refund.count({ where: { paymentId: data.payment.id } })).toBe(0);
+  });
+
+  it("records a capture reversal (chargeback) with an audit event", async () => {
+    const data = await fixture(PaymentStatus.COMPLETED, { captured: true });
+    const reversalId = "REVERSAL-" + randomUUID().slice(0, 20);
+    const service = createPayPalWebhookService(
+      database,
+      provider({
+        order: data.order,
+        paymentId: data.payment.id,
+        proposalId: data.proposal.id,
+        capture: completedCapture(data.capture, data.proposal.id, {
+          status: "REFUNDED",
+          supplementary_data: { related_ids: { order_id: data.order } },
+        }),
+        refund: {
+          id: reversalId,
+          status: "COMPLETED",
+          amount: { currency_code: "USD", value: "12.34" },
+          capture_id: data.capture,
+          create_time: "2026-10-04T10:00:00Z",
+        },
+      }),
+    );
+    const event = {
+      id: "WH-REVERSED-" + randomUUID(),
+      event_type: "PAYMENT.CAPTURE.REVERSED",
+      resource: { id: reversalId, capture_id: data.capture },
+    };
+    expect((await service.handle({ headers, rawBody: JSON.stringify(event) })).statusCode).toBe(
+      200,
+    );
+    const payment = await database.payment.findUniqueOrThrow({ where: { id: data.payment.id } });
+    expect(payment.status).toBe(PaymentStatus.REVERSED);
+    expect(payment.providerStatusReason).toBe("CAPTURE_REVERSED");
+    expect(
+      await database.auditEvent.count({
+        where: { entityId: data.payment.id, eventType: AuditEventType.PAYMENT_REVERSED },
+      }),
+    ).toBe(1);
+  });
+
+  it("keeps a PAYMENT.CAPTURE.PENDING capture held with its reason and reservation", async () => {
+    const data = await fixture(PaymentStatus.CAPTURE_PENDING);
+    const capture = completedCapture(data.capture, data.proposal.id, {
+      status: "PENDING",
+      status_details: { reason: "PENDING_REVIEW" },
+    });
+    const service = createPayPalWebhookService(
+      database,
+      provider({
+        order: data.order,
+        paymentId: data.payment.id,
+        proposalId: data.proposal.id,
+        capture,
+      }),
+    );
+    const result = await service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-PENDING-" + randomUUID(),
+        event_type: "PAYMENT.CAPTURE.PENDING",
+        resource: {
+          id: data.capture,
+          supplementary_data: { related_ids: { order_id: data.order } },
+        },
+      }),
+    });
+    expect(result.statusCode).toBe(200);
+    const payment = await database.payment.findUniqueOrThrow({ where: { id: data.payment.id } });
+    expect(payment).toMatchObject({
+      status: PaymentStatus.CAPTURE_PENDING,
+      paypalCaptureId: data.capture,
+      providerStatusReason: "PENDING_REVIEW",
+    });
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { id: data.reservation.id } }))
+        .status,
+    ).toBe(ReservationStatus.ACTIVE);
+  });
+
+  it("settles a payment from CHECKOUT.ORDER.COMPLETED using the order's own capture", async () => {
+    const data = await fixture(PaymentStatus.APPROVED);
+    const service = createPayPalWebhookService(
+      database,
+      provider({
+        order: data.order,
+        paymentId: data.payment.id,
+        proposalId: data.proposal.id,
+        capture: completedCapture(data.capture, data.proposal.id),
+      }),
+    );
+    const result = await service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-ORDER-COMPLETED-" + randomUUID(),
+        event_type: "CHECKOUT.ORDER.COMPLETED",
+        resource: { id: data.order },
+      }),
+    });
+    expect(result.statusCode).toBe(200);
+    const payment = await database.payment.findUniqueOrThrow({ where: { id: data.payment.id } });
+    expect(payment.status).toBe(PaymentStatus.COMPLETED);
+    expect(payment.paypalCaptureId).toBe(data.capture);
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { id: data.reservation.id } }))
+        .status,
+    ).toBe(ReservationStatus.CONSUMED);
+  });
+
+  it("marks pending outcomes for the long schedule and failures for the short one", async () => {
+    const data = await fixture(PaymentStatus.CAPTURE_PENDING);
+    const pendingService = createPayPalWebhookService(
+      database,
+      provider({
+        order: data.order,
+        paymentId: data.payment.id,
+        proposalId: data.proposal.id,
+        // The order does not list this capture yet, so the binding is pending.
+        capture: completedCapture("CAPTURE-NOT-ON-ORDER", data.proposal.id),
+        orderCaptures: [{ id: "SOME-OTHER-CAPTURE" }],
+      }),
+    );
+    const pendingEvent = "WH-AWAIT-" + randomUUID();
+    const pending = await pendingService.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: pendingEvent,
+        event_type: "PAYMENT.CAPTURE.COMPLETED",
+        resource: {
+          id: "CAPTURE-NOT-ON-ORDER",
+          supplementary_data: { related_ids: { order_id: data.order } },
+        },
+      }),
+    });
+    expect(pending.statusCode).toBe(202);
+    expect(
+      await database.webhookInbox.findFirstOrThrow({ where: { providerEventId: pendingEvent } }),
+    ).toMatchObject({ status: "FAILED", awaitingProvider: true });
+
+    const failing = {
+      verifyWebhook: async () => true,
+      getCapture: async () => {
+        throw new Error("PayPal unreachable");
+      },
+    } as unknown as PayPalClient;
+    const failedEvent = "WH-FAILED-" + randomUUID();
+    const failed = await createPayPalWebhookService(database, failing).handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: failedEvent,
+        event_type: "PAYMENT.CAPTURE.COMPLETED",
+        resource: { id: "CAPTURE-ANY" },
+      }),
+    });
+    expect(failed.statusCode).toBe(503);
+    expect(
+      await database.webhookInbox.findFirstOrThrow({ where: { providerEventId: failedEvent } }),
+    ).toMatchObject({ status: "FAILED", awaitingProvider: false });
+    // Leave no due rows behind for the globally scanning recovery-worker tests.
+    await database.webhookInbox.updateMany({
+      where: { providerEventId: { in: [pendingEvent, failedEvent] } },
+      data: { status: "IGNORED", nextAttemptAt: null },
+    });
+  });
+});

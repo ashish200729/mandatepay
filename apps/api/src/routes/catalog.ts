@@ -3,10 +3,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   Channel3Client,
+  Channel3ConfigurationError,
   lookupDemoProduct,
+  parseChannel3Config,
   searchDemoCatalog,
   isChannel3Error,
   Channel3ProviderError,
+  type Channel3FallbackMode,
   type NormalizedProduct,
 } from "@mandatepay/channel3";
 import {
@@ -24,6 +27,7 @@ import {
   multiplyMinorUnits,
   toMinorUnits,
 } from "@mandatepay/shared";
+import { isAIConfigurationError } from "@mandatepay/agent";
 import { serializeProposal } from "../services/proposals.js";
 import {
   PlatformControlDenied,
@@ -39,7 +43,53 @@ export interface CatalogRouteContext {
   isTrustedOrigin: (origin: string | undefined) => boolean;
   mode: "demo" | "channel3";
   channel3?: Channel3Client;
+  /** "demo" serves labeled Demo Catalog results when Channel3 is missing or fails. */
+  channel3Fallback?: Channel3FallbackMode;
+  /** Per-user compare requests per minute; defaults to CATALOG_COMPARE_RATE_LIMIT_PER_MINUTE or 10. */
+  compareRateLimitPerMinute?: number;
   rank: (mandate: unknown, products: readonly NormalizedProduct[]) => Promise<unknown>;
+}
+
+/** Reads a positive per-minute limit from trusted configuration, falling back on invalid input. */
+export function perMinuteLimit(value: string | undefined, fallback: number): number {
+  if (value === undefined || !/^\s*\d{1,4}\s*$/u.test(value)) return fallback;
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 1_000 ? parsed : fallback;
+}
+
+/** Normalizes CHANNEL3_FALLBACK_MODE; anything other than "demo" keeps fallback disabled. */
+export function channel3FallbackMode(value: string | undefined): Channel3FallbackMode {
+  return value?.trim().toLowerCase() === "demo" ? "demo" : "disabled";
+}
+
+/**
+ * Builds the live discovery client from trusted server configuration. The client
+ * itself never falls back silently; the search route labels any demo fallback.
+ */
+export function createChannel3CatalogClient(
+  apiKey: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Channel3Client | undefined {
+  if (!apiKey) return undefined;
+  const timeoutMs = Number(env.CHANNEL3_TIMEOUT_MS);
+  const maxRetries = Number(env.CHANNEL3_MAX_RETRIES);
+  try {
+    return new Channel3Client(
+      parseChannel3Config({
+        apiKey,
+        ...(env.CHANNEL3_BASE_URL ? { baseURL: env.CHANNEL3_BASE_URL } : {}),
+        ...(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 120_000
+          ? { timeoutMs }
+          : {}),
+        ...(Number.isSafeInteger(maxRetries) && maxRetries >= 0 && maxRetries <= 2
+          ? { maxRetries }
+          : {}),
+        fallbackMode: "disabled",
+      }),
+    );
+  } catch {
+    return new Channel3Client(parseChannel3Config({ apiKey, fallbackMode: "disabled" }));
+  }
 }
 const id = z.string().trim().min(1).max(255);
 const refSchema = z.object({ source: z.enum(["demo", "channel3"]), externalId: id }).strict();
@@ -61,7 +111,25 @@ const proposalSchema = z
 function hash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
+
+export const SNAPSHOT_DESCRIPTION_MAX_LENGTH = 2_000;
+
+/** The catalog's seller description, bounded for the immutable product snapshot. */
+export function snapshotDescription(metadata: unknown): { description?: string } {
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return {};
+  const value = (metadata as Record<string, unknown>).description;
+  if (typeof value !== "string") return {};
+  const description = value.trim().slice(0, SNAPSHOT_DESCRIPTION_MAX_LENGTH);
+  return description ? { description } : {};
+}
 function fail(reply: FastifyReply, cause: unknown) {
+  if (isAIConfigurationError(cause)) {
+    return reply.status(503).send({
+      error:
+        "The AI service is not configured, so products can’t be compared right now. An administrator needs to add the AI provider settings.",
+      code: "AI_NOT_CONFIGURED",
+    });
+  }
   if (cause instanceof PlatformControlDenied) {
     return reply.status(cause.httpStatus).send({ error: cause.message, code: cause.code });
   }
@@ -113,6 +181,9 @@ async function lookup(context: CatalogRouteContext, product: ProductRef) {
 /** No client amount, merchant, snapshot ID, policy decision or owner is accepted. */
 export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRouteContext) {
   const rateLimits = new Map<string, { count: number; resetAt: number }>();
+  const compareLimit =
+    context.compareRateLimitPerMinute ??
+    perMinuteLimit(process.env.CATALOG_COMPARE_RATE_LIMIT_PER_MINUTE, 10);
   async function authenticate(request: FastifyRequest, reply: FastifyReply) {
     if (!context.isTrustedOrigin(request.headers.origin)) {
       reply
@@ -125,7 +196,7 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
     const now = Date.now();
     for (const [key, entry] of rateLimits) if (entry.resetAt <= now) rateLimits.delete(key);
     const key = `${user.id}:${request.routeOptions.url}`;
-    const limit = request.routeOptions.url === "/api/products/compare" ? 5 : 30;
+    const limit = request.routeOptions.url === "/api/products/compare" ? compareLimit : 30;
     const current = rateLimits.get(key);
     if (current && current.resetAt > now) {
       if (current.count >= limit) {
@@ -156,10 +227,34 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
       const { rules } = await ownedMandate(context, parsed.data.mandateId, user.id);
       const query = parsed.data.query ?? rules.productIntent;
       await assertDiscoverySource(context.database, context.mode === "demo" ? "demo" : "channel3");
-      const products =
-        context.mode === "demo"
-          ? searchDemoCatalog(query, 20, rules.allowedBrands)
-          : await context.channel3!.searchProducts({ query, limit: 20 });
+      let fallback = false;
+      let products: readonly NormalizedProduct[];
+      if (context.mode === "demo") {
+        products = searchDemoCatalog(query, 20, rules.allowedBrands);
+      } else {
+        try {
+          if (!context.channel3) throw new Channel3ConfigurationError("MISSING_API_KEY");
+          products = await context.channel3.searchProducts({ query, limit: 20 });
+        } catch (cause) {
+          if (context.channel3Fallback !== "demo" || !isChannel3Error(cause)) throw cause;
+          // Platform controls can still disable the Demo Catalog; then the original failure stands.
+          try {
+            await assertDiscoverySource(context.database, "demo");
+          } catch {
+            throw cause;
+          }
+          request.log.warn(
+            {
+              event: "channel3_demo_fallback",
+              code: cause.code,
+              ...(cause instanceof Channel3ProviderError ? { providerStatus: cause.status } : {}),
+            },
+            "Channel3 discovery failed; serving labeled Demo Catalog fallback",
+          );
+          products = searchDemoCatalog(query, 20, rules.allowedBrands);
+          fallback = true;
+        }
+      }
       const mode =
         products.some((product) => product.source === "demo") || context.mode === "demo"
           ? "demo"
@@ -173,6 +268,7 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
           payload: {
             queryHash: hash(query),
             mode,
+            ...(fallback ? { fallback: "channel3_unavailable" } : {}),
             productIds: products.map((product) => product.externalId),
           },
         },
@@ -180,8 +276,10 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
       return reply.send({
         products,
         mode,
-        notice:
-          mode === "demo"
+        fallback,
+        notice: fallback
+          ? "Demo Catalog fallback — live Channel3 discovery is unavailable right now, so these are Demo Catalog products from our sandbox merchant. No payment has been made."
+          : mode === "demo"
             ? "Demo Catalog — illustrative products from our sandbox merchant. No payment has been made."
             : "Channel3 discovery — external retailer products are not eligible for demo checkout.",
       });
@@ -296,6 +394,9 @@ export function registerCatalogRoutes(app: FastifyInstance, context: CatalogRout
               externalId: product.externalId,
               demoSku: product.demoSku,
               checkoutEligible: true,
+              // Kept (bounded) so content screening can read the seller text from
+              // the snapshot alone, even when the catalog entry later changes.
+              ...snapshotDescription(product.metadata),
             },
             capturedAt: now,
           },

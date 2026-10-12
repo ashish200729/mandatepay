@@ -1,11 +1,40 @@
 import type { TransactionRow } from "./types";
 
-const CAPTURED_STATUSES = new Set(["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED"]);
+/**
+ * Payments that were captured, including ones later refunded or reversed by
+ * PayPal (a chargeback). Charts of captured spend show this gross volume.
+ */
+export const CAPTURED_PAYMENT_STATUSES: ReadonlySet<string> = new Set([
+  "COMPLETED",
+  "PARTIALLY_REFUNDED",
+  "REFUNDED",
+  "REVERSED",
+]);
+
+export function isCapturedRow(row: Pick<TransactionRow, "capturedAt" | "paypalStatus">) {
+  return Boolean(
+    row.capturedAt && row.paypalStatus && CAPTURED_PAYMENT_STATUSES.has(row.paypalStatus),
+  );
+}
+
+/** How money came back to the customer, if it did. */
+export function refundStatusLabel(value: string | null) {
+  if (value === "REFUNDED") return "Refunded";
+  if (value === "PARTIALLY_REFUNDED") return "Partial refund";
+  if (value === "REVERSED") return "Reversed by PayPal";
+  return "—";
+}
+
+export function paymentStatusLabel(value: string | null) {
+  if (!value) return "Not recorded";
+  if (value === "REVERSED") return "Reversed by PayPal";
+  return value.replaceAll("_", " ");
+}
 
 export function capturedSpendByCategory(rows: readonly TransactionRow[]) {
   const totals = new Map<string, number>();
   for (const row of rows) {
-    if (!row.capturedAt || !row.paypalStatus || !CAPTURED_STATUSES.has(row.paypalStatus)) continue;
+    if (!isCapturedRow(row)) continue;
     const category = row.category ?? "Uncategorized";
     totals.set(category, (totals.get(category) ?? 0) + row.amountMinor);
   }

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" role="img" aria-labelledby="t">
+  <title id="t">Illustration of sand-colored over-ear headphones</title>
+  <rect width="160" height="160" rx="24" fill="#FEFAF6"/>
+  <ellipse cx="80" cy="134" rx="50" ry="6" fill="#1B140E" opacity="0.08"/>
+  <path d="M38 92 C38 48 58 30 80 30 C102 30 122 48 122 92" fill="none" stroke="#C9B48A" stroke-width="9" stroke-linecap="round"/>
+  <path d="M46 88 C46 56 61 40 80 40 C99 40 114 56 114 88" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+  <rect x="26" y="80" width="30" height="46" rx="14" fill="#E5DABD"/>
+  <rect x="104" y="80" width="30" height="46" rx="14" fill="#E5DABD"/>
+  <rect x="48" y="86" width="10" height="34" rx="5" fill="#A8946B"/>
+  <rect x="102" y="86" width="10" height="34" rx="5" fill="#A8946B"/>
+  <circle cx="41" cy="103" r="4" fill="#FFFFFF" opacity="0.6"/>
+  <circle cx="119" cy="103" r="4" fill="#FFFFFF" opacity="0.6"/>
+  <rect x="96" y="16" width="52" height="20" rx="10" fill="#251D17"/>
+  <text x="122" y="30" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#FEFAF6" text-anchor="middle">Refurb</text>
+</svg>

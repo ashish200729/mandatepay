@@ -11,7 +11,11 @@ import {
 } from "@mandatepay/database";
 import { registerPayPalRoutes } from "./routes/paypal.js";
 import { registerCatalogRoutes } from "./routes/catalog.js";
-import { approveProposal, evaluateProposal } from "./services/proposals.js";
+import {
+  approveProposal,
+  evaluateProposal,
+  revalidateAuthorizationInTransaction,
+} from "./services/proposals.js";
 import type { DemoProductFacts, PayPalGateway } from "./services/payments.js";
 import { PayPalProviderError, type PayPalCapture, type PayPalOrder } from "@mandatepay/paypal";
 import { lookupDemoProduct as lookupCatalogProduct } from "@mandatepay/channel3";
@@ -281,6 +285,7 @@ describe("PayPal payment boundary", () => {
     expect(created.statusCode).toBe(200);
     expect(created.json().payment.amount).toBe(13_900);
     expect(created.json().approvalUrl).toContain("sandbox.paypal.com");
+    expect(created.json().pending).toBe(false);
     expect(createOrder).toHaveBeenCalledTimes(1);
     expect(createOrder.mock.calls[0]?.[0].amountMinor).toBe(13_900);
     expect(createOrder.mock.calls[0]?.[0].requestId).toHaveLength(36);
@@ -638,6 +643,7 @@ describe("PayPal payment boundary", () => {
       payload: { proposalId: proposal.id },
     });
     expect(pending.statusCode).toBe(202);
+    expect(pending.json().pending).toBe(true);
     expect(pending.json().payment.paypalOrderId).toBeNull();
     expect(
       (await database.spendReservation.findUnique({ where: { proposalId: proposal.id } }))?.status,
@@ -846,5 +852,316 @@ describe("PayPal payment boundary", () => {
     expect(order.statusCode).toBe(200);
     expect(order.json().payment.status).toBe("REFUNDED");
     expect(captureOrder.mock.calls.length).toBe(mutations);
+  });
+  async function orderFor(key: string) {
+    const { proposal, snapshot } = await createProposal(13_900n, key);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/paypal/orders",
+      headers: headers(userA),
+      payload: { proposalId: proposal.id },
+    });
+    expect(created.statusCode).toBe(200);
+    const payment = created.json().payment as { id: string; paypalOrderId: string };
+    return { proposal, snapshot, payment };
+  }
+
+  function rejection(issue: string, status = 422) {
+    return new PayPalProviderError("UPSTREAM_REQUEST_FAILED", status, {
+      details: { name: "UNPROCESSABLE_ENTITY", issue, debugId: "debug" + issue.slice(0, 8) },
+    });
+  }
+
+  async function capture(paymentId: string) {
+    return app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${paymentId}/capture`,
+      headers: headers(userA),
+      payload: {},
+    });
+  }
+
+  it("fails a definitively declined capture and releases its reservation in one step", async () => {
+    const { proposal, payment } = await orderFor("definitive-decline");
+    captureOrder.mockRejectedValueOnce(rejection("TRANSACTION_REFUSED"));
+    const response = await capture(payment.id);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().payment.status).toBe(PaymentStatus.FAILED);
+    expect(response.json().payment.failureCode).toBe("PAYPAL_CAPTURE_REJECTED:TRANSACTION_REFUSED");
+    expect(
+      (await database.purchaseProposal.findUniqueOrThrow({ where: { id: proposal.id } })).status,
+    ).toBe("FAILED");
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { proposalId: proposal.id } }))
+        .status,
+    ).toBe(ReservationStatus.RELEASED);
+    const audits = await database.auditEvent.findMany({
+      where: { entityId: payment.id, eventType: "PAYMENT_FAILED" },
+    });
+    expect(audits).toHaveLength(1);
+    expect(JSON.stringify(audits[0]?.payload)).toContain("TRANSACTION_REFUSED");
+    // A retry is a no-op on the terminal receipt; nothing is replayed.
+    const calls = captureOrder.mock.calls.length;
+    expect((await capture(payment.id)).json().payment.status).toBe(PaymentStatus.FAILED);
+    expect(captureOrder.mock.calls.length).toBe(calls);
+  });
+
+  it("returns an INSTRUMENT_DECLINED capture to the payer with a new request id, then captures", async () => {
+    const { proposal, payment } = await orderFor("instrument-declined");
+    captureOrder.mockRejectedValueOnce(rejection("INSTRUMENT_DECLINED"));
+    const before = await database.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    const declined = await capture(payment.id);
+    expect(declined.statusCode).toBe(200);
+    expect(declined.json().payment).toMatchObject({
+      status: PaymentStatus.APPROVED,
+      providerStatusReason: "INSTRUMENT_DECLINED",
+    });
+    expect(declined.json().payment.payerActionUrl).toContain("sandbox.paypal.com");
+    const after = await database.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(after.paypalCaptureRequestId).not.toBe(before.paypalCaptureRequestId);
+    expect(
+      (await database.purchaseProposal.findUniqueOrThrow({ where: { id: proposal.id } })).status,
+    ).toBe("PAYPAL_ORDER_CREATED");
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { proposalId: proposal.id } }))
+        .status,
+    ).toBe(ReservationStatus.ACTIVE);
+
+    // The payer chose another funding source; the next capture uses the new key.
+    const completed = await capture(payment.id);
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json().payment.status).toBe(PaymentStatus.COMPLETED);
+    expect(completed.json().payment.payerActionUrl).toBeNull();
+    expect(captureOrder.mock.calls.at(-1)?.[1]).toBe(after.paypalCaptureRequestId);
+  });
+
+  it("returns ORDER_NOT_APPROVED to awaiting approval", async () => {
+    const { payment } = await orderFor("not-approved");
+    captureOrder.mockRejectedValueOnce(rejection("ORDER_NOT_APPROVED"));
+    const response = await capture(payment.id);
+    expect(response.json().payment).toMatchObject({
+      status: PaymentStatus.CREATED,
+      providerStatusReason: "ORDER_NOT_APPROVED",
+    });
+    expect(response.json().payment.payerActionUrl).toContain("checkoutnow");
+  });
+
+  it("finalizes ORDER_ALREADY_CAPTURED from the authoritative order without capturing again", async () => {
+    const { proposal, payment } = await orderFor("already-captured");
+    captureOrder.mockRejectedValueOnce(rejection("ORDER_ALREADY_CAPTURED"));
+    const existing = providerCapture({
+      id: `CAPTURE-ALREADY-${testRunId}`,
+      amount: 13_900,
+      customId: proposal.id,
+    });
+    getOrder.mockResolvedValueOnce(
+      providerOrder({
+        id: payment.paypalOrderId,
+        status: "APPROVED",
+        amount: 13_900,
+        referenceId: payment.id,
+        customId: proposal.id,
+      }),
+    );
+    getOrder.mockResolvedValueOnce({
+      ...providerOrder({
+        id: payment.paypalOrderId,
+        status: "COMPLETED",
+        amount: 13_900,
+        referenceId: payment.id,
+        customId: proposal.id,
+      }),
+      purchase_units: [
+        {
+          reference_id: payment.id,
+          custom_id: proposal.id,
+          amount: money(13_900),
+          payments: { captures: [existing] },
+        },
+      ],
+    });
+    const calls = captureOrder.mock.calls.length;
+    const response = await capture(payment.id);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().payment.status).toBe(PaymentStatus.COMPLETED);
+    expect(response.json().payment.paypalCaptureId).toBe(existing.id);
+    expect(captureOrder.mock.calls.length).toBe(calls + 1);
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { proposalId: proposal.id } }))
+        .status,
+    ).toBe(ReservationStatus.CONSUMED);
+  });
+
+  it("keeps a held PENDING capture with its reason and the reservation", async () => {
+    const { proposal, payment } = await orderFor("held-capture");
+    captureOrder.mockResolvedValueOnce({
+      ...providerCapture({
+        id: `CAPTURE-HELD-${testRunId}`,
+        amount: 13_900,
+        customId: proposal.id,
+      }),
+      status: "PENDING",
+      status_details: { reason: "PENDING_REVIEW" },
+    });
+    const response = await capture(payment.id);
+    expect(response.statusCode).toBe(202);
+    expect(response.json().payment).toMatchObject({
+      status: PaymentStatus.CAPTURE_PENDING,
+      providerStatusReason: "PENDING_REVIEW",
+      paypalCaptureId: `CAPTURE-HELD-${testRunId}`,
+    });
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { proposalId: proposal.id } }))
+        .status,
+    ).toBe(ReservationStatus.ACTIVE);
+  });
+
+  it("replays an uncertain capture after the proposal expired without re-running policy", async () => {
+    const { proposal, snapshot, payment } = await orderFor("retry-after-expiry");
+    captureOrder.mockRejectedValueOnce(
+      new PayPalProviderError("UPSTREAM_TIMEOUT", undefined, { unknownOutcome: true }),
+    );
+    expect((await capture(payment.id)).statusCode).toBe(202);
+    const pending = await database.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(pending.status).toBe(PaymentStatus.CAPTURE_PENDING);
+    await database.purchaseProposal.update({
+      where: { id: proposal.id },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    });
+    products.delete(snapshot.externalId);
+    const decisions = await database.policyDecision.count({ where: { proposalId: proposal.id } });
+    const retried = await capture(payment.id);
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().payment.status).toBe(PaymentStatus.COMPLETED);
+    expect(captureOrder.mock.calls.at(-1)?.[1]).toBe(pending.paypalCaptureRequestId);
+    expect(await database.policyDecision.count({ where: { proposalId: proposal.id } })).toBe(
+      decisions,
+    );
+  });
+
+  it("never moves a PAYMENT_PENDING proposal to BLOCKED when policy blocks", async () => {
+    const { proposal, payment } = await orderFor("block-during-capture");
+    captureOrder.mockRejectedValueOnce(
+      new PayPalProviderError("UPSTREAM_TIMEOUT", undefined, { unknownOutcome: true }),
+    );
+    expect((await capture(payment.id)).statusCode).toBe(202);
+    // Another hold now exhausts the daily limit, so AgentGuard would BLOCK.
+    const { proposal: other } = await createProposal(13_900n, "block-filler");
+    proposalId = proposal.id;
+    const filler = await database.spendReservation.findUniqueOrThrow({
+      where: { proposalId: other.id },
+    });
+    await database.spendReservation.update({
+      where: { id: filler.id },
+      data: { amount: 999_000n },
+    });
+    try {
+      const blocked = await database.$transaction((tx) =>
+        revalidateAuthorizationInTransaction(tx, { id: userA }, proposal.id, undefined, {
+          allowedProposalStatuses: ["PAYMENT_PENDING"],
+        }),
+      );
+      expect(blocked.authorized).toBe(false);
+      expect(blocked.decision.decision).toBe("BLOCK");
+      expect(
+        (await database.purchaseProposal.findUniqueOrThrow({ where: { id: proposal.id } })).status,
+      ).toBe("PAYMENT_PENDING");
+      // The capture retry skips policy entirely and settles the claimed capture.
+      const retried = await capture(payment.id);
+      expect(retried.json().payment.status).toBe(PaymentStatus.COMPLETED);
+    } finally {
+      await database.spendReservation.update({
+        where: { id: filler.id },
+        data: { status: ReservationStatus.RELEASED, releasedAt: new Date() },
+      });
+    }
+  });
+
+  it("reconciles a stale capture on a still-approved order back to the payer, keeping its key", async () => {
+    const { proposal, payment } = await orderFor("stale-approved");
+    captureOrder.mockRejectedValueOnce(
+      new PayPalProviderError("UPSTREAM_TIMEOUT", undefined, { unknownOutcome: true }),
+    );
+    expect((await capture(payment.id)).statusCode).toBe(202);
+    const pending = await database.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    const fresh = await app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${payment.id}/reconcile`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(fresh.json().payment.status).toBe(PaymentStatus.CAPTURE_PENDING);
+    await database.$executeRaw`UPDATE "Payment" SET "updatedAt" = ${new Date(Date.now() - 11 * 60_000)} WHERE id = ${payment.id}`;
+    const mutations = captureOrder.mock.calls.length;
+    const stale = await app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${payment.id}/reconcile`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(stale.json().payment).toMatchObject({
+      status: PaymentStatus.APPROVED,
+      providerStatusReason: "CAPTURE_NOT_CONFIRMED",
+    });
+    expect(captureOrder.mock.calls.length).toBe(mutations);
+    const after = await database.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(after.paypalCaptureRequestId).toBe(pending.paypalCaptureRequestId);
+    expect(
+      (await database.purchaseProposal.findUniqueOrThrow({ where: { id: proposal.id } })).status,
+    ).toBe("PAYPAL_ORDER_CREATED");
+  });
+
+  it("fails a voided order and releases its hold through read-only reconciliation", async () => {
+    const { proposal, payment } = await orderFor("voided");
+    getOrder.mockResolvedValueOnce(
+      providerOrder({
+        id: payment.paypalOrderId,
+        status: "VOIDED",
+        amount: 13_900,
+        referenceId: payment.id,
+        customId: proposal.id,
+      }),
+    );
+    const result = await app.inject({
+      method: "POST",
+      url: `/api/paypal/orders/${payment.id}/reconcile`,
+      headers: headers(userA),
+      payload: {},
+    });
+    expect(result.json().payment).toMatchObject({
+      status: PaymentStatus.FAILED,
+      failureCode: "PAYPAL_ORDER_VOIDED",
+    });
+    expect(
+      (await database.spendReservation.findUniqueOrThrow({ where: { proposalId: proposal.id } }))
+        .status,
+    ).toBe(ReservationStatus.RELEASED);
+  });
+
+  it("sends server-owned line items and rotates the order key after a definitive create rejection", async () => {
+    const { proposal } = await createProposal(13_900n, "create-rejected");
+    createOrder.mockRejectedValueOnce(rejection("PAYEE_ACCOUNT_RESTRICTED"));
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/paypal/orders",
+      headers: headers(userA),
+      payload: { proposalId: proposal.id },
+    });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json().code).toBe("PAYPAL_REQUEST_REJECTED");
+    const firstKey = createOrder.mock.calls.at(-1)?.[0].requestId;
+    expect(createOrder.mock.calls.at(-1)?.[0]).toMatchObject({
+      items: [{ quantity: 1, unitAmountMinor: 13_900 }],
+      shippingMinor: 0,
+      taxMinor: 0,
+    });
+    const retried = await app.inject({
+      method: "POST",
+      url: "/api/paypal/orders",
+      headers: headers(userA),
+      payload: { proposalId: proposal.id },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(createOrder.mock.calls.at(-1)?.[0].requestId).not.toBe(firstKey);
   });
 });

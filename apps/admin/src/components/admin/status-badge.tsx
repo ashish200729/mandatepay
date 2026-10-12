@@ -14,9 +14,16 @@ export function statusTone(status: string): StatusTone {
   )
     return "success";
   if (
-    ["FAILURE", "FAILED", "DENIED", "BLOCKED", "unavailable", "REVOKED", "DISABLED"].includes(
-      status,
-    )
+    [
+      "FAILURE",
+      "FAILED",
+      "DENIED",
+      "BLOCKED",
+      "unavailable",
+      "REVOKED",
+      "DISABLED",
+      "REVERSED",
+    ].includes(status)
   )
     return "danger";
   if (

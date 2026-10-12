@@ -31,6 +31,28 @@ describe("PayPal webhook route parser", () => {
     await app.close();
   });
 
+  it("passes the exact delivered bytes for charset-qualified JSON", async () => {
+    const app = Fastify({ logger: false });
+    const handle = vi.fn().mockResolvedValue({
+      statusCode: 200,
+      body: { status: "processed" },
+      delivery: { outcome: "ACCEPTED", eventType: "X", inboxId: "inbox-1" },
+    });
+    registerPayPalWebhookRoutes(app, { handle } as never);
+    await app.ready();
+    const payload =
+      '{ "id" : "EVENT-2",\n  "resource" : { "amount" : 1.10, "name" : "caf\\u00e9" } }';
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/paypal",
+      headers: { "content-type": "application/json; charset=utf-8" },
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(handle.mock.calls[0]?.[0].rawBody).toBe(payload);
+    await app.close();
+  });
+
   it("enforces the route body limit", async () => {
     const app = Fastify({ logger: false });
     registerPayPalWebhookRoutes(app, { handle: vi.fn() } as never);

@@ -6,7 +6,35 @@ import { DatabaseError } from "../errors.js";
 import { assertMinorUnits } from "../money.js";
 
 export const WEBHOOK_LEASE_MS = 5 * 60_000;
+/** Ceiling for verified events whose processing failed (for example PayPal was unreachable). */
 export const WEBHOOK_MAX_ATTEMPTS = 5;
+/** Ceiling for verified events waiting on provider state or a payment binding. */
+export const WEBHOOK_PENDING_MAX_ATTEMPTS = 24;
+
+/** The retry ceiling of one inbox row. */
+export function webhookRetryLimit(row: { awaitingProvider?: boolean | null }) {
+  return row.awaitingProvider ? WEBHOOK_PENDING_MAX_ATTEMPTS : WEBHOOK_MAX_ATTEMPTS;
+}
+
+/** Rows that still have attempts left under their own retry ceiling. */
+export function webhookAttemptsRemainingWhere(): Prisma.WebhookInboxWhereInput {
+  return {
+    OR: [
+      { awaitingProvider: false, attempts: { lt: WEBHOOK_MAX_ATTEMPTS } },
+      { awaitingProvider: true, attempts: { lt: WEBHOOK_PENDING_MAX_ATTEMPTS } },
+    ],
+  };
+}
+
+/** Rows that have used every attempt under their own retry ceiling. */
+export function webhookAttemptsExhaustedWhere(): Prisma.WebhookInboxWhereInput {
+  return {
+    OR: [
+      { awaitingProvider: false, attempts: { gte: WEBHOOK_MAX_ATTEMPTS } },
+      { awaitingProvider: true, attempts: { gte: WEBHOOK_PENDING_MAX_ATTEMPTS } },
+    ],
+  };
+}
 
 export function iso(value: Date) {
   return value.toISOString();
@@ -86,7 +114,7 @@ export function recoveryWhere(asOf: Date): Prisma.WebhookInboxWhereInput {
   return {
     provider: "paypal",
     signatureVerified: true,
-    attempts: { lt: WEBHOOK_MAX_ATTEMPTS },
+    AND: [webhookAttemptsRemainingWhere()],
     OR: [
       {
         status: "FAILED",
@@ -101,23 +129,23 @@ export function webhookDiagnostics(row: {
   signatureVerified: boolean;
   status: string;
   attempts: number;
+  awaitingProvider?: boolean | null;
   updatedAt: Date;
   nextAttemptAt: Date | null;
   lastError: string | null;
   asOf: Date;
 }) {
+  const limit = webhookRetryLimit(row);
   const leaseExpiresAt =
     row.status === "PROCESSING" ? new Date(row.updatedAt.getTime() + WEBHOOK_LEASE_MS) : null;
   const stale =
     row.signatureVerified &&
     row.status === "PROCESSING" &&
     row.updatedAt.getTime() <= row.asOf.getTime() - WEBHOOK_LEASE_MS;
-  const exhausted =
-    row.signatureVerified && row.status === "FAILED" && row.attempts >= WEBHOOK_MAX_ATTEMPTS;
+  const exhausted = row.signatureVerified && row.status === "FAILED" && row.attempts >= limit;
   const dueFailed =
     row.status === "FAILED" && (!row.nextAttemptAt || row.nextAttemptAt <= row.asOf);
-  const retryEligible =
-    row.signatureVerified && row.attempts < WEBHOOK_MAX_ATTEMPTS && (dueFailed || stale);
+  const retryEligible = row.signatureVerified && row.attempts < limit && (dueFailed || stale);
   return { leaseExpiresAt, stale, retryEligible, exhausted };
 }
 

@@ -1,11 +1,22 @@
 export {
+  PAYPAL_BUYER_APPROVAL_HOSTS,
+  PAYPAL_ENVIRONMENTS,
+  PAYPAL_ENVIRONMENT_NAMES,
   PAYPAL_SANDBOX_BASE_URL,
   PayPalConfigSchema,
   loadPayPalConfig,
   parsePayPalConfig,
+  paypalEnvironmentHosts,
   type PayPalConfig,
+  type PayPalEnvironmentHosts,
+  type PayPalEnvironmentName,
 } from "./config.js";
-export { PayPalClient, extractCaptureFromOrder, type PayPalClientOptions } from "./client.js";
+export {
+  PayPalClient,
+  extractCaptureFromOrder,
+  parsePayPalErrorBody,
+  type PayPalClientOptions,
+} from "./client.js";
 export {
   PayPalConfigurationError,
   PayPalError,
@@ -13,7 +24,12 @@ export {
   PayPalProviderError,
   PayPalResponseError,
   PayPalWebhookError,
+  classifyPayPalError,
+  isDefinitivePayPalRejection,
   isPayPalError,
+  payPalErrorDetails,
+  type PayPalErrorDetails,
+  type PayPalOutcomeClass,
   type PayPalConfigurationErrorCode,
   type PayPalErrorCode,
   type PayPalInputErrorCode,
@@ -23,6 +39,7 @@ export {
 export {
   CreateOrderInputSchema,
   OrderIdSchema,
+  PAYPAL_CAPTURE_STATUSES,
   PayPalCaptureSchema,
   PayPalOrderSchema,
   PayPalRefundSchema,
@@ -41,10 +58,24 @@ export {
   type WebhookVerificationResponse,
 } from "./types.js";
 export {
+  CreateVaultOrderInputSchema,
+  CreateVaultPaymentTokenInputSchema,
+  CreateVaultSetupTokenInputSchema,
+  VaultIdSchema,
+  type CreateVaultOrderInput,
+  type CreateVaultPaymentTokenInput,
+  type CreateVaultSetupTokenInput,
+  type PayPalVaultDeletion,
+  type PayPalVaultPaymentToken,
+  type PayPalVaultSetupToken,
+} from "./vault.js";
+export {
   DEFAULT_WEBHOOK_BODY_LIMIT,
   PAYPAL_WEBHOOK_PATH,
   PayPalWebhookEventSchema,
   PayPalWebhookService,
+  SUPPORTED_PAYPAL_WEBHOOK_EVENTS,
+  VAULT_PAYMENT_TOKEN_EVENTS,
   registerPayPalWebhookRoute,
   type AuthoritativeWebhookData,
   type PayPalWebhookEvent,

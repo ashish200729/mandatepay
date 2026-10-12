@@ -2,6 +2,8 @@ import { z } from "zod";
 import { PayPalError, PayPalProviderError, PayPalWebhookError } from "./errors.js";
 import type { PayPalCapture, PayPalOrder, PayPalRefund, WebhookHeaders } from "./types.js";
 import { PayPalClient } from "./client.js";
+import { PAYPAL_ENVIRONMENTS } from "./config.js";
+import { VaultIdSchema, type PayPalVaultPaymentToken } from "./vault.js";
 
 export const PAYPAL_WEBHOOK_PATH = "/api/webhooks/paypal";
 export const DEFAULT_WEBHOOK_BODY_LIMIT = 1_000_000;
@@ -34,8 +36,11 @@ export interface WebhookInboxStore {
     payload: PayPalWebhookEvent;
   }): Promise<WebhookInboxClaim>;
   markProcessed(id: string): Promise<void>;
+  /** Provider state or payment binding is not ready yet; retry on a long schedule. */
   markPending(id: string, reason: string): Promise<void>;
   markIgnored(id: string, reason: string): Promise<void>;
+  /** Processing failed (for example PayPal was unreachable); retry on the failure schedule. */
+  markFailed?(id: string, reason: string): Promise<void>;
 }
 
 export interface VerifiedWebhookReplayInput {
@@ -55,7 +60,40 @@ export type AuthoritativeWebhookData =
       readonly refund: PayPalRefund;
       readonly capture: PayPalCapture | null;
       readonly order: PayPalOrder | null;
+    }
+  | {
+      /** A chargeback or other provider reversal of a completed capture. */
+      readonly kind: "reversal";
+      readonly capture: PayPalCapture;
+      readonly refund: PayPalRefund | null;
+      readonly order: PayPalOrder | null;
+    }
+  | {
+      /** A Vault payment token event, re-read from PayPal. */
+      readonly kind: "payment_token";
+      readonly eventType: (typeof VAULT_PAYMENT_TOKEN_EVENTS)[number];
+      readonly tokenId: string;
+      /** The token as PayPal reports it now; null when PayPal confirms it no longer exists. */
+      readonly token: PayPalVaultPaymentToken | null;
     };
+
+/** Verified Vault events: a token saved or deleted (for example revoked by the buyer in PayPal). */
+export const VAULT_PAYMENT_TOKEN_EVENTS = [
+  "VAULT.PAYMENT-TOKEN.CREATED",
+  "VAULT.PAYMENT-TOKEN.DELETED",
+] as const;
+
+/** Verified event types that are fetched from PayPal and reconciled. */
+export const SUPPORTED_PAYPAL_WEBHOOK_EVENTS = [
+  "CHECKOUT.ORDER.APPROVED",
+  "CHECKOUT.ORDER.COMPLETED",
+  "PAYMENT.CAPTURE.COMPLETED",
+  "PAYMENT.CAPTURE.DENIED",
+  "PAYMENT.CAPTURE.PENDING",
+  "PAYMENT.CAPTURE.REFUNDED",
+  "PAYMENT.CAPTURE.REVERSED",
+  ...VAULT_PAYMENT_TOKEN_EVENTS,
+] as const;
 
 export interface PayPalWebhookReconciler {
   /** Performs ownership, proposal binding, amount/currency checks, and one DB transaction. */
@@ -130,7 +168,11 @@ function relatedId(resource: Record<string, unknown>, key: string): string | nul
   return stringAt(related, key);
 }
 
-function linkedId(resource: Record<string, unknown>, path: string): string | null {
+function linkedId(
+  resource: Record<string, unknown>,
+  path: string,
+  hosts: readonly string[],
+): string | null {
   if (!Array.isArray(resource.links)) return null;
   for (const link of resource.links) {
     const entry = record(link);
@@ -139,7 +181,7 @@ function linkedId(resource: Record<string, unknown>, path: string): string | nul
       const url = new URL(entry.href);
       if (
         url.protocol !== "https:" ||
-        !["api-m.sandbox.paypal.com", "api.sandbox.paypal.com"].includes(url.hostname) ||
+        !hosts.includes(url.hostname) ||
         url.username ||
         url.password ||
         url.port ||
@@ -156,19 +198,25 @@ function linkedId(resource: Record<string, unknown>, path: string): string | nul
   return null;
 }
 
-function relatedOrderId(resource: Record<string, unknown>): string | null {
+function relatedOrderId(
+  resource: Record<string, unknown>,
+  hosts: readonly string[],
+): string | null {
   return (
     relatedId(resource, "order_id") ??
     stringAt(resource, "order_id") ??
-    linkedId(resource, "/v2/checkout/orders")
+    linkedId(resource, "/v2/checkout/orders", hosts)
   );
 }
 
-function relatedCaptureId(resource: Record<string, unknown>): string | null {
+function relatedCaptureId(
+  resource: Record<string, unknown>,
+  hosts: readonly string[],
+): string | null {
   return (
     relatedId(resource, "capture_id") ??
     stringAt(resource, "capture_id") ??
-    linkedId(resource, "/v2/payments/captures")
+    linkedId(resource, "/v2/payments/captures", hosts)
   );
 }
 
@@ -232,7 +280,11 @@ export class PayPalWebhookService {
   async handle(request: RawPayPalWebhookRequest): Promise<WebhookServiceResponse> {
     const rejected = delivery("REJECTED", null, null);
     if (typeof request.rawBody !== "string") {
-      return { statusCode: 400, body: { error: "Webhook body must be raw JSON text." }, delivery: rejected };
+      return {
+        statusCode: 400,
+        body: { error: "Webhook body must be raw JSON text." },
+        delivery: rejected,
+      };
     }
     if (Buffer.byteLength(request.rawBody, "utf8") > this.bodyLimitBytes) {
       return { statusCode: 413, body: { error: "Webhook body is too large." }, delivery: rejected };
@@ -254,12 +306,20 @@ export class PayPalWebhookService {
       return providerErrorResponse(error);
     }
     if (!verified) {
-      return { statusCode: 401, body: { error: "PayPal webhook signature is invalid." }, delivery: rejected };
+      return {
+        statusCode: 401,
+        body: { error: "PayPal webhook signature is invalid." },
+        delivery: rejected,
+      };
     }
 
     const event = parseEvent(request.rawBody);
     if (!event) {
-      return { statusCode: 400, body: { error: "PayPal webhook event is invalid." }, delivery: rejected };
+      return {
+        statusCode: 400,
+        body: { error: "PayPal webhook event is invalid." },
+        delivery: rejected,
+      };
     }
 
     const claim = await this.inbox.claim({
@@ -301,7 +361,9 @@ export class PayPalWebhookService {
       await this.inbox.markPending(claim.id, "Payment binding or provider state is not ready.");
       return { statusCode: 202, body: { status: "pending" }, delivery: accepted };
     } catch {
-      await this.inbox.markPending(claim.id, "Provider state could not be reconciled.");
+      const markFailed =
+        this.inbox.markFailed?.bind(this.inbox) ?? this.inbox.markPending.bind(this.inbox);
+      await markFailed(claim.id, "Provider state could not be reconciled.");
       return {
         statusCode: 503,
         body: { error: "Webhook processing is temporarily unavailable." },
@@ -323,21 +385,48 @@ export class PayPalWebhookService {
     return this.reconciler.reconcile({ event: parsed.data, authoritative });
   }
 
+  /** API hosts accepted when extracting IDs from resource links. */
+  private linkHosts(): readonly string[] {
+    return this.paypal.hosts?.resourceLinkHosts ?? PAYPAL_ENVIRONMENTS.sandbox.resourceLinkHosts;
+  }
+
   private async authoritative(
     eventType: string,
     resource: Record<string, unknown>,
   ): Promise<AuthoritativeWebhookData | null> {
-    if (eventType === "CHECKOUT.ORDER.APPROVED") {
+    const hosts = this.linkHosts();
+    if (
+      eventType === "VAULT.PAYMENT-TOKEN.CREATED" ||
+      eventType === "VAULT.PAYMENT-TOKEN.DELETED"
+    ) {
+      const tokenId = VaultIdSchema.safeParse(resource.id);
+      if (!tokenId.success) return null;
+      let token: PayPalVaultPaymentToken | null;
+      try {
+        token = await this.paypal.getVaultPaymentToken(tokenId.data);
+      } catch (error) {
+        // Only PayPal's own 404 proves the token is gone; anything else is retried.
+        if (!(error instanceof PayPalProviderError && error.status === 404)) throw error;
+        token = null;
+      }
+      return { kind: "payment_token", eventType, tokenId: tokenId.data, token };
+    }
+
+    if (eventType === "CHECKOUT.ORDER.APPROVED" || eventType === "CHECKOUT.ORDER.COMPLETED") {
       const orderId = stringAt(resource, "id");
       if (!orderId) return null;
       return { kind: "order", order: await this.paypal.getOrder(orderId) };
     }
 
-    if (eventType === "PAYMENT.CAPTURE.COMPLETED" || eventType === "PAYMENT.CAPTURE.DENIED") {
+    if (
+      eventType === "PAYMENT.CAPTURE.COMPLETED" ||
+      eventType === "PAYMENT.CAPTURE.DENIED" ||
+      eventType === "PAYMENT.CAPTURE.PENDING"
+    ) {
       const captureId = stringAt(resource, "id");
       if (!captureId) return null;
       const capture = await this.paypal.getCapture(captureId);
-      const orderId = relatedOrderId(capture) ?? relatedOrderId(resource);
+      const orderId = relatedOrderId(capture, hosts) ?? relatedOrderId(resource, hosts);
       return {
         kind: "capture",
         capture,
@@ -349,13 +438,36 @@ export class PayPalWebhookService {
       const refundId = stringAt(resource, "id");
       if (!refundId) return null;
       const refund = await this.paypal.getRefund(refundId);
-      const captureId = relatedCaptureId(refund) ?? relatedCaptureId(resource);
+      const captureId = relatedCaptureId(refund, hosts) ?? relatedCaptureId(resource, hosts);
       const capture = captureId ? await this.paypal.getCapture(captureId) : null;
-      const orderId = (capture ? relatedOrderId(capture) : null) ?? relatedOrderId(resource);
+      const orderId =
+        (capture ? relatedOrderId(capture, hosts) : null) ?? relatedOrderId(resource, hosts);
       return {
         kind: "refund",
         refund,
         capture,
+        order: orderId ? await this.paypal.getOrder(orderId) : null,
+      };
+    }
+
+    if (eventType === "PAYMENT.CAPTURE.REVERSED") {
+      // A reversal resource is either a refund-like object linked to the
+      // original capture or the capture itself. Both are re-fetched from PayPal.
+      const resourceId = stringAt(resource, "id");
+      if (!resourceId) return null;
+      const linkedCapture = relatedCaptureId(resource, hosts);
+      let refund: PayPalRefund | null = null;
+      let captureId = resourceId;
+      if (linkedCapture && linkedCapture !== resourceId) {
+        refund = await this.paypal.getRefund(resourceId);
+        captureId = relatedCaptureId(refund, hosts) ?? linkedCapture;
+      }
+      const capture = await this.paypal.getCapture(captureId);
+      const orderId = relatedOrderId(capture, hosts) ?? relatedOrderId(resource, hosts);
+      return {
+        kind: "reversal",
+        capture,
+        refund,
         order: orderId ? await this.paypal.getOrder(orderId) : null,
       };
     }

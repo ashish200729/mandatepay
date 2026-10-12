@@ -108,9 +108,10 @@ export function AuthAutonomyToggle({ initialEnabled }: { initialEnabled: boolean
                 id={descriptionId}
                 className="mt-3 max-w-[470px] text-sm leading-6 text-muted-foreground"
               >
-                Allow proposals inside an active mandate&apos;s limits to proceed without an extra
-                approval. PayPal may still ask for buyer approval, and hard policy violations always
-                remain blocked.
+                When this is on, AgentGuard can allow a purchase that passes every rule in your
+                mandate and is within its automatic limit, without asking you first. Anything above
+                the automatic limit still waits for your approval, and anything outside a hard rule
+                is always blocked.
               </p>
             </div>
             <label className="relative inline-flex min-h-11 w-12 shrink-0 cursor-pointer items-center">
@@ -150,6 +151,32 @@ export function AuthAutonomyToggle({ initialEnabled }: { initialEnabled: boolean
               {error}
             </p>
           ) : null}
+          <dl className="mt-5 divide-y divide-border border-y border-border text-sm">
+            <div className="grid gap-1 py-3 sm:grid-cols-[180px_minmax(0,1fr)] sm:gap-4">
+              <dt className="font-medium">Your approval in MandatePay</dt>
+              <dd className="leading-6 text-muted-foreground">
+                {enabled
+                  ? "Skipped for purchases within your automatic limit. Required above it."
+                  : "Required for every purchase, even within your automatic limit."}
+              </dd>
+            </div>
+            <div className="grid gap-1 py-3 sm:grid-cols-[180px_minmax(0,1fr)] sm:gap-4">
+              <dt className="font-medium">Payer consent in PayPal</dt>
+              <dd className="leading-6 text-muted-foreground">
+                Required for each payment unless you save PayPal for autonomous purchases below.
+                With a saved PayPal and this permission on, a purchase AgentGuard allows within your
+                automatic limit is paid without a PayPal redirect; everything else still goes
+                through PayPal checkout.
+              </dd>
+            </div>
+            <div className="grid gap-1 py-3 sm:grid-cols-[180px_minmax(0,1fr)] sm:gap-4">
+              <dt className="font-medium">Hard rules</dt>
+              <dd className="leading-6 text-muted-foreground">
+                Always enforced: maximum per purchase, spending windows, brands, condition, stores
+                and mandate dates. A blocked proposal can&apos;t be approved.
+              </dd>
+            </div>
+          </dl>
         </div>
       </div>
     </section>

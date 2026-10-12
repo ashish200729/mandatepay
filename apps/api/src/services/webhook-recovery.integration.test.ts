@@ -47,8 +47,8 @@ describe("verified PayPal webhook recovery worker", () => {
     });
     let calls = 0;
     const worker = new PayPalWebhookRecoveryWorker(database, fakePayPal, {
-      baseDelayMs: 100,
-      maxDelayMs: 1_000,
+      pendingBaseDelayMs: 100,
+      pendingMaxDelayMs: 1_000,
       batchSize: 1,
       replay: async () => {
         calls += 1;
@@ -60,6 +60,7 @@ describe("verified PayPal webhook recovery worker", () => {
     const scheduled = await database.webhookInbox.findUniqueOrThrow({ where: { id: row.id } });
     expect(scheduled.status).toBe(WebhookProcessingStatus.FAILED);
     expect(scheduled.attempts).toBe(1);
+    expect(scheduled.awaitingProvider).toBe(true);
     expect(scheduled.nextAttemptAt?.getTime()).toBe(now.getTime() + 100);
     await worker.runOnce(new Date(now.getTime() + 50));
     expect(calls).toBe(1);
@@ -116,7 +117,7 @@ describe("verified PayPal webhook recovery worker", () => {
     ).toBe(WebhookProcessingStatus.FAILED);
   });
 
-  it("stops retrying after the configured attempt limit", async () => {
+  it("stops retrying failed processing after the configured attempt limit", async () => {
     const id = "RECOVERY-EXHAUSTED-" + randomUUID();
     const row = await database.webhookInbox.create({
       data: {
@@ -136,15 +137,61 @@ describe("verified PayPal webhook recovery worker", () => {
       batchSize: 1,
       replay: async () => {
         calls += 1;
-        return "pending";
+        throw new Error("PayPal unavailable");
       },
     });
     await worker.runOnce(now);
     expect(calls).toBe(1);
     const exhausted = await database.webhookInbox.findUniqueOrThrow({ where: { id: row.id } });
     expect(exhausted.attempts).toBe(5);
+    expect(exhausted.awaitingProvider).toBe(false);
     expect(exhausted.nextAttemptAt).toBeNull();
     await worker.runOnce(new Date(now.getTime() + 86_400_000));
     expect(calls).toBe(1);
+  });
+
+  it("keeps pending provider outcomes on a long schedule past the failure cap", async () => {
+    const id = "RECOVERY-PENDING-LONG-" + randomUUID();
+    const row = await database.webhookInbox.create({
+      data: {
+        provider: "paypal",
+        providerEventId: id,
+        eventType: "PAYMENT.CAPTURE.COMPLETED",
+        signatureVerified: true,
+        payload: event(id),
+        status: WebhookProcessingStatus.FAILED,
+        attempts: 4,
+        nextAttemptAt: new Date(now.getTime() - 1_000),
+      },
+    });
+    let calls = 0;
+    const worker = new PayPalWebhookRecoveryWorker(database, fakePayPal, {
+      maxAttempts: 5,
+      pendingMaxAttempts: 7,
+      batchSize: 1,
+      replay: async () => {
+        calls += 1;
+        return "pending";
+      },
+    });
+    const first = await worker.runOnce(now);
+    expect(first.exhausted).toBe(0);
+    let current = await database.webhookInbox.findUniqueOrThrow({ where: { id: row.id } });
+    expect(current.attempts).toBe(5);
+    expect(current.awaitingProvider).toBe(true);
+    // Pending outcomes wait hours, not the short failure delay.
+    const delay = current.nextAttemptAt!.getTime() - now.getTime();
+    expect(delay).toBe(4 * 60 * 60_000);
+    let at = now;
+    while (current.nextAttemptAt) {
+      at = new Date(current.nextAttemptAt.getTime() + 1);
+      await worker.runOnce(at);
+      current = await database.webhookInbox.findUniqueOrThrow({ where: { id: row.id } });
+    }
+    expect(calls).toBe(3);
+    expect(current.attempts).toBe(7);
+    expect(current.lastError).toContain("Retry limit reached");
+    await worker.runOnce(new Date(at.getTime() + 30 * 86_400_000));
+    expect(calls).toBe(3);
   });
 });

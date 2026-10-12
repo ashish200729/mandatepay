@@ -92,8 +92,6 @@ test("renders the foundation 404 screen with a recovery link", async ({ page }) 
   const response = await page.goto("/this-route-does-not-exist");
 
   expect(response?.status()).toBe(404);
-  await expect(
-    page.getByRole("heading", { name: "This page hasn’t been built yet." }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "This page doesn’t exist." })).toBeVisible();
   await expect(page.getByRole("link", { name: "Return to MandatePay" })).toBeVisible();
 });

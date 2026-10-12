@@ -1,5 +1,5 @@
 import type { NormalizedProduct, ProductRanking, PurchaseProposal } from "./types";
-import { approvalReasonText } from "../approvals/reasons";
+import { approvalReasonText, readDecisionExplanation } from "../approvals/reasons";
 
 export class ProductApiError extends Error {
   constructor(
@@ -106,14 +106,15 @@ function readProposal(value: unknown): PurchaseProposal {
     policy.reasonCodes.every((code) => typeof code === "string")
       ? (policy.reasonCodes as string[])
       : [];
-  const reason =
-    decision === "REQUIRE_APPROVAL"
-      ? approvalReasonText({ decision, reasonCodes: codes })
-      : decision === "ALLOW"
-        ? "AgentGuard verified the permissions and reserved the amount. No payment has been made."
-        : decision === "BLOCK"
-          ? `AgentGuard blocked this proposal: ${codes.join(", ") || "the mandate rules were not satisfied"}.`
-          : undefined;
+  const policyRecord = decision
+    ? {
+        decision,
+        reasonCodes: codes,
+        explanation: readDecisionExplanation(policy?.explanation),
+      }
+    : undefined;
+  // Verdict-specific, server-templated copy; machine reason codes are never shown raw.
+  const reason = policyRecord ? approvalReasonText(policyRecord) : undefined;
   return {
     id: candidate.id,
     status: typeof candidate.status === "string" ? candidate.status : undefined,
@@ -124,6 +125,7 @@ function readProposal(value: unknown): PurchaseProposal {
     policyDecision:
       typeof candidate.policyDecision === "string" ? candidate.policyDecision : undefined,
     policyReason: reason,
+    policy: policyRecord,
   };
 }
 
@@ -144,6 +146,7 @@ export async function searchProducts(mandateId: string, query: string) {
     products: payload.products.map(readProduct),
     mode,
     notice: payload.notice as string | null,
+    fallback: payload.fallback === true,
   };
 }
 
@@ -188,7 +191,9 @@ export async function createProposal(
   requestKey = createProposalRequestKey(),
 ) {
   if (product.source !== "demo") {
-    throw new Error("Only demo catalog products can create a proposal in this phase.");
+    throw new Error(
+      "Only Demo Catalog products can be bought in MandatePay. Open the retailer link to buy this listing there.",
+    );
   }
   return readProposal(
     await request("/api/proposals", {

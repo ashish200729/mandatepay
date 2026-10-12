@@ -11,7 +11,7 @@ const outcomes = [
   {
     amount: "$139",
     title: "A little freedom.",
-    detail: "Below your automatic limit. The agent has permission to proceed.",
+    detail: "Below your automatic limit. AgentGuard allows it; PayPal still asks you to confirm.",
     decision: "Allowed by your rules",
     rule: "Automatic limit",
     limit: "$150",
@@ -29,7 +29,7 @@ const outcomes = [
   {
     amount: "$220",
     title: "A boundary that holds.",
-    detail: "Above your maximum budget. The proposal stops before money can move.",
+    detail: "Above your maximum budget. Blocked before checkout, and approval can’t override it.",
     decision: "Blocked by your rules",
     rule: "Maximum budget",
     limit: "$180",
@@ -46,12 +46,12 @@ const stages = [
   {
     title: "Give it clear boundaries.",
     description:
-      "AgentGuard is designed to check each proposal against your mandate. Allow, ask, or block. Every time.",
+      "AgentGuard checks every proposal against your mandate with deterministic rules. Allow, ask, or block. Every time.",
   },
   {
     title: "Keep the final say.",
     description:
-      "PayPal handles the payment after authorization, with customer approval where required.",
+      "PayPal Sandbox handles checkout, capture, and refunds after authorization. You still confirm the payment in PayPal.",
   },
 ];
 
@@ -64,12 +64,17 @@ const questions = [
   {
     question: "Can an AI override my spending rules?",
     answer:
-      "The intended architecture keeps recommendation and authorization separate. AI proposes a purchase; AgentGuard evaluates explicit rules. A recommendation cannot override a hard spending limit.",
+      "No. Recommendation and authorization are separate. AI proposes a purchase; AgentGuard evaluates your mandate with deterministic code, not a language model. A recommendation cannot override a hard spending limit, and a blocked proposal can’t be approved.",
   },
   {
     question: "Can I make a purchase here today?",
     answer:
-      "This is the MandatePay design foundation. The examples illustrate the intended experience; AI, policy enforcement, product discovery, and PayPal payments are not connected yet.",
+      "Yes, in PayPal Sandbox. AI mandate parsing, product discovery, AgentGuard policy checks, PayPal Sandbox checkout, capture and refunds, and signature-verified webhooks are implemented. Payments use PayPal Sandbox test accounts, so no real money moves. Checkout uses the Demo Catalog; the examples above are real Demo Catalog products.",
+  },
+  {
+    question: "What does “autonomous purchasing” mean?",
+    answer:
+      "It is policy autonomy: AgentGuard may ALLOW a purchase under your automatic limit without asking you in MandatePay. PayPal’s own payer approval is separate, so you still confirm the payment in PayPal Sandbox. Anything above your automatic limit waits for your approval, and anything outside your hard rules is blocked.",
   },
 ];
 
@@ -156,7 +161,7 @@ export default function HomePage() {
               </div>
             </div>
             <p className="mx-auto mt-3 w-fit rounded-full border border-border/40 bg-background/85 px-3 py-0.5 text-[11px] text-muted-foreground backdrop-blur-xs">
-              An illustrative mandate. No purchase is being made.
+              An example mandate. Try it with the Demo Catalog in PayPal Sandbox.
             </p>
           </div>
         </section>
@@ -239,7 +244,7 @@ export default function HomePage() {
             })}
           </div>
           <p className="mt-5 text-center text-xs leading-relaxed text-muted-foreground">
-            Illustrative proposals · Maximum budget $180 · Automatic limit $150 · Prices in USD
+            Demo Catalog products · Maximum budget $180 · Automatic limit $150 · Prices in USD
           </p>
         </section>
 
@@ -347,7 +352,7 @@ export default function HomePage() {
                   {
                     index: "04",
                     title: "Permission you can take back.",
-                    text: "Mandates are designed to be paused or disabled by you.",
+                    text: "Pause or revoke a mandate at any time, or turn autonomous purchasing off in Settings.",
                   },
                 ].map((item) => (
                   <div
@@ -467,9 +472,7 @@ export default function HomePage() {
           </div>
           <div className="mt-10 flex flex-col justify-between gap-3 border-t border-foreground/10 pt-6 text-xs leading-relaxed text-foreground/75 sm:flex-row">
             <span>© 2026 MandatePay</span>
-            <span>
-              Product concept · Illustrative examples · No live AI or payment integrations
-            </span>
+            <span>PayPal Sandbox · Demo Catalog · No real money moves</span>
           </div>
         </div>
       </footer>

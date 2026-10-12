@@ -8,21 +8,25 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --import ../../scripts/register-api-environment.mjs dist/server.js",
     "worker:webhooks": "node --import ../../scripts/register-api-environment.mjs dist/workers/paypal-webhook-recovery.js",
+    "worker:reconcile": "node --import ../../scripts/register-api-environment.mjs dist/workers/payment-reconcile.js",
+    "mandate:keygen": "tsx src/scripts/mandate-keygen.ts",
+    "demo:account": "node --import ../../scripts/register-api-environment.mjs dist/scripts/provision-demo-account.js",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config ../../vitest.config.ts apps/api",
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@mandatepay/agent": "workspace:*",
-    "@mandatepay/channel3": "workspace:*",
     "@mandatepay/agentguard": "workspace:*",
+    "@mandatepay/channel3": "workspace:*",
     "@mandatepay/database": "workspace:*",
     "@mandatepay/paypal": "workspace:*",
     "@mandatepay/shared": "workspace:*",
-    "fastify": "5.12.5",
-    "@fastify/cors": "^11.2.0",
     "better-auth": "1.7.7",
+    "fastify": "5.12.5",
+    "jose": "6.2.12",
     "zod": "^4.3.0"
   },
   "devDependencies": {

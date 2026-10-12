@@ -68,7 +68,7 @@ test.describe("mandate workflow", () => {
     await page.getByLabel("Maximum transaction").fill("190.00");
     await page.getByRole("button", { name: "Save new version" }).click();
     await expect(page.getByText(/Version 2 · UTC/)).toBeVisible();
-    await expect(page.getByText("$190.00")).toBeVisible();
+    await expect(page.getByText("$190.00", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Pause mandate" }).click();
     await expect(page.getByText("PAUSED")).toBeVisible();
@@ -85,7 +85,7 @@ test.describe("mandate workflow", () => {
     await page.getByRole("button", { name: "Search", exact: true }).click();
     await expect(page.getByText(/Demo Catalog — illustrative products/)).toBeVisible();
     const comparisons = page.getByRole("checkbox", { name: "Compare", exact: true });
-    await expect(comparisons).toHaveCount(3);
+    await expect(comparisons).toHaveCount(7);
     for (let index = 0; index < 3; index += 1) await comparisons.nth(index).check();
     await page.getByRole("button", { name: "Compare selected (3)" }).click();
     await expect(page.getByRole("heading", { name: "Comparison ready." })).toBeVisible();
@@ -94,7 +94,7 @@ test.describe("mandate workflow", () => {
       .getByRole("button", { name: /Prepare proposal/ })
       .nth(1)
       .click();
-    await expect(page.getByText("REQUIRE APPROVAL", { exact: true })).toBeVisible();
+    await expect(page.getByText("Needs your approval", { exact: true })).toBeVisible();
 
     await page.getByRole("link", { name: "Approvals", exact: true }).click();
     await expect(page).toHaveURL(/\/approvals$/);

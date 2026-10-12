@@ -37,6 +37,8 @@ describe("admin trusted origins", () => {
       AUTH_SECRET: "test-secret-with-at-least-32-characters",
       RESEND_API_KEY: "fixture",
       AUTH_EMAIL_FROM: "auth@example.com",
+      INTERNAL_PROXY_SECRET: "fixture-internal-proxy-secret-0123456789",
+      MANDATE_SIGNING_KEY: JSON.stringify({ kty: "EC", crv: "P-256", x: "fx", y: "fy", d: "fd" }),
     };
     expect(
       environmentSchema.safeParse({ ...production, ADMIN_ORIGIN: "http://admin.example.com" })

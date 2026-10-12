@@ -172,7 +172,8 @@ export function createAuthRuntime(options: AuthRuntimeOptions) {
           }),
     },
     advanced: {
-      // Only the Fastify bridge writes this header from its socket-derived IP.
+      // Only the Fastify bridge writes this header, from request.ip: the socket address, or the
+      // BFF-forwarded client address when the internal proxy secret matched (see app.ts).
       ipAddress: { ipAddressHeaders: ["x-mandatepay-client-ip"] },
       useSecureCookies: isProduction,
       disableCSRFCheck: false,

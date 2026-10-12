@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  readShoppingContext,
   readShoppingProducts,
   signShoppingProducts,
   type ShoppingProduct,
@@ -59,5 +60,45 @@ describe("verified shopping references", () => {
   });
   it.each(["", "invalid", "a.b.c", "x".repeat(50_001)])("rejects malformed references", (token) => {
     expect(readShoppingProducts(token, owner, secret)).toBeNull();
+  });
+});
+
+describe("mandate-excluded shopping references", () => {
+  const demo: ShoppingProduct = {
+    ...product,
+    source: "demo",
+    externalId: "demo-headphones-refurbished",
+    title: "Bose QuietComfort Refurbished Headphones",
+    brand: "Bose",
+    condition: "REFURBISHED",
+    priceMinor: 12_000,
+    merchant: "Mandate Demo Store",
+    productUrl: null,
+    imageUrl: "/demo-products/over-ear-sand.svg",
+  };
+
+  it("keeps excluded listings and their reasons separate from purchasable products", () => {
+    const token = signShoppingProducts([product], owner, secret, [
+      { ...demo, reasons: ["Your mandate allows new only; this one is refurbished."] },
+    ])!;
+    const context = readShoppingContext(token, owner, secret)!;
+    expect(context.products.map((entry) => entry.externalId)).toEqual(["pegasus"]);
+    expect(context.excluded).toEqual([
+      { ...demo, reasons: ["Your mandate allows new only; this one is refurbished."] },
+    ]);
+    expect(readShoppingProducts(token, owner, secret)).toHaveLength(1);
+  });
+
+  it("accepts only same-origin demo illustrations", () => {
+    expect(() =>
+      signShoppingProducts(
+        [{ ...demo, imageUrl: "https://tracker.example/pixel.svg" }],
+        owner,
+        secret,
+      ),
+    ).toThrowError();
+    expect(
+      readShoppingContext(signShoppingProducts([product], owner, secret)!, owner, secret),
+    ).toMatchObject({ excluded: [] });
   });
 });

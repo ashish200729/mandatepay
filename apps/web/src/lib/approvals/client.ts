@@ -1,3 +1,4 @@
+import { readDecisionExplanation } from "./reasons";
 import type { ApprovalDecision, ApprovalDetail, ApprovalProposal } from "./types";
 
 export class ApprovalApiError extends Error {
@@ -36,7 +37,11 @@ function readDecision(value: unknown): ApprovalDecision | null {
   if (value.reasonCodes.some((code) => typeof code !== "string")) {
     throw new Error("The approval reason codes were not valid.");
   }
-  return { decision: value.decision, reasonCodes: value.reasonCodes as string[] };
+  return {
+    decision: value.decision,
+    reasonCodes: value.reasonCodes as string[],
+    explanation: readDecisionExplanation(value.explanation),
+  };
 }
 
 export function readApprovalProposal(value: unknown): ApprovalProposal {

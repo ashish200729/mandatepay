@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+// The chat UI streams from /api/agent/chat/stream and falls back to /api/agent/chat.
+// Mocked JSON answers are valid on either URL.
+const CHAT_ROUTE = /\/api\/agent\/chat(?:\/stream)?$/u;
+
 const rules = {
   title: "Nike shoes",
   productIntent: "Nike shoes",
@@ -31,7 +35,7 @@ for (const width of [1440, 390]) {
   }) => {
     await page.setViewportSize({ width, height: 900 });
     const bodies: Record<string, unknown>[] = [];
-    await page.route("**/api/agent/chat", async (route) => {
+    await page.route(CHAT_ROUTE, async (route) => {
       bodies.push(route.request().postDataJSON());
       if (bodies.length === 1)
         return route.fulfill({
@@ -80,7 +84,7 @@ test("clears an expired selection and restores the request for a fresh search", 
 }) => {
   let requests = 0;
   const bodies: Record<string, unknown>[] = [];
-  await page.route("**/api/agent/chat", (route) => {
+  await page.route(CHAT_ROUTE, (route) => {
     bodies.push(route.request().postDataJSON());
     requests++;
     if (requests === 1)
@@ -128,7 +132,7 @@ test("does not reuse a product reference after changing mandates", async ({ page
     }),
   );
   const bodies: Record<string, unknown>[] = [];
-  await page.route("**/api/agent/chat", (route) => {
+  await page.route(CHAT_ROUTE, (route) => {
     bodies.push(route.request().postDataJSON());
     return route.fulfill({ json: { ...success, productContext: "first-mandate-reference" } });
   });
@@ -191,7 +195,7 @@ for (const width of [1440, 390]) {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route("**/api/agent/chat", async (route) => {
+    await page.route(CHAT_ROUTE, async (route) => {
       bodies.push(route.request().postDataJSON());
       if (bodies.length === 1) {
         await gate;
@@ -236,7 +240,7 @@ for (const width of [1440, 390]) {
 }
 
 test("shows a distinct AI service failure with an available retry", async ({ page }) => {
-  await page.route("**/api/agent/chat", (route) =>
+  await page.route(CHAT_ROUTE, (route) =>
     route.fulfill({
       status: 503,
       json: {
@@ -258,7 +262,7 @@ test("shows a distinct AI service failure with an available retry", async ({ pag
 for (const width of [1440, 390, 320]) {
   test(`shows a formatted answer immediately at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.route("**/api/agent/chat", (route) =>
+    await page.route(CHAT_ROUTE, (route) =>
       route.fulfill({
         json: {
           ...success,
@@ -285,7 +289,7 @@ for (const width of [1440, 390, 320]) {
     const serverSteps = thread.locator("summary").filter({ hasText: "Show server steps" });
     await serverSteps.focus();
     await page.keyboard.press("Enter");
-    await expect(thread.getByText("search_products", { exact: true })).toBeVisible();
+    await expect(thread.getByText("Searched the catalog", { exact: true })).toBeVisible();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
@@ -297,7 +301,7 @@ for (const width of [1440, 390, 320]) {
 }
 
 test("keeps provider markup inert and blocks unsafe links and images", async ({ page }) => {
-  await page.route("**/api/agent/chat", (route) =>
+  await page.route(CHAT_ROUTE, (route) =>
     route.fulfill({
       json: {
         ...success,
@@ -323,7 +327,7 @@ test("keeps provider markup inert and blocks unsafe links and images", async ({ 
 });
 
 test("shows a no-match answer without hiding or losing the saved budget", async ({ page }) => {
-  await page.route("**/api/agent/chat", (route) =>
+  await page.route(CHAT_ROUTE, (route) =>
     route.fulfill({
       json: {
         ...success,

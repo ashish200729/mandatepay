@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { isAIConfigurationError } from "@mandatepay/agent";
 import { DatabaseError, PolicyDecisionType, type DatabaseClient } from "@mandatepay/database";
 import {
   dashboardPolicyEvents,
@@ -47,6 +48,7 @@ const statusSchema = z.enum([
   "DENIED",
   "PARTIALLY_REFUNDED",
   "REFUNDED",
+  "REVERSED",
 ]);
 const utcDateSchema = z
   .string()
@@ -173,6 +175,13 @@ function error(reply: FastifyReply, cause: unknown) {
     if (cause.code === "INVALID_DOMAIN_INPUT" || cause.code === "INVALID_MONEY") {
       return reply.status(400).send({ error: "Analytics request is invalid." });
     }
+  }
+  if (isAIConfigurationError(cause)) {
+    return reply.status(503).send({
+      code: "AI_NOT_CONFIGURED",
+      error:
+        "The AI service is not configured, so questions can’t be interpreted. Use the table filters instead.",
+    });
   }
   return reply.status(503).send({ error: "Analytics service is temporarily unavailable." });
 }

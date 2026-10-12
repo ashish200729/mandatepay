@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" role="img" aria-labelledby="t">
+  <title id="t">Illustration of over-ear headphones with a travel case</title>
+  <rect width="160" height="160" rx="24" fill="#F3E7C9"/>
+  <ellipse cx="80" cy="134" rx="50" ry="6" fill="#1B140E" opacity="0.08"/>
+  <path d="M38 92 C38 48 58 30 80 30 C102 30 122 48 122 92" fill="none" stroke="#251D17" stroke-width="9" stroke-linecap="round"/>
+  <path d="M46 88 C46 56 61 40 80 40 C99 40 114 56 114 88" fill="none" stroke="#F8F1EB" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+  <rect x="26" y="80" width="30" height="46" rx="14" fill="#3A2F27"/>
+  <rect x="104" y="80" width="30" height="46" rx="14" fill="#3A2F27"/>
+  <rect x="48" y="86" width="10" height="34" rx="5" fill="#6A6158"/>
+  <rect x="102" y="86" width="10" height="34" rx="5" fill="#6A6158"/>
+  <circle cx="41" cy="103" r="4" fill="#F8F1EB" opacity="0.6"/>
+  <circle cx="119" cy="103" r="4" fill="#F8F1EB" opacity="0.6"/>
+  <rect x="58" y="112" width="70" height="34" rx="12" fill="#6A6158"/>
+  <rect x="64" y="118" width="58" height="22" rx="8" fill="none" stroke="#E5DABD" stroke-width="2"/>
+  <rect x="86" y="108" width="14" height="6" rx="3" fill="#251D17"/>
+</svg>

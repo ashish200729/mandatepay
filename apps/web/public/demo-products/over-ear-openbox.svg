@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" role="img" aria-labelledby="t">
+  <title id="t">Illustration of black over-ear headphones resting on an opened box</title>
+  <rect width="160" height="160" rx="24" fill="#EFE3D3"/>
+  <ellipse cx="80" cy="140" rx="54" ry="6" fill="#1B140E" opacity="0.08"/>
+  <path d="M30 104 L80 92 L130 104 L130 134 L80 142 L30 134 Z" fill="#C9A77C"/>
+  <path d="M30 104 L80 116 L130 104" fill="none" stroke="#9C7A52" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M80 116 L80 142" stroke="#9C7A52" stroke-width="2"/>
+  <path d="M30 104 L18 90 L66 80 L80 92 Z" fill="#D8B98F"/>
+  <path d="M130 104 L142 90 L94 80 L80 92 Z" fill="#D8B98F"/>
+  <path d="M44 86 C44 46 61 28 80 28 C99 28 116 46 116 86" fill="none" stroke="#1F1913" stroke-width="9" stroke-linecap="round"/>
+  <path d="M51 82 C51 53 64 38 80 38 C96 38 109 53 109 82" fill="none" stroke="#F8F1EB" stroke-width="2" stroke-linecap="round" opacity="0.45"/>
+  <rect x="33" y="72" width="28" height="42" rx="13" fill="#2E2620"/>
+  <rect x="99" y="72" width="28" height="42" rx="13" fill="#2E2620"/>
+  <rect x="54" y="78" width="9" height="30" rx="4.5" fill="#5E554C"/>
+  <rect x="97" y="78" width="9" height="30" rx="4.5" fill="#5E554C"/>
+  <path d="M112 30 L140 30 L146 38 L140 46 L112 46 Z" fill="#F8F1EB" stroke="#251D17" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="117" cy="38" r="2" fill="#251D17"/>
+  <path d="M124 35 L136 35 M124 41 L133 41" stroke="#251D17" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

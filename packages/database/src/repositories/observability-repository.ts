@@ -24,7 +24,8 @@ import {
   recoveryWhere,
   timestampPage,
   WEBHOOK_LEASE_MS,
-  WEBHOOK_MAX_ATTEMPTS,
+  webhookAttemptsExhaustedWhere,
+  webhookAttemptsRemainingWhere,
 } from "./admin-query.js";
 
 const ZERO_COUNTS: WorkerRunCounts = {
@@ -73,6 +74,10 @@ function countsOf(value: WorkerRunCounts): WorkerRunCounts {
 
 export type ObservabilityClient = DatabaseClient | Prisma.TransactionClient;
 
+/** Scheduled jobs that record a heartbeat row per run. */
+export const WORKER_NAMES = ["paypal-webhook-recovery", "paypal-payment-reconcile"] as const;
+export type WorkerName = (typeof WORKER_NAMES)[number];
+
 export class ObservabilityRepository {
   constructor(
     private readonly db: ObservabilityClient,
@@ -86,13 +91,13 @@ export class ObservabilityRepository {
     return this.cursorSecret;
   }
 
-  async beginWorkerRun(input: { runId: string; at: Date }) {
+  async beginWorkerRun(input: { runId: string; at: Date; worker?: WorkerName }) {
     if (!zUuid(input.runId)) {
       throw new DatabaseError("INVALID_DOMAIN_INPUT", "Worker run ID is invalid.");
     }
     await this.db.workerHeartbeat.create({
       data: {
-        worker: "paypal-webhook-recovery",
+        worker: input.worker ?? "paypal-webhook-recovery",
         runId: input.runId,
         startedAt: input.at,
         heartbeatAt: input.at,
@@ -107,10 +112,11 @@ export class ObservabilityRepository {
     at: Date;
     outcome: "SUCCEEDED" | "FAILED" | "SKIPPED";
     counts: WorkerRunCounts;
+    worker?: WorkerName;
   }) {
     const counts = countsOf(input.counts);
     const updated = await this.db.workerHeartbeat.updateMany({
-      where: { runId: input.runId, worker: "paypal-webhook-recovery" },
+      where: { runId: input.runId, worker: input.worker ?? "paypal-webhook-recovery" },
       data: {
         heartbeatAt: input.at,
         completedAt: input.at,
@@ -214,10 +220,10 @@ export class ObservabilityRepository {
     });
   }
 
-  async latestWorker(now = new Date()) {
+  async latestWorker(now = new Date(), worker: WorkerName = "paypal-webhook-recovery") {
     return this.db.workerHeartbeat
       .findFirst({
-        where: { worker: "paypal-webhook-recovery" },
+        where: { worker },
         orderBy: [{ heartbeatAt: "desc" }, { id: "desc" }],
         select: {
           runId: true,
@@ -247,12 +253,12 @@ export class ObservabilityRepository {
           where: {
             ...verified,
             status: "FAILED",
-            attempts: { lt: WEBHOOK_MAX_ATTEMPTS },
+            AND: [webhookAttemptsRemainingWhere()],
             nextAttemptAt: { gt: asOf },
           },
         }),
         this.db.webhookInbox.count({
-          where: { ...verified, status: "FAILED", attempts: { gte: WEBHOOK_MAX_ATTEMPTS } },
+          where: { ...verified, status: "FAILED", AND: [webhookAttemptsExhaustedWhere()] },
         }),
         this.db.webhookInbox.count({
           where: {

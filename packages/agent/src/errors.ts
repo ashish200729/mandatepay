@@ -110,3 +110,8 @@ export class RankingOutputError extends MandateParserError {
 export function isMandateParserError(error: unknown): error is MandateParserError {
   return error instanceof MandateParserError;
 }
+
+/** True when the AI provider is not configured (for example, a missing API key or model). */
+export function isAIConfigurationError(error: unknown): error is OpenAIConfigurationError {
+  return error instanceof OpenAIConfigurationError;
+}

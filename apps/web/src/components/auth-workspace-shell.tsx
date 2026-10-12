@@ -21,6 +21,7 @@ import { Brand } from "@/components/brand";
 import { signOut } from "@/lib/auth/client";
 import type { Principal } from "@/lib/auth/server-api";
 import { getSafeReturnTo } from "@/lib/auth/return-to";
+import { getPaypalStatus } from "@/lib/payments/client";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 
 export type WorkspacePrincipal = Omit<Principal, "id">;
@@ -128,6 +129,49 @@ function AccountBlock({ principal }: { principal: WorkspacePrincipal }) {
   );
 }
 
+/** Reflects the server's PayPal configuration; the environment is always Sandbox. */
+function PaypalBadge() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getPaypalStatus()
+      .then((status) => {
+        if (active) setConfigured(status.configured);
+      })
+      .catch(() => {
+        // Keep the neutral Sandbox label when status is temporarily unavailable.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const missing = configured === false;
+  return (
+    <span
+      title={
+        missing
+          ? "PayPal Sandbox credentials are not configured on the server. Checkout is unavailable."
+          : "Payments run in PayPal Sandbox. No real money moves."
+      }
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
+        missing
+          ? "border-border bg-secondary text-foreground"
+          : "border-sand-border bg-sand/50 text-muted-foreground"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`size-1.5 rounded-full ${
+          configured ? "bg-foreground" : missing ? "bg-muted-foreground/50" : "bg-sand-border"
+        }`}
+      />
+      {missing ? "PayPal not configured" : "PayPal Sandbox"}
+    </span>
+  );
+}
+
 export function AuthWorkspaceShell({
   principal,
   children,
@@ -194,9 +238,7 @@ export function AuthWorkspaceShell({
               <span>{currentPage}</span>
             </div>
             <div className="hidden items-center gap-4 lg:flex">
-              <span className="rounded-md border border-sand-border bg-sand/50 px-2.5 py-1 text-xs text-muted-foreground">
-                PayPal Sandbox
-              </span>
+              <PaypalBadge />
               <Link
                 href="/mandates/new"
                 className={buttonVariants({ variant: "outline", size: "sm" })}

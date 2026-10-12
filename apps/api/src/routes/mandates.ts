@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { DatabaseClient } from "@mandatepay/database";
 import { DatabaseError, MandateRepository } from "@mandatepay/database";
+import { isAIConfigurationError } from "@mandatepay/agent";
 import { CanonicalMandateSchema } from "@mandatepay/shared";
 import { z } from "zod";
 import {
@@ -9,6 +10,7 @@ import {
   toMandateDTO,
   type DraftParser,
 } from "../services/mandates.js";
+import { issueOpenCredentialsAfterCommit } from "../services/mandate-credentials.js";
 
 type AuthenticatedUser = { id: string };
 
@@ -83,6 +85,14 @@ function handleParserError(reply: FastifyReply, error: unknown) {
     code === "CANONICAL_VALIDATION_FAILED"
   ) {
     return jsonError(reply, 400, code, "Mandate prompt is invalid.");
+  }
+  if (isAIConfigurationError(error)) {
+    return jsonError(
+      reply,
+      503,
+      "AI_NOT_CONFIGURED",
+      "The AI service is not configured, so requests can’t be read yet. An administrator needs to add the AI provider settings.",
+    );
   }
   return jsonError(reply, 503, "PARSER_UNAVAILABLE", "Mandate parser is temporarily unavailable.");
 }
@@ -222,6 +232,10 @@ export function registerMandateRoutes(app: FastifyInstance, context: MandateRout
         canonicalToCreateInput(user.id, parsed.data.originalPrompt, parsed.data.mandate),
         parsed.data.version,
       );
+      // A versioned edit of an active mandate re-signs its new limits after commit.
+      if (mandate.status === "ACTIVE") {
+        await issueOpenCredentialsAfterCommit(context.database, mandate.id, user.id);
+      }
       return reply.send({ mandate: toMandateDTO(mandate) });
     } catch (error) {
       return handleError(reply, error);
@@ -242,6 +256,10 @@ export function registerMandateRoutes(app: FastifyInstance, context: MandateRout
       }
       try {
         const mandate = await repository()[action](id, user.id, parsed.data.version);
+        // Signing runs after the activation commit and never fails it (lazy retry on read).
+        if (mandate.status === "ACTIVE") {
+          await issueOpenCredentialsAfterCommit(context.database, mandate.id, user.id);
+        }
         return reply.send({ mandate: toMandateDTO(mandate) });
       } catch (error) {
         return handleError(reply, error);

@@ -8,29 +8,39 @@ import {
   Bot,
   Check,
   CircleAlert,
+  Filter,
+  Headphones,
   LoaderCircle,
   RotateCcw,
   Send,
-  ShieldCheck,
+  ShieldAlert,
   UserRound,
   X,
 } from "lucide-react";
 import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
-import { approvalReasonText } from "@/lib/approvals/reasons";
 import { listMandates } from "@/lib/mandates/client";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
 import {
+  agentStepLabel,
   createShoppingRequestKey,
-  sendShoppingMessage,
+  streamShoppingMessage,
   ShoppingAgentApiError,
 } from "@/lib/agent/client";
 import { activeShoppingMandates, selectShoppingMandate } from "@/lib/agent/mandates";
+import { shouldSendOnKey } from "@/lib/agent/keyboard";
 import { saveRefundDraft } from "@/lib/agent/refund-draft";
-import type { RefundDraft, ShoppingAgentResponse } from "@/lib/agent/types";
+import type {
+  AgentLiveStep,
+  ExcludedProduct,
+  RefundDraft,
+  ShoppingAgentResponse,
+} from "@/lib/agent/types";
 import type { MandateDetail } from "@/lib/mandates/types";
 import { workspaceField, WorkspaceLoading, WorkspaceStatus } from "@/components/workspace-ui";
 import { ChatAnswer } from "@/components/chat-answer";
+import { DecisionExplanation } from "@/components/decision-explanation";
+import { AutopayNotice } from "@/components/saved-payment-method";
 
 type ChatMessage = {
   id: string;
@@ -78,20 +88,16 @@ function ProposalCard({ response }: { response: ShoppingAgentResponse }) {
             </div>
           </div>
           {proposal.decision ? (
-            <div className="mt-4 border-t border-border pt-4 text-sm">
-              <p className="flex items-center gap-2 font-medium">
-                {proposal.decision.decision === "BLOCK" ? (
-                  <X size={15} aria-hidden="true" />
-                ) : (
-                  <ShieldCheck size={15} aria-hidden="true" />
-                )}{" "}
-                AgentGuard: {proposal.decision.decision.replaceAll("_", " ")}
-              </p>
-              <p className="mt-2 leading-relaxed text-muted-foreground">
-                {approvalReasonText(proposal.decision)}
-              </p>
-            </div>
+            <DecisionExplanation
+              decision={proposal.decision}
+              className="mt-4 border-t border-border pt-4"
+            />
           ) : null}
+          <AutopayNotice
+            proposalId={proposal.id}
+            status={proposal.status}
+            decision={proposal.decision?.decision}
+          />
           <div className="mt-5 flex flex-wrap gap-2">
             {proposal.status === "AWAITING_APPROVAL" ? (
               <Link
@@ -112,6 +118,135 @@ function ProposalCard({ response }: { response: ShoppingAgentResponse }) {
           </div>
         </article>
       ))}
+    </div>
+  );
+}
+
+function ProductThumb({ imageUrl, title }: { imageUrl: string | null; title: string }) {
+  return (
+    <span className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-secondary">
+      {imageUrl ? (
+        // Same-origin Demo Catalog illustration; validated by the response reader.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={imageUrl} alt={title} width={48} height={48} className="size-12 object-cover" />
+      ) : (
+        <Headphones size={18} className="text-muted-foreground" aria-hidden="true" />
+      )}
+    </span>
+  );
+}
+
+function ExcludedProductsList({ products }: { products: ExcludedProduct[] }) {
+  if (!products.length) return null;
+  return (
+    <section
+      aria-label="Filtered by your mandate"
+      className="mt-5 rounded-xl border border-border bg-secondary/50 p-4"
+    >
+      <h3 className="flex items-center gap-2 text-sm font-medium">
+        <Filter size={14} aria-hidden="true" /> Filtered by your mandate
+      </h3>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        These results break a rule in your mandate, so they weren’t offered as options. To see
+        AgentGuard’s decision, ask to buy one by its exact name.
+      </p>
+      <ul className="mt-3 space-y-3">
+        {products.map((product) => (
+          <li
+            key={`${product.source}-${product.externalId}`}
+            className={cn(
+              "flex min-w-0 gap-3",
+              product.promptInjection && "rounded-lg border border-foreground bg-card p-3",
+            )}
+          >
+            <ProductThumb imageUrl={product.imageUrl} title={product.title} />
+            <div className="min-w-0 flex-1 text-sm">
+              {product.promptInjection ? (
+                <p className="mb-1 inline-flex items-center gap-1.5 rounded-full bg-foreground px-2.5 py-0.5 text-xs font-medium text-background">
+                  <ShieldAlert size={13} aria-hidden="true" />
+                  Prompt-injection attempt blocked
+                </p>
+              ) : null}
+              <p className="break-words font-medium leading-6">
+                {product.title}{" "}
+                <span className="font-normal tabular-nums text-muted-foreground">
+                  · {formatUsdLabel(product.priceMinor)}
+                </span>
+              </p>
+              <p className="text-xs leading-5 text-muted-foreground">
+                {product.merchant} · {product.condition.toLowerCase()}
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs leading-5">
+                {product.reasons.map((reason) => (
+                  <li key={reason}>
+                    <span className="font-medium">Excluded:</span> {reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+const LIVE_STATUS_COPY: Record<AgentLiveStep["status"], string> = {
+  running: "In progress",
+  completed: "Done",
+  blocked: "Stopped by AgentGuard",
+  failed: "Didn’t finish",
+};
+
+function LiveStepIcon({ status }: { status: AgentLiveStep["status"] }) {
+  if (status === "running")
+    return (
+      <LoaderCircle
+        size={14}
+        className="animate-spin text-muted-foreground motion-reduce:animate-none"
+        aria-hidden="true"
+      />
+    );
+  if (status === "completed") return <Check size={14} aria-hidden="true" />;
+  if (status === "blocked") return <ShieldAlert size={14} aria-hidden="true" />;
+  return <X size={14} aria-hidden="true" />;
+}
+
+/** Live server progress while the assistant works. Announced politely, one step at a time. */
+function AgentProgress({ steps }: { steps: AgentLiveStep[] }) {
+  const current = steps.at(-1);
+  return (
+    <div className="text-sm text-muted-foreground">
+      <div role="status" className="flex items-center gap-2">
+        <LoaderCircle
+          size={16}
+          className="animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+        {current ? `${current.label}…` : "Finding the next step…"}
+      </div>
+      {steps.length ? (
+        // The status line above announces each step; the list itself stays quiet.
+        <ol
+          aria-label="Assistant progress"
+          aria-live="off"
+          className="mt-3 space-y-2 border-l border-border pl-4"
+        >
+          {steps.map((step) => (
+            <li
+              key={step.id}
+              className={cn(
+                "flex min-w-0 items-center gap-2 leading-6",
+                step.status !== "running" && "text-foreground",
+              )}
+            >
+              <LiveStepIcon status={step.status} />
+              <span className="min-w-0 break-words">{step.label}</span>
+              <span className="sr-only">· {LIVE_STATUS_COPY[step.status]}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
     </div>
   );
 }
@@ -173,11 +308,12 @@ function AgentMessage({ message }: { message: ChatMessage }) {
         {message.response ? (
           <>
             <ProposalCard response={message.response} />
+            <ExcludedProductsList products={message.response.excludedProducts} />
             {message.response.refundDraft ? (
               <RefundDraftCard draft={message.response.refundDraft} />
             ) : null}
             <details className="mt-5 border-t border-border pt-4">
-              <summary className="cursor-pointer text-xs font-medium text-muted-foreground underline-offset-4 hover:underline">
+              <summary className="inline-flex min-h-11 cursor-pointer items-center text-xs font-medium text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
                 Show server steps
               </summary>
               <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
@@ -187,7 +323,7 @@ function AgentMessage({ message }: { message: ChatMessage }) {
                     className="flex items-center gap-2"
                   >
                     <Check size={13} aria-hidden="true" />
-                    {step.name}
+                    {agentStepLabel(step.name)}
                   </li>
                 ))}
               </ul>
@@ -206,6 +342,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
   const [message, setMessage] = useState("");
   const [loadingMandates, setLoadingMandates] = useState(true);
   const [sending, setSending] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<AgentLiveStep[]>([]);
   const [retry, setRetry] = useState<{
     message: string;
     mandateId?: string;
@@ -286,6 +423,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
         : {}),
     };
     setSending(true);
+    setLiveSteps([]);
     followLatest.current = true;
     setError(null);
     if (!existing) {
@@ -296,11 +434,19 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
       ]);
     }
     try {
-      const response = await sendShoppingMessage(
+      const response = await streamShoppingMessage(
         request.message,
         request.mandateId,
         request.requestKey,
         request.productContext,
+        (step) =>
+          setLiveSteps((current) => {
+            const index = current.findIndex((entry) => entry.id === step.id);
+            if (index === -1) return [...current, step];
+            const next = [...current];
+            next[index] = step;
+            return next;
+          }),
       );
       if (response.productContext !== undefined)
         productContext.current = response.productContext
@@ -329,6 +475,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
       );
     } finally {
       setSending(false);
+      setLiveSteps([]);
     }
   }
 
@@ -433,7 +580,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
           followLatest.current = !away;
           setAwayFromLatest(away);
         }}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 [scrollbar-gutter:stable] sm:py-8"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain py-6 [scrollbar-gutter:stable] sm:py-8"
       >
         <div ref={threadContent} className="mx-auto max-w-[760px] space-y-7 px-1 sm:px-3">
           {loadingMandates ? (
@@ -486,16 +633,7 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
               )}
             </div>
           )}
-          {sending ? (
-            <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircle
-                size={16}
-                className="animate-spin motion-reduce:animate-none"
-                aria-hidden="true"
-              />
-              Finding the next step…
-            </div>
-          ) : null}
+          {sending ? <AgentProgress steps={liveSteps} /> : null}
           {error ? (
             <div
               role="alert"
@@ -559,14 +697,12 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
           <textarea
             ref={composer}
             id="shopping-message"
+            aria-describedby="shopping-message-hint"
             value={message}
             onChange={(event) => setMessage(event.currentTarget.value)}
             onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                (event.metaKey || event.ctrlKey) &&
-                !event.nativeEvent.isComposing
-              ) {
+              // Enter sends and Shift+Enter adds a new line; Ctrl or Cmd+Enter also sends.
+              if (shouldSendOnKey(event)) {
                 event.preventDefault();
                 void send();
               }
@@ -582,9 +718,13 @@ export function ShoppingChat({ initialMandateId = "" }: { initialMandateId?: str
             className="max-h-40 min-h-14 w-full resize-none rounded-md bg-transparent px-1 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60"
           />
           <div className="mt-2 flex items-center justify-between gap-3">
-            <p className="text-[11px] leading-4 text-muted-foreground">
-              {sending ? "Working on your request" : "Review every proposal before checkout."}
-              <span className="ml-2 hidden sm:inline">Ctrl or ⌘ + Enter to send</span>
+            <p id="shopping-message-hint" className="text-[11px] leading-4 text-muted-foreground">
+              {sending
+                ? "Working on your request"
+                : "AgentGuard checks every proposal. PayPal asks you to confirm payment."}
+              <span className="ml-2 hidden sm:inline">
+                Enter to send · Shift + Enter for a new line
+              </span>
             </p>
             <button
               type="submit"

@@ -3,6 +3,7 @@ export const DATABASE_ENV_KEYS: string[];
 export const WEB_ENV_KEYS: string[];
 export const ADMIN_ENV_KEYS: string[];
 export const API_ENV_KEYS: string[];
+export const DEMO_ACCOUNT_ENV_KEYS: string[];
 interface EnvironmentOptions {
   workspaceDirectory?: string;
   rootDirectory?: string;

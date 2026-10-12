@@ -1,0 +1,10 @@
+# Keep LF in every checkout so Prettier and CI agree on Windows, macOS and Linux.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { MandateParserError, RankingInputError, RankingOutputError } from "./errors.js";
 import { createOpenAIClient, parseOpenAIConfig, type OpenAIParserConfig } from "./config.js";
 import { mapProviderError, requestBudget } from "./parser.js";
+import { cleanUntrustedText } from "./spotlight.js";
 
 const RANKING_TEXT_LIMIT = 600;
 
@@ -93,11 +94,12 @@ function rankingPrompt(input: RankProductsInput): string {
   };
   const candidates = input.candidates.map((candidate) => ({
     productId: candidate.externalId,
-    title: candidate.title,
-    brand: candidate.brand,
-    category: candidate.category,
+    // Retailer text is untrusted: invisible and control characters never reach the model.
+    title: cleanUntrustedText(candidate.title, 300),
+    brand: cleanUntrustedText(candidate.brand, 120),
+    category: candidate.category === null ? null : cleanUntrustedText(candidate.category, 160),
     condition: candidate.condition,
-    merchant: candidate.merchant,
+    merchant: cleanUntrustedText(candidate.merchant, 160),
     priceMinor: candidate.priceMinor,
     currency: candidate.currency,
   }));

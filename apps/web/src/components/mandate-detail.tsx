@@ -23,6 +23,8 @@ import {
 } from "@/lib/mandates/client";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
 import { canonicalToForm, formToCanonical, MandateForm } from "@/components/mandate-form";
+import { PolicySimulator } from "@/components/policy-simulator";
+import { VerifiableMandatePanel } from "@/components/verifiable-mandate";
 import type {
   MandateAction,
   MandateDetail as MandateDetailType,
@@ -406,6 +408,16 @@ export function MandateDetail({ mandateId }: { mandateId: string }) {
           </details>
         </section>
       )}
+
+      {!editing ? (
+        <VerifiableMandatePanel
+          mandateId={mandate.id}
+          version={mandate.version}
+          status={mandate.status}
+        />
+      ) : null}
+
+      {!editing ? <PolicySimulator mandate={mandate} /> : null}
     </div>
   );
 }

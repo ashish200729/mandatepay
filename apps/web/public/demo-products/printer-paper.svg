@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" role="img" aria-labelledby="t">
+  <title id="t">Illustration of a ream of printer paper</title>
+  <rect width="160" height="160" rx="24" fill="#F8F1EB"/>
+  <ellipse cx="80" cy="132" rx="52" ry="6" fill="#1B140E" opacity="0.08"/>
+  <path d="M32 70 L80 50 L128 70 L80 90 Z" fill="#FFFFFF" stroke="#E7E0D7" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 70 L80 90 L80 126 L32 106 Z" fill="#E5DABD"/>
+  <path d="M128 70 L80 90 L80 126 L128 106 Z" fill="#F3E7C9"/>
+  <path d="M38 84 L74 99 M38 92 L74 107" stroke="#FEFAF6" stroke-width="3" stroke-linecap="round"/>
+  <path d="M90 99 L118 87" stroke="#A8946B" stroke-width="3" stroke-linecap="round"/>
+</svg>

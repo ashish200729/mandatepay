@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  PAYPAL_ENVIRONMENTS,
   PayPalWebhookService,
   PayPalProviderError,
   registerPayPalWebhookRoute,
@@ -308,5 +309,137 @@ describe("PayPal webhook service", () => {
     await registeredHandler!({ rawBody: captureEvent(), headers }, reply);
     expect(registeredPath).toBe("/api/webhooks/paypal");
     expect(reply.status).toHaveBeenCalledWith(200);
+  });
+});
+
+describe("PayPal webhook coverage for pending, completion and reversal events", () => {
+  it("fetches the authoritative capture for PAYMENT.CAPTURE.PENDING", async () => {
+    const context = service();
+    const result = await context.service.handle({
+      rawBody: captureEvent("PAYMENT.CAPTURE.PENDING"),
+      headers,
+    });
+    expect(result.statusCode).toBe(200);
+    expect(context.paypal.getCapture).toHaveBeenCalledWith("CAPTURE-123");
+    expect(context.paypal.getOrder).toHaveBeenCalledWith("ORDER-123");
+    expect(context.reconciler.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ authoritative: expect.objectContaining({ kind: "capture" }) }),
+    );
+  });
+
+  it("fetches the authoritative order for CHECKOUT.ORDER.COMPLETED", async () => {
+    const context = service();
+    await context.service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-ORDER-COMPLETED",
+        event_type: "CHECKOUT.ORDER.COMPLETED",
+        resource: { id: "ORDER-123" },
+      }),
+    });
+    expect(context.paypal.getOrder).toHaveBeenCalledWith("ORDER-123");
+    expect(context.reconciler.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ authoritative: expect.objectContaining({ kind: "order" }) }),
+    );
+  });
+
+  it("re-fetches a refund-shaped reversal and its linked capture", async () => {
+    const paypal = fakePayPal();
+    (paypal.getRefund as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "REVERSAL-1",
+      status: "COMPLETED",
+      amount: { currency_code: "USD", value: "12.34" },
+      links: [
+        { rel: "up", href: "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123" },
+      ],
+    });
+    const context = service(paypal);
+    await context.service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-REVERSED",
+        event_type: "PAYMENT.CAPTURE.REVERSED",
+        resource: {
+          id: "REVERSAL-1",
+          links: [
+            {
+              rel: "up",
+              href: "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123",
+            },
+          ],
+        },
+      }),
+    });
+    expect(paypal.getRefund).toHaveBeenCalledWith("REVERSAL-1");
+    expect(paypal.getCapture).toHaveBeenCalledWith("CAPTURE-123");
+    expect(context.reconciler.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authoritative: expect.objectContaining({
+          kind: "reversal",
+          refund: expect.objectContaining({ id: "REVERSAL-1" }),
+          capture: expect.objectContaining({ id: "CAPTURE-123" }),
+        }),
+      }),
+    );
+  });
+
+  it("treats a capture-shaped reversal resource as the capture itself", async () => {
+    const context = service();
+    await context.service.handle({ rawBody: captureEvent("PAYMENT.CAPTURE.REVERSED"), headers });
+    expect(context.paypal.getRefund).not.toHaveBeenCalled();
+    expect(context.paypal.getCapture).toHaveBeenCalledWith("CAPTURE-123");
+    expect(context.reconciler.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authoritative: expect.objectContaining({ kind: "reversal", refund: null }),
+      }),
+    );
+  });
+
+  it("accepts resource links only from the configured environment's API hosts", async () => {
+    const paypal = Object.assign(fakePayPal(), { hosts: PAYPAL_ENVIRONMENTS.live });
+    (paypal.getRefund as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "REFUND-123",
+      links: [
+        { rel: "up", href: "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE-123" },
+      ],
+    });
+    const context = service(paypal);
+    await context.service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-LIVE-LINK",
+        event_type: "PAYMENT.CAPTURE.REFUNDED",
+        resource: { id: "REFUND-123" },
+      }),
+    });
+    expect(paypal.getCapture).not.toHaveBeenCalled();
+
+    (paypal.getRefund as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "REFUND-123",
+      links: [{ rel: "up", href: "https://api-m.paypal.com/v2/payments/captures/CAPTURE-123" }],
+    });
+    await context.service.handle({
+      headers,
+      rawBody: JSON.stringify({
+        id: "WH-LIVE-LINK-2",
+        event_type: "PAYMENT.CAPTURE.REFUNDED",
+        resource: { id: "REFUND-123" },
+      }),
+    });
+    expect(paypal.getCapture).toHaveBeenCalledWith("CAPTURE-123");
+  });
+
+  it("records processing failures separately from pending provider state", async () => {
+    const markFailed = vi.fn().mockResolvedValue(undefined);
+    const paypal = fakePayPal();
+    (paypal.getCapture as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new PayPalProviderError("UPSTREAM_UNAVAILABLE", 503),
+    );
+    const inbox = fakeInbox({ markFailed });
+    const context = service(paypal, inbox);
+    const result = await context.service.handle({ rawBody: captureEvent(), headers });
+    expect(result.statusCode).toBe(503);
+    expect(markFailed).toHaveBeenCalledWith("inbox-1", expect.any(String));
+    expect(inbox.markPending).not.toHaveBeenCalled();
   });
 });

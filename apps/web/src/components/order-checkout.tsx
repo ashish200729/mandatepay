@@ -15,11 +15,7 @@ import { buttonVariants } from "@mandatepay/ui/components/button";
 import { cn } from "@mandatepay/ui/lib/utils";
 import { getApproval } from "@/lib/approvals/client";
 import { formatUsdLabel, formatUtcDate } from "@/lib/mandates/money";
-import {
-  createPaypalOrder,
-  getPaypalStatus,
-  isSafeSandboxApprovalUrl,
-} from "@/lib/payments/client";
+import { createPaypalOrder, getPaypalStatus, isSafePayPalApprovalUrl } from "@/lib/payments/client";
 import type { ApprovalDetail } from "@/lib/approvals/types";
 import type { PayPalStatus } from "@/lib/payments/types";
 import { WorkspaceLoading, WorkspaceSteps } from "@/components/workspace-ui";
@@ -72,8 +68,12 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
         router.push(`/orders/${encodeURIComponent(result.payment.id)}`);
         return;
       }
-      if (!result.approvalUrl || !isSafeSandboxApprovalUrl(result.approvalUrl)) {
-        throw new Error("PayPal did not return a safe Sandbox approval URL.");
+      if (!result.approvalUrl || !isSafePayPalApprovalUrl(result.approvalUrl)) {
+        throw new Error(
+          paypalStatus?.environment === "live"
+            ? "PayPal did not return a safe approval URL."
+            : "PayPal did not return a safe Sandbox approval URL.",
+        );
       }
       window.location.assign(result.approvalUrl);
     } catch (cause) {
@@ -212,7 +212,9 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
               <Check size={16} aria-hidden="true" /> Server authorization confirmed
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
-              PayPal will ask for approval in its Sandbox environment.
+              {paypalStatus.environment === "live"
+                ? "PayPal will ask for approval. This is a live payment."
+                : "PayPal will ask for approval in its Sandbox environment."}
             </p>
           </div>
           <button
@@ -226,7 +228,11 @@ export function OrderCheckout({ proposalId }: { proposalId: string }) {
             ) : (
               <ExternalLink size={16} aria-hidden="true" />
             )}{" "}
-            {creating ? "Opening PayPal…" : "Open PayPal Sandbox"}
+            {creating
+              ? "Opening PayPal…"
+              : paypalStatus.environment === "live"
+                ? "Open PayPal"
+                : "Open PayPal Sandbox"}
           </button>
         </div>
       )}

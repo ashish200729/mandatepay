@@ -24,11 +24,18 @@ const environment = {
   PAYPAL_CLIENT_SECRET: "",
   PAYPAL_WEBHOOK_ID: "",
   PAYPAL_ENV: "sandbox",
+  TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
 };
 environment.DATABASE_URL = environment.TEST_DATABASE_URL;
 
 function run(args, env = environment) {
-  const result = spawnSync("pnpm", args, { cwd: root, env, stdio: "inherit" });
+  // Windows starts pnpm through a .cmd shim, which spawnSync can only launch via a shell.
+  const result = spawnSync("pnpm", args, {
+    cwd: root,
+    env,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
   if (result.status !== 0) throw new Error("E2E prerequisite failed; services were not started.");
 }
 
@@ -45,23 +52,14 @@ const processes = [
     detached: false,
   }),
   spawn(
-    "pnpm",
-    [
-      "--filter",
-      "@mandatepay/web",
-      "exec",
-      "next",
-      "start",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      "3100",
-    ],
+    process.execPath,
+    ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3100"],
     {
-      cwd: root,
+      cwd: fileURLToPath(new URL("../apps/web/", import.meta.url)),
       env: { ...environment, NODE_ENV: "production" },
       stdio: "inherit",
       detached: false,
+      windowsHide: true,
     },
   ),
 ];

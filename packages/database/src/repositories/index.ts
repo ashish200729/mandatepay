@@ -13,8 +13,16 @@ export {
   loadOverviewAnalytics,
 } from "./admin-analytics-queries.js";
 export { compareAndSetPlatformSetting } from "./platform-setting-repository.js";
-export { ObservabilityRepository } from "./observability-repository.js";
-export type { AgentRunWrite, ObservabilityClient } from "./observability-repository.js";
+export { ObservabilityRepository, WORKER_NAMES } from "./observability-repository.js";
+export type { AgentRunWrite, ObservabilityClient, WorkerName } from "./observability-repository.js";
+export {
+  WEBHOOK_LEASE_MS,
+  WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_PENDING_MAX_ATTEMPTS,
+  webhookAttemptsExhaustedWhere,
+  webhookAttemptsRemainingWhere,
+  webhookRetryLimit,
+} from "./admin-query.js";
 export type {
   ComparedPlatformSetting,
   StoredPlatformSetting,

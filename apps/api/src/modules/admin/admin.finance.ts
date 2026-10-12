@@ -28,12 +28,15 @@ import {
   refundPayment,
 } from "../../services/refunds.js";
 import { PlatformControlDenied } from "../../services/platform-controls.js";
-import { PrismaWebhookInboxStore, createPayPalWebhookService } from "../../services/webhooks.js";
 import {
-  WEBHOOK_RECOVERY_BASE_DELAY_MS,
+  PrismaWebhookInboxStore,
+  createPayPalWebhookService,
+  webhookRowLimit,
+} from "../../services/webhooks.js";
+import {
   WEBHOOK_RECOVERY_LEASE_MS,
-  WEBHOOK_RECOVERY_MAX_ATTEMPTS,
-  WEBHOOK_RECOVERY_MAX_DELAY_MS,
+  WEBHOOK_RECOVERY_LIMITS,
+  webhookRetryAt,
 } from "../../services/webhook-recovery.js";
 import { AdminAuthError, requireFreshAdminAuth, type AdminIdentity } from "./admin.auth.js";
 import { AdminControlError } from "./admin.controls.js";
@@ -790,7 +793,7 @@ async function retryWebhook(input: {
       const leaseCutoff = new Date(now.getTime() - WEBHOOK_RECOVERY_LEASE_MS);
       const due =
         row.signatureVerified &&
-        row.attempts < WEBHOOK_RECOVERY_MAX_ATTEMPTS &&
+        row.attempts < webhookRowLimit(row, WEBHOOK_RECOVERY_LIMITS) &&
         ((row.status === "FAILED" && (row.nextAttemptAt === null || row.nextAttemptAt <= now)) ||
           (row.status === "PROCESSING" && row.updatedAt <= leaseCutoff));
       const before = {
@@ -866,7 +869,7 @@ async function retryWebhook(input: {
     const claimedInbox = await store.claimVerifiedForReplay(
       input.eventId,
       now,
-      WEBHOOK_RECOVERY_MAX_ATTEMPTS,
+      WEBHOOK_RECOVERY_LIMITS,
       WEBHOOK_RECOVERY_LEASE_MS,
     );
     if (!claimedInbox) {
@@ -893,18 +896,19 @@ async function retryWebhook(input: {
       else if (outcome === "ignored")
         await store.markIgnored(claimedInbox.id, "Verified webhook replay was ignored.");
       else {
-        const delay = Math.min(
-          WEBHOOK_RECOVERY_MAX_DELAY_MS,
-          WEBHOOK_RECOVERY_BASE_DELAY_MS * 2 ** Math.max(0, claimedInbox.attempts - 1),
-        );
+        const next = webhookRetryAt({
+          attempts: claimedInbox.attempts,
+          outcome: "pending",
+          awaitingProvider: claimedInbox.awaitingProvider,
+          now,
+        });
         await store.scheduleRetry(
           claimedInbox.id,
-          claimedInbox.attempts >= WEBHOOK_RECOVERY_MAX_ATTEMPTS
-            ? null
-            : new Date(now.getTime() + delay),
-          claimedInbox.attempts >= WEBHOOK_RECOVERY_MAX_ATTEMPTS
-            ? "Verified webhook reconciliation is pending. Retry limit reached."
-            : "Verified webhook reconciliation is pending.",
+          next,
+          next
+            ? "Verified webhook reconciliation is pending."
+            : "Verified webhook reconciliation is pending. Retry limit reached.",
+          { awaitingProvider: true },
         );
       }
       const snapshot = await input.operations.getWebhook(input.eventId);
@@ -928,15 +932,14 @@ async function retryWebhook(input: {
         actionId: prepared.actionId,
       };
     } catch (error) {
-      const delay = Math.min(
-        WEBHOOK_RECOVERY_MAX_DELAY_MS,
-        WEBHOOK_RECOVERY_BASE_DELAY_MS * 2 ** Math.max(0, claimedInbox.attempts - 1),
-      );
       await store.scheduleRetry(
         claimedInbox.id,
-        claimedInbox.attempts >= WEBHOOK_RECOVERY_MAX_ATTEMPTS
-          ? null
-          : new Date(now.getTime() + delay),
+        webhookRetryAt({
+          attempts: claimedInbox.attempts,
+          outcome: "failed",
+          awaitingProvider: claimedInbox.awaitingProvider,
+          now,
+        }),
         "Verified webhook recovery failed.",
       );
       throw error;

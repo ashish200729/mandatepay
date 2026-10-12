@@ -9,11 +9,32 @@ import {
 
 type Owner = { id: string };
 
-const capturedPaymentStatuses: PaymentStatus[] = [
+/**
+ * Payments that were captured. A REVERSED payment (chargeback) was captured and
+ * then returned by PayPal, so it counts in gross captured volume and, like a
+ * refund, is subtracted from captured volume net of returns.
+ */
+export const capturedPaymentStatuses: PaymentStatus[] = [
   PaymentStatus.COMPLETED,
   PaymentStatus.PARTIALLY_REFUNDED,
   PaymentStatus.REFUNDED,
+  PaymentStatus.REVERSED,
 ];
+
+/**
+ * The part of reversed payments not already returned by a completed refund, so
+ * a refund followed by a chargeback is never subtracted twice.
+ */
+export function reversedRemainderMinor(
+  payments: readonly { amount: bigint; refunds: readonly { amount: bigint }[] }[],
+): bigint {
+  let total = 0n;
+  for (const payment of payments) {
+    const refunded = payment.refunds.reduce((sum, refund) => sum + refund.amount, 0n);
+    if (payment.amount > refunded) total += payment.amount - refunded;
+  }
+  return total;
+}
 
 const latestPolicyDecisionOrder: Prisma.PolicyDecisionOrderByWithRelationInput[] = [
   { createdAt: "desc" },
@@ -237,9 +258,15 @@ async function ownedProposals(database: DatabaseClient, user: Owner, take = 501)
 }
 
 export async function dashboardSummary(database: DatabaseClient, user: Owner) {
-  const [policyCounts, paymentAggregate, refundAggregate, humanApproved, activeMandates] =
-    await Promise.all([
-      database.$queryRaw<Array<{ decision: string; count: bigint }>>(Prisma.sql`
+  const [
+    policyCounts,
+    paymentAggregate,
+    refundAggregate,
+    humanApproved,
+    activeMandates,
+    reversedPayments,
+  ] = await Promise.all([
+    database.$queryRaw<Array<{ decision: string; count: bigint }>>(Prisma.sql`
         WITH latest_decisions AS (
           SELECT DISTINCT ON ("proposalId") "proposalId", "decision"
           FROM "PolicyDecision"
@@ -254,36 +281,52 @@ export async function dashboardSummary(database: DatabaseClient, user: Owner) {
           AND (pay.id IS NULL OR pay."isSample" = false)
         GROUP BY ld."decision"
       `),
-      database.payment.aggregate({
-        where: {
-          userId: user.id,
-          isSample: false,
-          status: { in: capturedPaymentStatuses },
-          capturedAt: { not: null },
-          proposal: { isSample: false },
+    database.payment.aggregate({
+      where: {
+        userId: user.id,
+        isSample: false,
+        status: { in: capturedPaymentStatuses },
+        capturedAt: { not: null },
+        proposal: { isSample: false },
+      },
+      _count: { _all: true },
+      _sum: { amount: true },
+    }),
+    database.refund.aggregate({
+      where: {
+        userId: user.id,
+        isSample: false,
+        status: RefundStatus.COMPLETED,
+        payment: { isSample: false, proposal: { isSample: false } },
+      },
+      _sum: { amount: true },
+    }),
+    database.approval.count({
+      where: {
+        userId: user.id,
+        isSample: false,
+        decision: "APPROVED",
+        proposal: { isSample: false },
+      },
+    }),
+    database.mandate.count({ where: { userId: user.id, status: "ACTIVE" } }),
+    database.payment.findMany({
+      where: {
+        userId: user.id,
+        isSample: false,
+        status: PaymentStatus.REVERSED,
+        capturedAt: { not: null },
+        proposal: { isSample: false },
+      },
+      select: {
+        amount: true,
+        refunds: {
+          where: { isSample: false, status: RefundStatus.COMPLETED },
+          select: { amount: true },
         },
-        _count: { _all: true },
-        _sum: { amount: true },
-      }),
-      database.refund.aggregate({
-        where: {
-          userId: user.id,
-          isSample: false,
-          status: RefundStatus.COMPLETED,
-          payment: { isSample: false, proposal: { isSample: false } },
-        },
-        _sum: { amount: true },
-      }),
-      database.approval.count({
-        where: {
-          userId: user.id,
-          isSample: false,
-          decision: "APPROVED",
-          proposal: { isSample: false },
-        },
-      }),
-      database.mandate.count({ where: { userId: user.id, status: "ACTIVE" } }),
-    ]);
+      },
+    }),
+  ]);
   const policyCount = (decision: PolicyDecisionType) =>
     Number(policyCounts.find((entry) => entry.decision === decision)?.count ?? 0n);
   return {
@@ -294,6 +337,7 @@ export async function dashboardSummary(database: DatabaseClient, user: Owner) {
       blocked: policyCount(PolicyDecisionType.BLOCK),
       spendMinor: minor(paymentAggregate._sum.amount ?? 0n, "spend"),
       refundsMinor: minor(refundAggregate._sum.amount ?? 0n, "refund"),
+      reversedMinor: minor(reversedRemainderMinor(reversedPayments), "reversed"),
       activeMandates,
     },
   };

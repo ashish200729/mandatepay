@@ -5,8 +5,22 @@ import { parseEnv } from "node:util";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const DATABASE_ENV_KEYS = ["DATABASE_URL", "TEST_DATABASE_URL"];
-export const WEB_ENV_KEYS = ["API_URL", "APP_URL"];
-export const ADMIN_ENV_KEYS = ["API_URL", "APP_URL", "ADMIN_ORIGIN", "ADMIN_ENVIRONMENT"];
+// INTERNAL_PROXY_SECRET lets the BFFs assert the browser's address to the API; it grants no
+// provider, database or session access.
+export const WEB_ENV_KEYS = ["API_URL", "APP_URL", "INTERNAL_PROXY_SECRET"];
+export const ADMIN_ENV_KEYS = [
+  "API_URL",
+  "APP_URL",
+  "ADMIN_ORIGIN",
+  "ADMIN_ENVIRONMENT",
+  "INTERNAL_PROXY_SECRET",
+];
+/** Loaded with API settings for the operator demo-account script; the server never reads them. */
+export const DEMO_ACCOUNT_ENV_KEYS = [
+  "DEMO_ACCOUNT_EMAIL",
+  "DEMO_ACCOUNT_PASSWORD",
+  "DEMO_ACCOUNT_NAME",
+];
 export const API_ENV_KEYS = [
   "HOST",
   "PORT",
@@ -21,6 +35,8 @@ export const API_ENV_KEYS = [
   "AUTH_REQUIRE_EMAIL_VERIFICATION",
   "RESEND_API_KEY",
   "AUTH_EMAIL_FROM",
+  "INTERNAL_PROXY_SECRET",
+  "TRUST_PROXY",
   "OPENAI_API_KEY",
   "OPENAI_MODEL",
   "OPENAI_BASE_URL",
@@ -35,11 +51,19 @@ export const API_ENV_KEYS = [
   "CHANNEL3_MAX_RETRIES",
   "CHANNEL3_FALLBACK_MODE",
   "PRODUCT_DISCOVERY_MODE",
+  "AGENT_CHAT_RATE_LIMIT_PER_MINUTE",
+  "CATALOG_COMPARE_RATE_LIMIT_PER_MINUTE",
   "PAYPAL_ENV",
   "PAYPAL_CLIENT_ID",
   "PAYPAL_CLIENT_SECRET",
   "PAYPAL_WEBHOOK_ID",
+  "PAYPAL_MAX_RETRIES",
+  "PAYMENT_RECONCILE_STALE_MINUTES",
+  "PAYMENT_RECONCILE_BATCH_SIZE",
   "TOKEN_ENCRYPTION_KEY",
+  "MANDATE_SIGNING_KEY",
+  "MANDATE_SIGNING_PREVIOUS_JWKS",
+  ...DEMO_ACCOUNT_ENV_KEYS,
 ];
 
 /** Read defaults first, then workspace overrides. Never overwrite injected values. */

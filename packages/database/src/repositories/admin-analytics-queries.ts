@@ -54,7 +54,7 @@ export async function loadOverviewAnalytics(
       SELECT date_trunc('day', p."capturedAt") AS day, SUM(p.amount)::bigint AS amount
       FROM "Payment" p
       JOIN "PurchaseProposal" pr ON pr.id = p."proposalId"
-      WHERE p.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+      WHERE p.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'REVERSED')
         AND p."paypalCaptureId" IS NOT NULL
         AND p."isSample" = false AND pr."isSample" = false
         AND p."capturedAt" >= ${from} AND p."capturedAt" < ${to}
@@ -106,7 +106,7 @@ export async function loadOverviewAnalytics(
         COUNT(*) FILTER (WHERE latest.decision = 'ALLOW')::bigint AS policy_allow,
         COUNT(*) FILTER (WHERE pay.id IS NOT NULL AND pay."isSample" = false AND pay."paypalOrderId" IS NOT NULL)::bigint AS order_created,
         COUNT(*) FILTER (WHERE pay."isSample" = false AND pay.status = 'APPROVED')::bigint AS provider_approved,
-        COUNT(*) FILTER (WHERE pay."isSample" = false AND pay.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED') AND pay."paypalCaptureId" IS NOT NULL)::bigint AS captured,
+        COUNT(*) FILTER (WHERE pay."isSample" = false AND pay.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'REVERSED') AND pay."paypalCaptureId" IS NOT NULL)::bigint AS captured,
         COUNT(*) FILTER (WHERE pay."isSample" = false AND pay.status IN ('DENIED', 'FAILED'))::bigint AS failed
       FROM "PurchaseProposal" p
       LEFT JOIN LATERAL (
@@ -277,13 +277,36 @@ export async function loadOverviewAnalytics(
   };
 }
 
+/**
+ * Reversed (chargeback) payments captured in range, minus their completed
+ * refunds, so a refund followed by a reversal is never subtracted twice. Like a
+ * refund, a reversal returns captured money, so it reduces net captured volume.
+ */
+export async function loadReversedRemainderMinor(db: Store, from: Date, to: Date) {
+  const rows = await db.$queryRaw<Array<{ amount: bigint | null }>>(Prisma.sql`
+    SELECT COALESCE(SUM(GREATEST(p.amount - COALESCE(refunded.amount, 0), 0)), 0)::bigint AS amount
+    FROM "Payment" p
+    JOIN "PurchaseProposal" pr ON pr.id = p."proposalId"
+    LEFT JOIN LATERAL (
+      SELECT SUM(r.amount) AS amount
+      FROM "Refund" r
+      WHERE r."paymentId" = p.id AND r.status = 'COMPLETED' AND r."isSample" = false
+    ) refunded ON true
+    WHERE p.status = 'REVERSED'
+      AND p."paypalCaptureId" IS NOT NULL
+      AND p."isSample" = false AND pr."isSample" = false
+      AND p."capturedAt" >= ${from} AND p."capturedAt" < ${to}
+  `);
+  return rows[0]?.amount ?? 0n;
+}
+
 export function explainCapturedVolumeSql(from: Date, to: Date) {
   return Prisma.sql`
     EXPLAIN (FORMAT JSON)
     SELECT date_trunc('day', p."capturedAt") AS day, SUM(p.amount)::bigint AS amount
     FROM "Payment" p
     JOIN "PurchaseProposal" pr ON pr.id = p."proposalId"
-    WHERE p.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED')
+    WHERE p.status IN ('COMPLETED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'REVERSED')
       AND p."paypalCaptureId" IS NOT NULL
       AND p."isSample" = false AND pr."isSample" = false
       AND p."capturedAt" >= ${from} AND p."capturedAt" < ${to}
